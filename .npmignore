@@ -1,0 +1,28 @@
+# 源码
+src/
+*.ts
+!*.d.ts
+
+# 构建产物
+dist/*.map
+dist/**/*.map
+
+# 开发文件
+.gitignore
+tsconfig*.json
+vitest.config.ts
+test/
+scripts/
+
+# 文档（可选，如果不需要发布docs和examples）
+# docs/
+examples/**/*.ts
+examples/**/*.tsx
+
+# 其他
+.DS_Store
+*.log
+.env
+.vscode/
+.zed/
+.idea/
