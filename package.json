@@ -1,14 +1,14 @@
 {
-	"name": "@tomsun28/pi",
+	"name": "pizza",
 	"version": "0.0.1",
-	"description": "Pi - Coding agent CLI",
+	"description": "Pizza - Coding agent CLI",
 	"type": "module",
 	"piConfig": {
-		"name": "pi",
-		"configDir": ".pi"
+		"name": "pizza",
+		"configDir": ".pizza"
 	},
 	"bin": {
-		"pi": "dist/cli.js"
+		"pizza": "dist/cli.js"
 	},
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
@@ -23,18 +23,20 @@
 		}
 	},
 	"files": [
-		"dist",
-		"CHANGELOG.md"
+		"dist"
 	],
 	"scripts": {
 		"clean": "shx rm -rf dist",
 		"dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
 		"start": "node dist/cli.js",
 		"build": "tsc -p tsconfig.build.json && shx chmod +x dist/cli.js && npm run copy-assets",
-		"build:binary": "npm run build && bun build --compile ./dist/bun/cli.js --outfile dist/pi && npm run copy-binary-assets",
+		"build:binary": "npm run build && bun build --compile ./dist/bun/cli.js --outfile dist/pizza && npm run copy-binary-assets",
 		"copy-assets": "shx mkdir -p dist/modes/interactive/theme && shx cp src/modes/interactive/theme/*.json dist/modes/interactive/theme/ && shx mkdir -p dist/modes/interactive/assets && shx cp src/modes/interactive/assets/*.png dist/modes/interactive/assets/ && shx mkdir -p dist/core/export-html/vendor && shx cp src/core/export-html/template.html src/core/export-html/template.css src/core/export-html/template.js dist/core/export-html/ && shx cp src/core/export-html/vendor/*.js dist/core/export-html/vendor/",
 		"copy-binary-assets": "shx cp package.json dist/ && shx cp README.md dist/ && shx cp CHANGELOG.md dist/ && shx mkdir -p dist/theme && shx cp src/modes/interactive/theme/*.json dist/theme/ && shx mkdir -p dist/assets && shx cp src/modes/interactive/assets/*.png dist/assets/ && shx mkdir -p dist/export-html/vendor && shx cp src/core/export-html/template.html dist/export-html/ && shx cp src/core/export-html/vendor/*.js dist/export-html/vendor/ && shx cp -r docs dist/ && shx cp -r examples dist/ && shx cp node_modules/@silvia-odwyer/photon-node/photon_rs_bg.wasm dist/",
-		"test": "vitest --run",
+		"test": "PI_OFFLINE=1 vitest --run --no-file-parallelism --poolOptions.forks.singleFork",
+		"test:headless": "PI_OFFLINE=1 vitest --run --no-file-parallelism --poolOptions.forks.singleFork",
+		"test:online": "vitest --run",
+		"install:local": "npm run build && npm link",
 		"prepublishOnly": "npm run clean && npm run build"
 	},
 	"dependencies": {
@@ -78,6 +80,7 @@
 		"@types/proper-lockfile": "^4.1.4",
 		"@typescript/native-preview": "^7.0.0-dev.20260120.1",
 		"shx": "^0.4.0",
+		"tsx": "^4.21.0",
 		"typescript": "^5.7.3",
 		"vitest": "^3.2.4"
 	},
@@ -96,6 +99,6 @@
 		"url": ""
 	},
 	"engines": {
-		"node": ">=20.6.0"
+		"node": ">=22.5.0"
 	}
 }

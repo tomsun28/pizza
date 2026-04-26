@@ -11,8 +11,8 @@
  *
  * Save modes (tool param, env var, or config file):
  *   save=none     - Don't save to disk (default)
- *   save=project  - Save to <repo>/.pi/generated-images/
- *   save=global   - Save to ~/.pi/agent/generated-images/
+ *   save=project  - Save to <repo>//.pizza/generated-images/
+ *   save=global   - Save to ~/.pizza/agent/generated-images/
  *   save=custom   - Save to saveDir param or PI_IMAGE_SAVE_DIR
  *
  * Environment variables:
@@ -20,8 +20,8 @@
  *   PI_IMAGE_SAVE_DIR   - Directory for custom save mode
  *
  * Config files (project overrides global):
- *   ~/.pi/agent/extensions/antigravity-image-gen.json
- *   <repo>/.pi/extensions/antigravity-image-gen.json
+ *   ~/.pizza/agent/extensions/antigravity-image-gen.json
+ *   <repo>//.pizza/extensions/antigravity-image-gen.json
  *   Example: { "save": "global" }
  */
 

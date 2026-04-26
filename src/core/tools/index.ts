@@ -81,16 +81,17 @@ import { createWriteTool, createWriteToolDefinition, type WriteToolOptions } fro
 export type Tool = AgentTool<any>;
 export type ToolDef = ToolDefinition<any, any>;
 /**
- * Tool configuration for the coding agent.
- * Default tools exposed to LLM: bash only (other tools via native CLI)
+ * Default tools exposed to LLM via function calls.
+ * Only bash is exposed; read/write/edit are handled internally by the bash tool.
+ * Other commands (grep, find, ls, git, npm, etc.) are passed to the system shell.
  */
-
 export type ToolName = "bash" | "read" | "edit" | "write" | "grep" | "find" | "ls";
 export const allToolNames: Set<ToolName> = new Set(["read", "bash", "edit", "write", "grep", "find", "ls"]);
 
 /**
- * Default tools exposed to LLM via function calls.
- * Only bash is exposed; other tools are accessed via `native <command>` in bash.
+ * Default tools exposed via function calls.
+ * Only bash is exposed; read/write/edit are handled internally by the bash tool.
+ * Other commands (grep, find, ls, etc.) are passed to the system shell.
  */
 export const DEFAULT_LLM_TOOLS: ToolName[] = ["bash"];
 
@@ -148,7 +149,8 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 
 /**
  * Default coding tools exposed via function calls.
- * Only bash is used; read/write/edit/grep/find/ls are accessed via native CLI.
+ * Only bash is exposed; read/write/edit are handled internally by the bash tool.
+ * Other commands (grep, find, ls, git, npm, etc.) are passed to the system shell.
  */
 export function createCodingToolDefinitions(cwd: string, options?: ToolsOptions): ToolDef[] {
 	return [
@@ -158,7 +160,7 @@ export function createCodingToolDefinitions(cwd: string, options?: ToolsOptions)
 
 /**
  * Read-only tools for analysis mode.
- * Only bash is used; grep/find/ls are accessed via native CLI.
+ * Only bash is exposed; read is handled internally; grep/find/ls are passed to shell.
  */
 export function createReadOnlyToolDefinitions(cwd: string, options?: ToolsOptions): ToolDef[] {
 	return [
@@ -180,7 +182,8 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 
 /**
  * Default coding tools exposed to LLM.
- * Only bash is used; read/write/edit are accessed via native CLI.
+ * Only bash is exposed; read/write/edit are handled internally by the bash tool.
+ * Other commands (grep, find, ls, git, npm, etc.) are passed to the system shell.
  */
 export function createCodingTools(cwd: string, options?: ToolsOptions): Tool[] {
 	return [
@@ -190,7 +193,7 @@ export function createCodingTools(cwd: string, options?: ToolsOptions): Tool[] {
 
 /**
  * Read-only tools for analysis mode.
- * Only bash is used; grep/find/ls are accessed via native CLI.
+ * Only bash is exposed; read is handled internally; grep/find/ls are passed to shell.
  */
 export function createReadOnlyTools(cwd: string, options?: ToolsOptions): Tool[] {
 	return [

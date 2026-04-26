@@ -39,7 +39,7 @@ import {
 import { SessionManager } from "./core/session-manager.js";
 import { SettingsManager } from "./core/settings-manager.js";
 import { printTimings, resetTimings, time } from "./core/timings.js";
-import { runMigrations, showDeprecationWarnings } from "./migrations.js";
+
 import { InteractiveMode, runPrintMode, runRpcMode } from "./modes/index.js";
 import { ExtensionSelectorComponent } from "./modes/interactive/components/extension-selector.js";
 import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.js";
@@ -477,9 +477,7 @@ export async function main(args: string[], options?: MainOptions) {
 
 	validateForkFlags(parsed);
 
-	// Run migrations (pass cwd for project-local migrations)
-	const { migratedAuthProviders: migratedProviders, deprecationWarnings } = runMigrations(process.cwd());
-	time("runMigrations");
+
 
 	const cwd = process.cwd();
 	const agentDir = getAgentDir();
@@ -647,11 +645,6 @@ export async function main(args: string[], options?: MainOptions) {
 	initTheme(settingsManager.getTheme(), appMode === "interactive");
 	time("initTheme");
 
-	// Show deprecation warnings in interactive mode
-	if (appMode === "interactive" && deprecationWarnings.length > 0) {
-		await showDeprecationWarnings(deprecationWarnings);
-	}
-
 	const scopedModels = [...session.scopedModels];
 	time("resolveModelScope");
 	reportDiagnostics(runtime.diagnostics);
@@ -689,7 +682,6 @@ export async function main(args: string[], options?: MainOptions) {
 		}
 
 		const interactiveMode = new InteractiveMode(runtime, {
-			migratedProviders,
 			modelFallbackMessage,
 			initialMessage,
 			initialImages,

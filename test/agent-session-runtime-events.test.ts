@@ -10,6 +10,7 @@ import {
 	createAgentSessionServices,
 } from "../src/core/agent-session-runtime.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
+import { SqliteEventStore } from "../src/core/event-store/sqlite-store.js";
 import { SessionManager } from "../src/core/session-manager.js";
 import type {
 	ExtensionFactory,
@@ -74,7 +75,7 @@ describe("AgentSessionRuntime session lifecycle events", () => {
 		const runtimeHost = await createAgentSessionRuntime(createRuntime, {
 			cwd: tempDir,
 			agentDir: tempDir,
-			sessionManager: SessionManager.create(tempDir),
+			sessionManager: SessionManager.create(tempDir, join(tempDir, "sessions")),
 		});
 		await runtimeHost.session.bindExtensions({});
 
@@ -103,6 +104,7 @@ describe("AgentSessionRuntime session lifecycle events", () => {
 			});
 		});
 
+		expect(runtimeHost.eventStore).toBeInstanceOf(SqliteEventStore);
 		expect(events).toEqual([{ type: "session_start", reason: "startup" }]);
 		events.length = 0;
 

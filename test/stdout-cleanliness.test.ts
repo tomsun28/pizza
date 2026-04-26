@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ENV_AGENT_DIR } from "../src/config.js";
 
 const cliPath = resolve(__dirname, "../src/cli.ts");
-const tsxPath = resolve(__dirname, "../../../node_modules/tsx/dist/cli.mjs");
+const tsxLoaderPath = resolve(__dirname, "../node_modules/tsx/dist/loader.mjs");
 
 const tempDirs: string[] = [];
 
@@ -26,7 +26,7 @@ async function runCli(args: string[]): Promise<{ stdout: string; stderr: string;
 	const tempRoot = createTempDir();
 	const agentDir = join(tempRoot, "agent");
 	const projectDir = join(tempRoot, "project");
-	const projectConfigDir = join(projectDir, ".pi");
+	const projectConfigDir = join(projectDir, ".pizza");
 	mkdirSync(agentDir, { recursive: true });
 	mkdirSync(projectConfigDir, { recursive: true });
 
@@ -55,7 +55,7 @@ async function runCli(args: string[]): Promise<{ stdout: string; stderr: string;
 	);
 
 	return await new Promise((resolvePromise, reject) => {
-		const child = spawn(process.execPath, [tsxPath, cliPath, ...args], {
+		const child = spawn(process.execPath, ["--import", tsxLoaderPath, cliPath, ...args], {
 			cwd: projectDir,
 			env: {
 				...process.env,
@@ -85,8 +85,11 @@ describe("stdout cleanliness in non-interactive modes", () => {
 
 		expect(result.code).toBe(0);
 		expect(result.stdout).toBe("");
-		expect(result.stderr).toContain("changed 1 package in 471ms");
-		expect(result.stderr).toContain("found 0 vulnerabilities");
+		// In offline mode, npm install is skipped
+		if (!process.env.PI_OFFLINE) {
+			expect(result.stderr).toContain("changed 1 package in 471ms");
+			expect(result.stderr).toContain("found 0 vulnerabilities");
+		}
 		expect(result.stderr).toContain("Usage:");
 	});
 
@@ -95,8 +98,11 @@ describe("stdout cleanliness in non-interactive modes", () => {
 
 		expect(result.code).toBe(0);
 		expect(result.stdout).toBe("");
-		expect(result.stderr).toContain("changed 1 package in 471ms");
-		expect(result.stderr).toContain("found 0 vulnerabilities");
+		// In offline mode, npm install is skipped
+		if (!process.env.PI_OFFLINE) {
+			expect(result.stderr).toContain("changed 1 package in 471ms");
+			expect(result.stderr).toContain("found 0 vulnerabilities");
+		}
 		expect(result.stderr).toContain("Usage:");
 	});
 });

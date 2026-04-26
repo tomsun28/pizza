@@ -17,7 +17,7 @@ Run from source:
 /path/to/pi-mono/pi-test.sh
 ```
 
-The script can be run from any directory. Pi keeps the caller's current working directory.
+The script can be run from any directory. Pizza keeps the caller's current working directory.
 
 ## Forking / Rebranding
 
@@ -26,8 +26,8 @@ Configure via `package.json`:
 ```json
 {
   "piConfig": {
-    "name": "pi",
-    "configDir": ".pi"
+    "name": "pizza",
+    "configDir": ".pizza"
   }
 }
 ```
@@ -48,7 +48,7 @@ Never use `__dirname` directly for package assets.
 
 ## Debug Command
 
-`/debug` (hidden) writes to `~/.pi/agent/pi-debug.log`:
+`/debug` (hidden) writes to `~/.pizza/agent/pizza-debug.log`:
 - Rendered TUI lines with ANSI codes
 - Last messages sent to the LLM
 

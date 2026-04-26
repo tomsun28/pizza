@@ -79,6 +79,15 @@ function resolveBranchWithGitAsync(repoDir: string): Promise<string | null> {
 	});
 }
 
+function closeOnWatchError(watcher: FSWatcher): FSWatcher {
+	watcher.on("error", () => {
+		try {
+			watcher.close();
+		} catch {}
+	});
+	return watcher;
+}
+
 /**
  * Provides git branch and extension statuses - data not otherwise accessible to extensions.
  * Token stats, model info available via ctx.sessionManager and ctx.model.
@@ -287,11 +296,13 @@ export class FooterDataProvider {
 		// Git uses atomic writes (write temp, rename over HEAD), which changes the inode.
 		// fs.watch on a file stops working after the inode changes.
 		try {
-			this.headWatcher = watch(dirname(this.gitPaths.headPath), (_eventType, filename) => {
-				if (!filename || filename.toString() === "HEAD") {
-					this.scheduleRefresh();
-				}
-			});
+			this.headWatcher = closeOnWatchError(
+				watch(dirname(this.gitPaths.headPath), (_eventType, filename) => {
+					if (!filename || filename.toString() === "HEAD") {
+						this.scheduleRefresh();
+					}
+				}),
+			);
 		} catch {
 			// Silently fail if we can't watch
 		}
@@ -301,9 +312,11 @@ export class FooterDataProvider {
 		const reftableDir = join(this.gitPaths.commonGitDir, "reftable");
 		if (existsSync(reftableDir)) {
 			try {
-				this.reftableWatcher = watch(reftableDir, () => {
-					this.scheduleRefresh();
-				});
+				this.reftableWatcher = closeOnWatchError(
+					watch(reftableDir, () => {
+						this.scheduleRefresh();
+					}),
+				);
 			} catch {
 				// Silently fail if we can't watch
 			}
@@ -312,9 +325,11 @@ export class FooterDataProvider {
 			if (existsSync(tablesListPath)) {
 				this.reftableTablesListPath = tablesListPath;
 				try {
-					this.reftableTablesListWatcher = watch(tablesListPath, () => {
-						this.scheduleRefresh();
-					});
+					this.reftableTablesListWatcher = closeOnWatchError(
+						watch(tablesListPath, () => {
+							this.scheduleRefresh();
+						}),
+					);
 				} catch {
 					// Silently fail if we can't watch
 				}

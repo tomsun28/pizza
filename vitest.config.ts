@@ -11,4 +11,8 @@ export default defineConfig({
       },
     },
   },
+  resolve: {
+    // Preserve symlinks to avoid issues with monorepo package resolution
+    preserveSymlinks: true,
+  },
 });

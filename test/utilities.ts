@@ -26,10 +26,10 @@ import { createCodingTools } from "../src/index.js";
 export const API_KEY = process.env.ANTHROPIC_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY;
 
 // ============================================================================
-// OAuth API key resolution from ~/.pi/agent/auth.json
+// OAuth API key resolution from ~/.pizza/agent/auth.json
 // ============================================================================
 
-const AUTH_PATH = join(homedir(), ".pi", "agent", "auth.json");
+const AUTH_PATH = join(homedir(), ".pizza", "agent", "auth.json");
 
 type ApiKeyCredential = {
 	type: "api_key";
@@ -66,7 +66,7 @@ function saveAuthStorage(storage: AuthStorageData): void {
 }
 
 /**
- * Resolve API key for a provider from ~/.pi/agent/auth.json
+ * Resolve API key for a provider from ~/.pizza/agent/auth.json
  *
  * For API key credentials, returns the key directly.
  * For OAuth credentials, returns the access token (refreshing if expired and saving back).
@@ -107,7 +107,7 @@ export async function resolveApiKey(provider: string): Promise<string | undefine
 }
 
 /**
- * Check if a provider has credentials in ~/.pi/agent/auth.json
+ * Check if a provider has credentials in ~/.pizza/agent/auth.json
  */
 export function hasAuthForProvider(provider: string): boolean {
 	const storage = loadAuthStorage();
@@ -115,10 +115,10 @@ export function hasAuthForProvider(provider: string): boolean {
 }
 
 /** Path to the real pi agent config directory */
-export const PI_AGENT_DIR = join(homedir(), ".pi", "agent");
+export const PI_AGENT_DIR = join(homedir(), ".pizza", "agent");
 
 /**
- * Get an AuthStorage instance backed by ~/.pi/agent/auth.json
+ * Get an AuthStorage instance backed by ~/.pizza/agent/auth.json
  * Use this for tests that need real OAuth credentials.
  */
 export function getRealAuthStorage(): AuthStorage {
@@ -190,6 +190,20 @@ export async function createTestExtensionsResult(
 	const eventBus = createEventBus();
 	const extensions: Extension[] = [];
 
+	// Make action methods no-ops for tests instead of throwing
+	(runtime as any).sendMessage = () => {};
+	(runtime as any).sendUserMessage = () => {};
+	(runtime as any).appendEntry = () => {};
+	(runtime as any).setSessionName = () => {};
+	(runtime as any).getSessionName = () => undefined;
+	(runtime as any).setLabel = () => {};
+	(runtime as any).getActiveTools = () => [];
+	(runtime as any).getAllTools = () => [];
+	(runtime as any).setActiveTools = () => {};
+	(runtime as any).getCommands = () => [];
+	(runtime as any).setModel = async () => true;
+	(runtime as any).invalidate = () => {};
+
 	for (const [index, input] of inputs.entries()) {
 		const factory = typeof input === "function" ? input : input.factory;
 		const extensionPath =
@@ -212,7 +226,10 @@ export function createTestResourceLoader(options: CreateTestResourceLoaderOption
 	const extensionsResult = options.extensionsResult ?? {
 		extensions: [],
 		errors: [],
-		runtime: createExtensionRuntime(),
+		runtime: {
+			...createExtensionRuntime(),
+			invalidate: () => {},
+		},
 	};
 
 	return {

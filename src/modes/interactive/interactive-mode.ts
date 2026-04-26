@@ -166,8 +166,6 @@ function hasDefaultModelProvider(providerId: string): providerId is keyof typeof
  * Options for InteractiveMode initialization.
  */
 export interface InteractiveModeOptions {
-	/** Providers that were migrated to auth.json (shows warning) */
-	migratedProviders?: string[];
 	/** Warning message if session model couldn't be restored */
 	modelFallbackMessage?: string;
 	/** Initial message to send on startup (can include @file content) */
@@ -485,14 +483,13 @@ export class InteractiveMode {
 		// Add header container as first child
 		this.ui.addChild(this.headerContainer);
 
-		// Add header with keybindings from config (always show Pi logo)
-		if (true) {
-			const logo = theme.fg("accent", `  ██████╗ ██╗     ███╗   ███╗    ██████╗ ██████╗ ██████╗ ███████╗
- ██╔════╝ ██║     ████╗ ████║   ██╔════╝██╔═══██╗██╔══██╗██╔════╝
- ██║  ███╗██║     ██╔████╔██║   ██║     ██║   ██║██║  ██║█████╗  
- ██║   ██║██║     ██║╚██╔╝██║   ██║     ██║   ██║██║  ██║██╔══╝  
- ╚██████╔╝███████╗██║ ╚═╝ ██║   ╚██████╗╚██████╔╝██████╔╝███████╗
-  ╚═════╝ ╚══════╝╚═╝     ╚═╝    ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝`) + theme.fg("dim", ` v${this.version}`);
+		// Add header with keybindings from config (always show Pizza logo)
+		const logo = theme.fg("accent", ` ██████╗ ██╗███████╗███████╗ █████╗ 
+ ██╔══██╗██║╚══███╔╝╚══███╔╝██╔══██╗
+ ██████╔╝██║  ███╔╝   ███╔╝ ███████║
+ ██╔═══╝ ██║ ███╔╝   ███╔╝  ██╔══██║
+ ██║     ██║███████╗███████╗██║  ██║
+ ╚═╝     ╚═╝╚══════╝╚══════╝╚═╝  ╚═╝`) + theme.fg("dim", ` v${this.version}`);
 
 			// Build startup instructions using keybinding hint helpers
 			const hint = (keybinding: AppKeybinding, description: string) => keyHint(keybinding, description);
@@ -521,7 +518,7 @@ export class InteractiveMode {
 			const compactInstructions = theme.fg("dim", ` /help  ${keyText("app.model.cycleForward")}: model  ${keyText("app.thinking.cycle")}: think  ${keyText("app.interrupt")}: stop`);
 			const onboarding = theme.fg(
 				"dim",
-				`Create together with Pi.`,
+				`Create together with Pizza.`,
 			);
 			this.builtInHeader = new ExpandableText(
 				() => `${logo}\n${compactInstructions}\n\n${onboarding}`,
@@ -535,7 +532,6 @@ export class InteractiveMode {
 			this.headerContainer.addChild(new Spacer(1));
 			this.headerContainer.addChild(this.builtInHeader);
 			this.headerContainer.addChild(new Spacer(1));
-		}
 
 		this.ui.addChild(this.chatContainer);
 		this.ui.addChild(this.pendingMessagesContainer);
@@ -604,11 +600,7 @@ export class InteractiveMode {
 		});
 
 		// Show startup warnings
-		const { migratedProviders, modelFallbackMessage, initialMessage, initialImages, initialMessages } = this.options;
-
-		if (migratedProviders && migratedProviders.length > 0) {
-			this.showWarning(`Migrated credentials to auth.json: ${migratedProviders.join(", ")}`);
-		}
+		const { modelFallbackMessage, initialMessage, initialImages, initialMessages } = this.options;
 
 		const modelsJsonError = this.session.modelRegistry.getError();
 		if (modelsJsonError) {

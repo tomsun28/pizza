@@ -10,9 +10,11 @@ packages/*/dist/
 packages/*/dist-chrome/
 packages/*/dist-firefox/
 *.cpuprofile
+*.tgz
 
 # Environment
 .env
+package
 
 # Editor files
 .vscode/

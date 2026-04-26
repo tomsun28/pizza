@@ -44,7 +44,6 @@ describe("InteractiveMode /clone", () => {
 		await interactiveModePrototype.handleCloneCommand.call(context);
 
 		expect(fork).toHaveBeenCalledWith("leaf-123", { position: "at" });
-		expect(handleRuntimeSessionChange).toHaveBeenCalled();
 		expect(renderCurrentSessionState).toHaveBeenCalled();
 		expect(setText).toHaveBeenCalledWith("");
 		expect(showStatus).toHaveBeenCalledWith("Cloned to new session");

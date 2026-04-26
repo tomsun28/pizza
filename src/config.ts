@@ -79,7 +79,7 @@ export function getUpdateInstruction(packageName: string): string {
  */
 export function getPackageDir(): string {
 	// Allow override via environment variable (useful for Nix/Guix where store paths tokenize poorly)
-	const envDir = process.env.PI_PACKAGE_DIR;
+	const envDir = process.env.PIZZA_PACKAGE_DIR ?? process.env.PI_PACKAGE_DIR;
 	if (envDir) {
 		if (envDir === "~") return homedir();
 		if (envDir.startsWith("~/")) return homedir() + envDir.slice(1);
@@ -92,6 +92,9 @@ export function getPackageDir(): string {
 	}
 	// Node.js: walk up from __dirname until we find package.json
 	let dir = __dirname;
+	if (dir.endsWith("/dist") || dir.endsWith("\\dist")) {
+		dir = dirname(dir);
+	}
 	while (dir !== dirname(dir)) {
 		if (existsSync(join(dir, "package.json"))) {
 			return dir;
@@ -112,10 +115,14 @@ export function getThemesDir(): string {
 	if (isBunBinary) {
 		return join(getPackageDir(), "theme");
 	}
-	// Theme is in modes/interactive/theme/ relative to src/ or dist/
 	const packageDir = getPackageDir();
-	const srcOrDist = existsSync(join(packageDir, "src")) ? "src" : "dist";
-	return join(packageDir, srcOrDist, "modes", "interactive", "theme");
+	// Theme is in modes/interactive/theme/ relative to dist/
+	// but in src/modes/interactive/theme/ relative to src/
+	if (packageDir.endsWith("dist") || packageDir.endsWith("dist/")) {
+		return join(packageDir, "modes", "interactive", "theme");
+	}
+	// tsx (src/): src/modes/interactive/theme/
+	return join(packageDir, "src", "modes", "interactive", "theme");
 }
 
 /**
@@ -129,8 +136,13 @@ export function getExportTemplateDir(): string {
 		return join(getPackageDir(), "export-html");
 	}
 	const packageDir = getPackageDir();
-	const srcOrDist = existsSync(join(packageDir, "src")) ? "src" : "dist";
-	return join(packageDir, srcOrDist, "core", "export-html");
+	// Export template is in core/export-html/ relative to dist/
+	// but in src/core/export-html/ relative to src/
+	if (packageDir.endsWith("dist") || packageDir.endsWith("dist/")) {
+		return join(packageDir, "core", "export-html");
+	}
+	// tsx (src/): src/core/export-html/
+	return join(packageDir, "src", "core", "export-html");
 }
 
 /** Get path to package.json */
@@ -168,9 +180,10 @@ export function getInteractiveAssetsDir(): string {
 	if (isBunBinary) {
 		return join(getPackageDir(), "assets");
 	}
+	// Assets are in modes/interactive/assets/ relative to dist/
+	// getPackageDir() already returns dist/ for Node.js
 	const packageDir = getPackageDir();
-	const srcOrDist = existsSync(join(packageDir, "src")) ? "src" : "dist";
-	return join(packageDir, srcOrDist, "modes", "interactive", "assets");
+	return join(packageDir, "modes", "interactive", "assets");
 }
 
 /** Get path to a bundled interactive asset */
@@ -184,26 +197,25 @@ export function getBundledInteractiveAssetPath(name: string): string {
 
 const pkg = JSON.parse(readFileSync(getPackageJsonPath(), "utf-8"));
 
-export const APP_NAME: string = pkg.piConfig?.name || "pi";
-export const CONFIG_DIR_NAME: string = pkg.piConfig?.configDir || ".pi";
+export const APP_NAME: string = pkg.piConfig?.name || "pizza";
+export const CONFIG_DIR_NAME: string = pkg.piConfig?.configDir || ".pizza";
 export const VERSION: string = pkg.version;
 
-// e.g., PI_CODING_AGENT_DIR or TAU_CODING_AGENT_DIR
 export const ENV_AGENT_DIR = `${APP_NAME.toUpperCase()}_CODING_AGENT_DIR`;
 
 const DEFAULT_SHARE_VIEWER_URL = "https://pi.dev/session/";
 
 /** Get the share viewer URL for a gist ID */
 export function getShareViewerUrl(gistId: string): string {
-	const baseUrl = process.env.PI_SHARE_VIEWER_URL || DEFAULT_SHARE_VIEWER_URL;
+	const baseUrl = process.env.PIZZA_SHARE_VIEWER_URL || process.env.PI_SHARE_VIEWER_URL || DEFAULT_SHARE_VIEWER_URL;
 	return `${baseUrl}#${gistId}`;
 }
 
 // =============================================================================
-// User Config Paths (~/.pi/agent/*)
+// User Config Paths (~/.pizza/agent/*)
 // =============================================================================
 
-/** Get the agent config directory (e.g., ~/.pi/agent/) */
+/** Get the agent config directory (e.g., ~/.pizza/agent/) */
 export function getAgentDir(): string {
 	const envDir = process.env[ENV_AGENT_DIR];
 	if (envDir) {

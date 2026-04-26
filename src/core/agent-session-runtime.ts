@@ -7,6 +7,10 @@ import { emitSessionShutdownEvent } from "./extensions/runner.js";
 import type { CreateAgentSessionResult } from "./sdk.js";
 import { assertSessionCwdExists } from "./session-cwd.js";
 import { SessionManager } from "./session-manager.js";
+import { SqliteEventStore } from "./event-store/sqlite-store.js";
+import { deriveWorkspaceId, getEventDatabasePath } from "./event-store/workspace.js";
+import { EventStoreBridge } from "./event-store-bridge.js";
+import type { EventStore } from "./event-store/store.js";
 
 /**
  * Result returned by runtime creation.
@@ -66,6 +70,8 @@ function extractUserMessageText(content: string | Array<{ type: string; text?: s
  */
 export class AgentSessionRuntime {
 	private rebindSession?: (session: AgentSession) => Promise<void>;
+	private _eventStoreBridge: EventStoreBridge;
+	private _eventStore: EventStore;
 
 	constructor(
 		private _session: AgentSession,
@@ -73,7 +79,18 @@ export class AgentSessionRuntime {
 		private readonly createRuntime: CreateAgentSessionRuntimeFactory,
 		private _diagnostics: AgentSessionRuntimeDiagnostic[] = [],
 		private _modelFallbackMessage?: string,
-	) {}
+	) {
+		// Create EventStore for this workspace
+		const workspaceId = deriveWorkspaceId(this._services.cwd);
+		this._eventStore = new SqliteEventStore(
+			workspaceId,
+			getEventDatabasePath(workspaceId, this._services.agentDir),
+		);
+
+		// Create EventStore bridge to write events alongside session manager
+		this._eventStoreBridge = new EventStoreBridge(this._session, this._eventStore);
+		this._eventStoreBridge.start();
+	}
 
 	get services(): AgentSessionServices {
 		return this._services;
@@ -93,6 +110,11 @@ export class AgentSessionRuntime {
 
 	get modelFallbackMessage(): string | undefined {
 		return this._modelFallbackMessage;
+	}
+
+	/** EventStore for the event-sourced architecture (parallel to SessionManager) */
+	get eventStore(): EventStore {
+		return this._eventStore;
 	}
 
 	setRebindSession(rebindSession?: (session: AgentSession) => Promise<void>): void {
@@ -134,6 +156,9 @@ export class AgentSessionRuntime {
 	}
 
 	private async teardownCurrent(reason: SessionShutdownEvent["reason"], targetSessionFile?: string): Promise<void> {
+		// Stop EventStore bridge before disposing session
+		this._eventStoreBridge.stop();
+		closeEventStore(this._eventStore);
 		await emitSessionShutdownEvent(this.session.extensionRunner, {
 			type: "session_shutdown",
 			reason,
@@ -147,6 +172,15 @@ export class AgentSessionRuntime {
 		this._services = result.services;
 		this._diagnostics = result.diagnostics;
 		this._modelFallbackMessage = result.modelFallbackMessage;
+
+		// Re-create EventStore for new workspace (if cwd changed) and bridge
+		const workspaceId = deriveWorkspaceId(this._services.cwd);
+		this._eventStore = new SqliteEventStore(
+			workspaceId,
+			getEventDatabasePath(workspaceId, this._services.agentDir),
+		);
+		this._eventStoreBridge = new EventStoreBridge(this._session, this._eventStore);
+		this._eventStoreBridge.start();
 	}
 
 	private async finishSessionReplacement(withSession?: (ctx: ReplacedSessionContext) => Promise<void>): Promise<void> {
@@ -350,12 +384,19 @@ export class AgentSessionRuntime {
 	}
 
 	async dispose(): Promise<void> {
+		// Stop EventStore bridge first
+		this._eventStoreBridge.stop();
+		closeEventStore(this._eventStore);
 		await emitSessionShutdownEvent(this.session.extensionRunner, {
 			type: "session_shutdown",
 			reason: "quit",
 		});
 		this.session.dispose();
 	}
+}
+
+function closeEventStore(store: EventStore): void {
+	(store as { close?: () => void }).close?.();
 }
 
 /**

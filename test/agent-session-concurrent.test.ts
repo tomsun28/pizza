@@ -115,6 +115,7 @@ describe("AgentSession concurrent prompt guard", () => {
 		// Set a runtime API key so validation passes
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
 
+		const extensionRunnerRef: { current?: any } = {};
 		session = new AgentSession({
 			agent,
 			sessionManager,
@@ -122,7 +123,13 @@ describe("AgentSession concurrent prompt guard", () => {
 			cwd: tempDir,
 			modelRegistry,
 			resourceLoader: createTestResourceLoader(),
+			extensionRunnerRef,
 		});
+
+		// Add invalidate method to the extension runner for tests
+		if (extensionRunnerRef.current) {
+			extensionRunnerRef.current.invalidate = () => {};
+		}
 
 		return session;
 	}
@@ -250,6 +257,7 @@ describe("AgentSession concurrent prompt guard", () => {
 			},
 		]);
 
+		const extensionRunnerRef: { current?: any } = {};
 		session = new AgentSession({
 			agent,
 			sessionManager,
@@ -257,7 +265,13 @@ describe("AgentSession concurrent prompt guard", () => {
 			cwd: tempDir,
 			modelRegistry,
 			resourceLoader: createTestResourceLoader({ extensionsResult }),
+			extensionRunnerRef,
 		});
+
+		// Add invalidate method to the extension runner for tests
+		if (extensionRunnerRef.current) {
+			extensionRunnerRef.current.invalidate = () => {};
+		}
 		session.subscribe((event) => {
 			if (event.type === "queue_update") {
 				queueEvents.push({ steering: event.steering, followUp: event.followUp });
@@ -317,6 +331,7 @@ describe("AgentSession concurrent prompt guard", () => {
 		const modelRegistry = ModelRegistry.create(authStorage, tempDir);
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
 
+		const extensionRunnerRef: { current?: any } = {};
 		session = new AgentSession({
 			agent,
 			sessionManager,
@@ -324,7 +339,13 @@ describe("AgentSession concurrent prompt guard", () => {
 			cwd: tempDir,
 			modelRegistry,
 			resourceLoader: createTestResourceLoader(),
+			extensionRunnerRef,
 		});
+
+		// Add invalidate method to the extension runner for tests
+		if (extensionRunnerRef.current) {
+			extensionRunnerRef.current.invalidate = () => {};
+		}
 
 		// First prompt completes
 		await session.prompt("First message");
@@ -423,6 +444,7 @@ describe("AgentSession concurrent prompt guard", () => {
 		const modelRegistry = ModelRegistry.create(authStorage, tempDir);
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
 
+		const extensionRunnerRef: { current?: any } = {};
 		session = new AgentSession({
 			agent,
 			sessionManager,
@@ -431,7 +453,13 @@ describe("AgentSession concurrent prompt guard", () => {
 			modelRegistry,
 			resourceLoader: createTestResourceLoader(),
 			baseToolsOverride: { dummy: tool },
+			extensionRunnerRef,
 		});
+
+		// Add invalidate method to the extension runner for tests
+		if (extensionRunnerRef.current) {
+			extensionRunnerRef.current.invalidate = () => {};
+		}
 
 		const snapshots: string[][] = [];
 		const sessionWithRunner = session as unknown as {
@@ -450,6 +478,7 @@ describe("AgentSession concurrent prompt guard", () => {
 					systemPrompt: string,
 					systemPromptOptions: BuildSystemPromptOptions,
 				) => Promise<undefined>;
+				invalidate: (message?: string) => void;
 			};
 		};
 		sessionWithRunner._extensionRunner = {
@@ -466,6 +495,7 @@ describe("AgentSession concurrent prompt guard", () => {
 			},
 			emitInput: async () => ({ action: "continue" }),
 			emitBeforeAgentStart: async () => undefined,
+			invalidate: () => {},
 		};
 
 		await session.prompt("hi");
@@ -565,6 +595,7 @@ describe("AgentSession concurrent prompt guard", () => {
 		const modelRegistry = ModelRegistry.create(authStorage, tempDir);
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
 
+		const extensionRunnerRef: { current?: any } = {};
 		session = new AgentSession({
 			agent,
 			sessionManager,
@@ -573,7 +604,13 @@ describe("AgentSession concurrent prompt guard", () => {
 			modelRegistry,
 			resourceLoader: createTestResourceLoader(),
 			baseToolsOverride: { dummy: tool },
+			extensionRunnerRef,
 		});
+
+		// Add invalidate method to the extension runner for tests
+		if (extensionRunnerRef.current) {
+			extensionRunnerRef.current.invalidate = () => {};
+		}
 
 		const sessionWithRunner = session as unknown as {
 			_extensionRunner?: {
@@ -590,6 +627,7 @@ describe("AgentSession concurrent prompt guard", () => {
 					systemPrompt: string,
 					systemPromptOptions: BuildSystemPromptOptions,
 				) => Promise<undefined>;
+				invalidate: (message?: string) => void;
 			};
 		};
 		sessionWithRunner._extensionRunner = {
@@ -601,6 +639,7 @@ describe("AgentSession concurrent prompt guard", () => {
 			},
 			emitInput: async () => ({ action: "continue" }),
 			emitBeforeAgentStart: async () => undefined,
+			invalidate: () => {},
 		};
 
 		await session.prompt("hi");

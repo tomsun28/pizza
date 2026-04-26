@@ -1,0 +1,119 @@
+/**
+ * Workspace Identification and Storage Layout
+ *
+ * Provides deterministic workspace_id derivation from cwd and the
+ * standard storage path structure.
+ *
+ * Storage layout:
+ *   <agentDir>/workspaces/<workspace_id>/
+ *     events.sqlite             # Primary event log
+ *     events-YYYY-MM-DD.jsonl   # Optional debug/export event log files
+ *     meta.json
+ *     sessions.json
+ */
+
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { getAgentDir as getDefaultAgentDir } from "../../config.js";
+
+/**
+ * workspace_id = deterministic hash of canonical cwd
+ * Same directory always yields the same workspace_id.
+ */
+export function deriveWorkspaceId(cwd: string): string {
+	const canonical = resolve(cwd).replace(/\\/g, "/");
+	return `ws_${createHash("sha256").update(canonical).digest("hex").slice(0, 12)}`;
+}
+
+/**
+ * Returns the workspace directory:
+ *   <agentDir>/workspaces/<workspace_id>/
+ */
+export function getWorkspaceDir(workspaceId: string, agentDir: string = getDefaultAgentDir()): string {
+	const dir = join(agentDir, "workspaces", workspaceId);
+	if (!existsSync(dir)) {
+		mkdirSync(dir, { recursive: true });
+	}
+	return dir;
+}
+
+/** Returns the events directory for a workspace. */
+export function getEventLogDir(workspaceId: string, agentDir?: string): string {
+	return getWorkspaceDir(workspaceId, agentDir);
+}
+
+/** Returns the primary SQLite event database path for a workspace. */
+export function getEventDatabasePath(workspaceId: string, agentDir?: string): string {
+	return join(getWorkspaceDir(workspaceId, agentDir), "events.sqlite");
+}
+
+/**
+ * Returns the events file path for a specific date.
+ * Format: events-YYYY-MM-DD.jsonl
+ */
+export function getEventLogPath(workspaceId: string, date: string, agentDir?: string): string {
+	return join(getWorkspaceDir(workspaceId, agentDir), `events-${date}.jsonl`);
+}
+
+/** Returns today's date string (YYYY-MM-DD). */
+export function getTodayDate(): string {
+	return new Date().toISOString().slice(0, 10);
+}
+
+/**
+ * Returns the events file path for today.
+ */
+export function getTodayEventLogPath(workspaceId: string, agentDir?: string): string {
+	return getEventLogPath(workspaceId, getTodayDate(), agentDir);
+}
+
+/**
+ * Returns the events file path given the workspace directory and date.
+ * Internal use by JsonlEventStore._persist.
+ */
+export function getEventLogPathInDir(workspaceDir: string, date: string): string {
+	return join(workspaceDir, `events-${date}.jsonl`);
+}
+
+/** Returns the meta.json path for a workspace. */
+export function getWorkspaceMetaPath(workspaceId: string, agentDir?: string): string {
+	return join(getWorkspaceDir(workspaceId, agentDir), "meta.json");
+}
+
+/** Returns the sessions.json path for a workspace. */
+export function getSessionIndexPath(workspaceId: string, agentDir?: string): string {
+	return join(getWorkspaceDir(workspaceId, agentDir), "sessions.json");
+}
+
+/** Workspace metadata. */
+export interface WorkspaceMeta {
+	workspace_id: string;
+	cwd: string;
+	created_at: number;
+	last_accessed_at: number;
+}
+
+/** Read workspace metadata, creating it if absent. */
+export function ensureWorkspaceMeta(workspaceId: string, cwd: string, agentDir?: string): WorkspaceMeta {
+	const path = getWorkspaceMetaPath(workspaceId, agentDir);
+	if (existsSync(path)) {
+		try {
+			const raw = readFileSync(path, "utf8");
+			const meta = JSON.parse(raw) as WorkspaceMeta;
+			meta.last_accessed_at = Date.now();
+			writeFileSync(path, JSON.stringify(meta, null, 2));
+			return meta;
+		} catch {
+			// fall through to create
+		}
+	}
+	const meta: WorkspaceMeta = {
+		workspace_id: workspaceId,
+		cwd,
+		created_at: Date.now(),
+		last_accessed_at: Date.now(),
+	};
+	writeFileSync(path, JSON.stringify(meta, null, 2));
+	return meta;
+}

@@ -143,10 +143,13 @@ function createRuntimeHost(options: { withAuth: boolean; responseDelayMs: number
 
 	const runtimeHost = {
 		session,
+		cwd: tempDir,
+		diagnostics: [],
 		newSession: vi.fn(async () => ({ cancelled: true })),
 		switchSession: vi.fn(async () => ({ cancelled: true })),
 		fork: vi.fn(async () => ({ cancelled: true, selectedText: "" })),
 		dispose: vi.fn(async () => {}),
+		setRebindSession: vi.fn(),
 	} as unknown as AgentSessionRuntime;
 
 	return {

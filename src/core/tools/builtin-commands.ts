@@ -1,5 +1,5 @@
 /**
- * Native CLI commands for file operations.
+ * Built-in CLI commands for file operations.
  * These are exposed to the LLM via the bash tool.
  * 
  * Supports heredoc syntax for multi-line content:
@@ -11,9 +11,9 @@
 
 import { readFile, writeFile, mkdir } from "fs/promises";
 import { resolve, join } from "path";
-import { truncateHead } from "./core/tools/truncate.js";
+import { truncateHead } from "./truncate.js";
 
-export interface NativeCommandResult {
+export interface BuiltinCommandResult {
 	stdout: string;
 	stderr: string;
 	exitCode: number;
@@ -23,21 +23,21 @@ export interface NativeCommandResult {
 // Heredoc Parser
 // ============================================================================
 
-export interface ParsedCommand {
+export interface ParsedBuiltinCommand {
 	command: string;
 	args: string[];
 	heredoc?: string;
 }
 
 /**
- * Parse command with optional heredoc.
+ * Parse builtin command with optional heredoc.
  * Supports:
  *   write <path> <<EOF
  *   line1
  *   line2
  *   EOF
  */
-export function parseCommandWithHeredoc(input: string): ParsedCommand | null {
+export function parseBuiltinCommandWithHeredoc(input: string): ParsedBuiltinCommand | null {
 	const trimmed = input.trim();
 	
 	// Match: command args <<DELIM\ncontent\nDELIM
@@ -56,6 +56,9 @@ export function parseCommandWithHeredoc(input: string): ParsedCommand | null {
 	};
 }
 
+/** @deprecated Use parseBuiltinCommandWithHeredoc */
+export const parseCommandWithHeredoc = parseBuiltinCommandWithHeredoc;
+
 // ============================================================================
 // Read Command
 // ============================================================================
@@ -67,7 +70,7 @@ interface ReadOptions {
 	cwd: string;
 }
 
-async function executeRead(options: ReadOptions): Promise<NativeCommandResult> {
+async function executeRead(options: ReadOptions): Promise<BuiltinCommandResult> {
 	try {
 		const filePath = resolve(options.cwd, options.path);
 		const content = await readFile(filePath, "utf-8");
@@ -127,7 +130,7 @@ interface WriteOptions {
 	cwd: string;
 }
 
-async function executeWrite(options: WriteOptions): Promise<NativeCommandResult> {
+async function executeWrite(options: WriteOptions): Promise<BuiltinCommandResult> {
 	try {
 		const filePath = resolve(options.cwd, options.path);
 
@@ -162,7 +165,7 @@ interface EditOptions {
 	cwd: string;
 }
 
-async function executeEdit(options: EditOptions): Promise<NativeCommandResult> {
+async function executeEdit(options: EditOptions): Promise<BuiltinCommandResult> {
 	try {
 		const filePath = resolve(options.cwd, options.path);
 		const content = await readFile(filePath, "utf-8");
@@ -197,15 +200,15 @@ async function executeEdit(options: EditOptions): Promise<NativeCommandResult> {
 // Main Router
 // ============================================================================
 
-export interface NativeCommandContext {
+export interface BuiltinCommandContext {
 	cwd: string;
 }
 
-export async function executeNativeCommand(
+export async function executeBuiltinCommand(
 	command: string,
 	args: string[],
-	context: NativeCommandContext,
-): Promise<NativeCommandResult> {
+	context: BuiltinCommandContext,
+): Promise<BuiltinCommandResult> {
 	switch (command) {
 		case "read": {
 			// Support: read <path> [offset] [limit]
@@ -283,11 +286,28 @@ export async function executeNativeCommand(
 		default:
 			return {
 				stdout: "",
-				stderr: `Unknown native command: ${command}. Available commands: read, write, edit`,
+				stderr: `Unknown builtin command: ${command}. Available commands: read, write, edit`,
 				exitCode: 1,
 			};
 	}
 }
 
-export const NATIVE_COMMANDS = ["read", "write", "edit"] as const;
-export type NativeCommand = (typeof NATIVE_COMMANDS)[number];
+export const BUILTIN_COMMANDS = ["read", "write", "edit"] as const;
+export type BuiltinCommand = (typeof BUILTIN_COMMANDS)[number];
+
+// ============================================================================
+// Deprecated aliases (for backward compatibility)
+// ============================================================================
+
+/** @deprecated Use BuiltinCommandResult */
+export type NativeCommandResult = BuiltinCommandResult;
+/** @deprecated Use ParsedBuiltinCommand */
+export type ParsedCommand = ParsedBuiltinCommand;
+/** @deprecated Use BuiltinCommandContext */
+export type NativeCommandContext = BuiltinCommandContext;
+/** @deprecated Use executeBuiltinCommand */
+export const executeNativeCommand = executeBuiltinCommand;
+/** @deprecated Use BUILTIN_COMMANDS */
+export const NATIVE_COMMANDS = BUILTIN_COMMANDS;
+/** @deprecated Use BuiltinCommand */
+export type NativeCommand = BuiltinCommand;

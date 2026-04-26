@@ -32,7 +32,7 @@ import {
 export interface CreateAgentSessionOptions {
 	/** Working directory for project-local discovery. Default: process.cwd() */
 	cwd?: string;
-	/** Global config directory. Default: ~/.pi/agent */
+	/** Global config directory. Default: ~/.pizza/agent */
 	agentDir?: string;
 
 	/** Auth storage for credentials. Default: AuthStorage.create(agentDir/auth.json) */
@@ -128,7 +128,7 @@ function getOpenRouterAttributionHeaders(
 	}
 	return {
 		"HTTP-Referer": "https://pi.dev",
-		"X-OpenRouter-Title": "pi",
+		"X-OpenRouter-Title": "pizza",
 		"X-OpenRouter-Categories": "cli-agent",
 	};
 }

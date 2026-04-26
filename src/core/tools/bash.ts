@@ -21,7 +21,7 @@ import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/type
 import { getTextOutput, invalidArgText, str } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateTail } from "./truncate.js";
-import { executeNativeCommand, NATIVE_COMMANDS, parseCommandWithHeredoc } from "../../native-commands.js";
+import { executeBuiltinCommand, BUILTIN_COMMANDS, parseBuiltinCommandWithHeredoc } from "./builtin-commands.js";
 
 /**
  * Generate a unique temp file path for bash output.
@@ -281,7 +281,7 @@ export function createBashToolDefinition(
 	return {
 		name: "bash",
 		label: "bash",
-		description: `Execute a command in the current working directory. Built-in: read <path> [offset] [limit] - read file, write <path> <content> - write file, edit <path> <oldText> <newText> - edit file. Other commands execute as native bash (ls, grep, git, npm, etc.). Truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB.`,
+		description: `Execute a command in the current working directory. Built-in: read <path> [offset] [limit] - read file, write <path> <content> - write file, edit <path> <oldText> <newText> - edit file. Other commands execute as regular bash (ls, grep, git, npm, etc.). Truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB.`,
 		promptSnippet: "Execute commands: read/write/edit files, or bash (ls, git, npm, etc.)",
 		parameters: bashSchema,
 		async execute(
@@ -291,32 +291,32 @@ export function createBashToolDefinition(
 			onUpdate?,
 			_ctx?,
 		) {
-			// Direct command routing: if command starts with a native command name,
+			// Direct command routing: if command starts with a built-in command name,
 			// execute it internally. Otherwise fall through to bash.
 			const trimmedCommand = command.trim();
 			const firstWord = trimmedCommand.split(/\s+/)[0].toLowerCase();
-			if (NATIVE_COMMANDS.includes(firstWord as any)) {
+			if (BUILTIN_COMMANDS.includes(firstWord as any)) {
 				// Parse heredoc if present
-				const parsed = parseCommandWithHeredoc(trimmedCommand);
-				let nativeCommand: string;
+				const parsed = parseBuiltinCommandWithHeredoc(trimmedCommand);
+				let builtinCommand: string;
 				let args: string[];
 				
 				if (parsed) {
-					nativeCommand = parsed.command;
+					builtinCommand = parsed.command;
 					// For write command, append heredoc content as the content argument
-					if (nativeCommand === "write" && parsed.heredoc !== undefined) {
+					if (builtinCommand === "write" && parsed.heredoc !== undefined) {
 						args = [...parsed.args, parsed.heredoc];
 					} else {
 						args = parsed.args;
 					}
 				} else {
 					const parts = trimmedCommand.split(/\s+/);
-					nativeCommand = parts[0].toLowerCase();
+					builtinCommand = parts[0].toLowerCase();
 					args = parts.slice(1);
 				}
 				
 				try {
-					const result = await executeNativeCommand(nativeCommand, args, { cwd });
+					const result = await executeBuiltinCommand(builtinCommand, args, { cwd });
 					const output = result.stdout + (result.stderr ? `\n${result.stderr}` : "");
 					if (result.exitCode !== 0) {
 						throw new Error(output || `Command exited with code ${result.exitCode}`);

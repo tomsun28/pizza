@@ -191,18 +191,17 @@ export function printHelp(extensionFlags?: ExtensionFlag[]): void {
 					})
 					.join("\n")}\n`
 			: "";
-	console.log(`${chalk.bold(APP_NAME)} - AI coding assistant with bash tool and native CLI commands
+	console.log(`${chalk.bold(APP_NAME)} - AI coding assistant with bash tool and built-in commands
 
 ${chalk.bold("Usage:")}
   ${APP_NAME} [options] [@files...] [messages...]
 
-${chalk.bold("Native Commands (via bash tool):")}
-  native read <path> [--offset N] [--limit N]  # Read file
-  native write <path> <content>               # Write file
-  native edit <path> <oldText> <newText>     # Edit file
-  native grep <pattern> [--path <path>] [-r]  # Search files
-  native find [--path <path>] [--name <pat>]   # Find files
-  native ls [path]                           # List directory
+${chalk.bold("Built-in Commands (handled internally by the bash tool):")}
+  builtin read <path> [--offset N] [--limit N]  # Read file
+  builtin write <path> <content>               # Write file
+  builtin edit <path> <oldText> <newText>     # Edit file
+
+All other commands (ls, grep, find, git, npm, etc.) are passed to the system shell as-is.
 
 ${chalk.bold("Commands:")}
   ${APP_NAME} install <source> [-l]     Install extension source and add to settings
@@ -325,10 +324,10 @@ ${chalk.bold("Environment Variables:")}
   AWS_BEARER_TOKEN_BEDROCK         - Bedrock API key (bearer token)
   AWS_REGION                       - AWS region for Amazon Bedrock (e.g., us-east-1)
   ${ENV_AGENT_DIR.padEnd(32)} - Session storage directory (default: ~/${CONFIG_DIR_NAME}/agent)
-  PI_PACKAGE_DIR                   - Override package directory (for Nix/Guix store paths)
+  PIZZA_PACKAGE_DIR                - Override package directory (for Nix/Guix store paths)
   PI_OFFLINE                       - Disable startup network operations when set to 1/true/yes
   PI_TELEMETRY                     - Override install telemetry when set to 1/true/yes or 0/false/no
-  PI_SHARE_VIEWER_URL              - Base URL for /share command (default: https://pi.dev/session/)
+  PIZZA_SHARE_VIEWER_URL           - Base URL for /share command (default: https://pi.dev/session/)
   PI_AI_ANTIGRAVITY_VERSION        - Override Antigravity User-Agent version (e.g., 1.23.0)
 
 ${chalk.bold("Built-in Tool Names:")}

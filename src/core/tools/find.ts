@@ -3,7 +3,9 @@ import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Text } from "@mariozechner/pi-tui";
 import { type Static, Type } from "@sinclair/typebox";
 import { spawn } from "child_process";
-import { existsSync } from "fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "fs";
+import ignore from "ignore";
+import { minimatch } from "minimatch";
 import path from "path";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { ensureTool } from "../../utils/tools-manager.js";
@@ -17,6 +19,132 @@ function toPosixPath(value: string): string {
 	return value.split(path.sep).join("/");
 }
 
+function prefixIgnorePattern(line: string, prefix: string): string | null {
+	const trimmed = line.trim();
+	if (!trimmed) return null;
+	if (trimmed.startsWith("#") && !trimmed.startsWith("\\#")) return null;
+
+	let pattern = trimmed;
+	let negated = false;
+	if (pattern.startsWith("!")) {
+		negated = true;
+		pattern = pattern.slice(1);
+	} else if (pattern.startsWith("\\!")) {
+		pattern = pattern.slice(1);
+	}
+
+	if (pattern.startsWith("/")) {
+		pattern = pattern.slice(1);
+	}
+
+	const hasSlash = pattern.includes("/");
+	const scoped = prefix && !hasSlash ? `${prefix}**/${pattern}` : `${prefix}${pattern}`;
+	return negated ? `!${scoped}` : scoped;
+}
+
+function addIgnoreRules(ig: IgnoreMatcher, dir: string, rootDir: string): void {
+	const relativeDir = path.relative(rootDir, dir);
+	const prefix = relativeDir ? `${toPosixPath(relativeDir)}/` : "";
+
+	for (const filename of IGNORE_FILE_NAMES) {
+		const ignorePath = path.join(dir, filename);
+		if (!existsSync(ignorePath)) continue;
+		try {
+			const content = readFileSync(ignorePath, "utf-8");
+			const patterns = content
+				.split(/\r?\n/)
+				.map((line) => prefixIgnorePattern(line, prefix))
+				.filter((line): line is string => Boolean(line));
+			if (patterns.length > 0) {
+				ig.add(patterns);
+			}
+		} catch {}
+	}
+}
+
+function assertValidFindPattern(pattern: string): void {
+	let escaped = false;
+	let inClass = false;
+	for (const char of pattern) {
+		if (escaped) {
+			escaped = false;
+			continue;
+		}
+		if (char === "\\") {
+			escaped = true;
+			continue;
+		}
+		if (char === "[" && !inClass) {
+			inClass = true;
+			continue;
+		}
+		if (char === "]" && inClass) {
+			inClass = false;
+		}
+	}
+	if (inClass) {
+		throw new Error("fd error: error parsing glob: unclosed character class");
+	}
+}
+
+function nodeGlobMatch(relativePath: string, pattern: string): boolean {
+	if (pattern.includes("/")) {
+		const normalizedPattern = pattern.startsWith("/") ? pattern.slice(1) : pattern;
+		return minimatch(relativePath, normalizedPattern, { dot: true });
+	}
+	return minimatch(path.posix.basename(relativePath), pattern, { dot: true });
+}
+
+function findWithNode(pattern: string, searchPath: string, limit: number): string[] {
+	assertValidFindPattern(pattern);
+	const ig = ignore();
+	const results: string[] = [];
+
+	const walk = (dir: string) => {
+		if (results.length >= limit) return;
+		addIgnoreRules(ig, dir, searchPath);
+
+		let entries;
+		try {
+			entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+		} catch {
+			return;
+		}
+
+		for (const entry of entries) {
+			if (results.length >= limit) return;
+			if (entry.name === ".git" || entry.name === "node_modules") continue;
+
+			const fullPath = path.join(dir, entry.name);
+			let isDirectory = entry.isDirectory();
+			let isFile = entry.isFile();
+			if (entry.isSymbolicLink()) {
+				try {
+					const stats = statSync(fullPath);
+					isDirectory = stats.isDirectory();
+					isFile = stats.isFile();
+				} catch {
+					continue;
+				}
+			}
+
+			const relativePath = toPosixPath(path.relative(searchPath, fullPath));
+			const ignorePath = isDirectory ? `${relativePath}/` : relativePath;
+			if (ig.ignores(ignorePath)) continue;
+
+			if (isFile && nodeGlobMatch(relativePath, pattern)) {
+				results.push(relativePath);
+			}
+			if (isDirectory) {
+				walk(fullPath);
+			}
+		}
+	};
+
+	walk(searchPath);
+	return results;
+}
+
 const findSchema = Type.Object({
 	pattern: Type.String({
 		description: "Glob pattern to match files, e.g. '*.ts', '**/*.json', or 'src/**/*.spec.ts'",
@@ -28,6 +156,9 @@ const findSchema = Type.Object({
 export type FindToolInput = Static<typeof findSchema>;
 
 const DEFAULT_LIMIT = 1000;
+const IGNORE_FILE_NAMES = [".gitignore", ".ignore", ".fdignore"];
+
+type IgnoreMatcher = ReturnType<typeof ignore>;
 
 export interface FindToolDetails {
 	truncation?: TruncationResult;
@@ -220,7 +351,51 @@ export function createFindToolDefinition(
 							return;
 						}
 						if (!fdPath) {
-							settle(() => reject(new Error("fd is not available and could not be downloaded")));
+							if (!existsSync(searchPath)) {
+								settle(() => reject(new Error(`Path not found: ${searchPath}`)));
+								return;
+							}
+							try {
+								const results = findWithNode(pattern, searchPath, effectiveLimit);
+								if (results.length === 0) {
+									settle(() =>
+										resolve({
+											content: [{ type: "text", text: "No files found matching pattern" }],
+											details: undefined,
+										}),
+									);
+									return;
+								}
+
+								const resultLimitReached = results.length >= effectiveLimit;
+								const rawOutput = results.join("\n");
+								const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
+								let resultOutput = truncation.content;
+								const details: FindToolDetails = {};
+								const notices: string[] = [];
+								if (resultLimitReached) {
+									notices.push(
+										`${effectiveLimit} results limit reached. Use limit=${effectiveLimit * 2} for more, or refine pattern`,
+									);
+									details.resultLimitReached = effectiveLimit;
+								}
+								if (truncation.truncated) {
+									notices.push(`${formatSize(DEFAULT_MAX_BYTES)} limit reached`);
+									details.truncation = truncation;
+								}
+								if (notices.length > 0) {
+									resultOutput += `\n\n[${notices.join(". ")}]`;
+								}
+								settle(() =>
+									resolve({
+										content: [{ type: "text", text: resultOutput }],
+										details: Object.keys(details).length > 0 ? details : undefined,
+									}),
+								);
+							} catch (error) {
+								const message = error instanceof Error ? error.message : String(error);
+								settle(() => reject(new Error(message)));
+							}
 							return;
 						}
 

@@ -19,7 +19,7 @@ import * as _bundledPiTui from "@mariozechner/pi-tui";
 // These MUST be static so Bun bundles them into the compiled binary.
 // The virtualModules option then makes them available to extensions.
 import * as _bundledTypebox from "@sinclair/typebox";
-import { getAgentDir, isBunBinary } from "../../config.js";
+import { CONFIG_DIR_NAME, getAgentDir, isBunBinary } from "../../config.js";
 // NOTE: This import works because loader.ts exports are NOT re-exported from index.ts,
 // avoiding a circular dependency. Extensions can import from @mariozechner/pi-coding-agent.
 import * as _bundledPiCodingAgent from "../../index.js";
@@ -71,7 +71,27 @@ function getAliases(): Record<string, string> {
 		if (fs.existsSync(workspacePath)) {
 			return workspacePath;
 		}
-		return fileURLToPath(import.meta.resolve(specifier));
+		// Fallback for environments where import.meta.resolve is not available (e.g., vitest SSR)
+		try {
+			if (typeof import.meta.resolve === "function") {
+				return fileURLToPath(import.meta.resolve(specifier));
+			}
+		} catch {
+			// import.meta.resolve failed, try require.resolve
+		}
+		// Use require.resolve as fallback - handle ESM packages
+		try {
+			const resolved = require.resolve(specifier);
+			return resolved;
+		} catch {
+			// If require.resolve fails, try resolving with explicit .js extension for ESM
+			try {
+				return require.resolve(specifier + "/dist/index.js");
+			} catch {
+				// Last resort: return the specifier as-is
+				return specifier;
+			}
+		}
 	};
 
 	_aliases = {
@@ -331,6 +351,8 @@ async function loadExtensionModule(extensionPath: string) {
 		// Also disable tryNative so jiti handles ALL imports (not just the entry point)
 		// In Node.js/dev: use aliases to resolve to node_modules paths
 		...(isBunBinary ? { virtualModules: VIRTUAL_MODULES, tryNative: false } : { alias: getAliases() }),
+		// Allow ESM imports without requiring main export
+		interopDefault: true,
 	});
 
 	const module = await jiti.import(extensionPath, { default: true });
@@ -562,8 +584,8 @@ export async function discoverAndLoadExtensions(
 		}
 	};
 
-	// 1. Project-local extensions: cwd/.pi/extensions/
-	const localExtDir = path.join(cwd, ".pi", "extensions");
+	// 1. Project-local extensions: cwd/<CONFIG_DIR_NAME>/extensions/
+	const localExtDir = path.join(cwd, CONFIG_DIR_NAME, "extensions");
 	addPaths(discoverExtensionsInDir(localExtDir));
 
 	// 2. Global extensions: agentDir/extensions/
