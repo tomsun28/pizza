@@ -61,7 +61,15 @@ export type EventType =
 	| "USER_APPROVAL"
 	| "USER_REJECTION"
 	| "USER_INTERRUPT"
+	| "USER_FOLLOWUP_QUEUED"
 	| "USER_CONFIG_CHANGE"
+	// Reactor control events (drive state transitions, no side effects themselves)
+	| "AGENT_TURN_REQUESTED"
+	| "AGENT_TURN_COMPLETED"
+	| "LLM_CALL_REQUESTED"
+	| "LLM_CALL_FAILED"
+	| "TOOL_RESULTS_AGGREGATED"
+	| "RETRY_SCHEDULED"
 	// Agent Events (LLM output)
 	| "AGENT_THINKING_START"
 	| "AGENT_THINKING_END"
@@ -85,6 +93,7 @@ export type EventType =
 	| "SESSION_BOUNDARY_INFERRED"
 	| "SESSION_FORKED"
 	// Compaction
+	| "COMPACTION_REQUESTED"
 	| "COMPACTION_START"
 	| "COMPACTION_END"
 	// Runtime
@@ -96,7 +105,25 @@ export type EventType =
 	| "CHECKPOINT_FAILED"
 	| "MODEL_CHANGED"
 	| "THINKING_LEVEL_CHANGED"
-	| "RUNTIME_ERROR";
+	| "RUNTIME_ERROR"
+	// Goal Lifecycle
+	| "GOAL_CREATED"
+	| "GOAL_CLASSIFIED"
+	| "GOAL_PLANNED"
+	| "GOAL_PAUSED"
+	| "GOAL_RESUMED"
+	| "GOAL_COMPLETED"
+	| "GOAL_CANCELLED"
+	// Task Lifecycle
+	| "TASK_CREATED"
+	| "TASK_ASSIGNED"
+	| "TASK_STARTED"
+	| "TASK_PROGRESS"
+	| "TASK_COMPLETED"
+	| "TASK_FAILED"
+	| "TASK_REWORK_REQUESTED"
+	| "TASK_ACCEPTED"
+	| "TASK_CANCELLED";
 
 // ============================================================================
 // Supporting Types

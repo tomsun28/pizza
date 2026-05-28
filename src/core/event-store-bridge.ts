@@ -6,7 +6,6 @@
  * runtime becomes the durable source of truth.
  */
 
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { EventBase } from "./event-store/types.js";
 import type { EventAppendInput, EventStore } from "./event-store/store.js";
@@ -154,7 +153,7 @@ export class EventStoreBridge {
 		this.currentTurnEventId = appended.event_id;
 	}
 
-	private _onTurnEnd(event: { type: "turn_end"; message: AgentMessage; toolResults: unknown[] }): void {
+	private _onTurnEnd(event: { type: "turn_end"; message: any; toolResults: unknown[] }): void {
 		this._append({
 			actor_id: "coder_agent",
 			type: "AGENT_TURN_END",
@@ -164,7 +163,7 @@ export class EventStoreBridge {
 		this.currentTurnEventId = undefined;
 	}
 
-	private _onMessageStart(event: { type: "message_start"; message: AgentMessage }): void {
+	private _onMessageStart(event: { type: "message_start"; message: any }): void {
 		const msg = event.message;
 
 		if (msg.role === "user") {
@@ -201,7 +200,7 @@ export class EventStoreBridge {
 		}
 	}
 
-	private _onMessageEnd(event: { type: "message_end"; message: AgentMessage }): void {
+	private _onMessageEnd(event: { type: "message_end"; message: any }): void {
 		const msg = event.message;
 
 		if (msg.role !== "assistant") return;

@@ -5,11 +5,11 @@
  * Builds LLM context from event queries.
  */
 
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { TextContent } from "@mariozechner/pi-ai";
+import type { AgentMessage } from "../agent/types.js";
 import type { EventBase, EventType } from "../event-store/types.js";
 import type { EventStore } from "../event-store/store.js";
-import type { SessionDescriptor, BuildContextOptions, BuiltContext, TimelineEntry } from "./types.js";
+import type { SessionDescriptor, BuildContextOptions, BuiltContext } from "./types.js";
+import type { TimelineEntry, TimelineEntryKind } from "./timeline-projection.js";
 import { eventsToMessages } from "./event-to-message.js";
 
 // ============================================================================
@@ -103,10 +103,11 @@ export class SessionProjection {
 
 		return events.map((e) => ({
 			event_id: e.event_id,
-			type: e.type,
+			kind: this._eventTypeToKind(e.type),
 			actor_id: e.actor_id,
 			timestamp: e.timestamp,
 			summary: this._summarizeEvent(e),
+			caused_by: e.caused_by,
 		}));
 	}
 
@@ -214,6 +215,57 @@ export class SessionProjection {
 
 		const recentMessages = otherMessages.slice(-maxMessages);
 		return [...systemMessages, ...recentMessages];
+	}
+
+	private _eventTypeToKind(type: EventType): TimelineEntryKind {
+		switch (type) {
+			case "USER_MESSAGE":
+				return "user_message";
+			case "AGENT_MESSAGE_START":
+			case "AGENT_MESSAGE_CHUNK":
+			case "AGENT_MESSAGE_END":
+				return "agent_message";
+			case "TOOL_EXECUTION_START":
+			case "TOOL_EXECUTION_UPDATE":
+			case "TOOL_EXECUTION_END":
+				return "tool_execution";
+			case "FILE_MUTATION_APPLIED":
+				return "file_mutation";
+			case "GOAL_CREATED":
+			case "GOAL_CLASSIFIED":
+			case "GOAL_PLANNED":
+			case "GOAL_PAUSED":
+			case "GOAL_RESUMED":
+			case "GOAL_COMPLETED":
+			case "GOAL_CANCELLED":
+				return "goal_event";
+			case "TASK_CREATED":
+			case "TASK_ASSIGNED":
+			case "TASK_STARTED":
+			case "TASK_PROGRESS":
+			case "TASK_COMPLETED":
+			case "TASK_FAILED":
+			case "TASK_REWORK_REQUESTED":
+			case "TASK_ACCEPTED":
+			case "TASK_CANCELLED":
+				return "task_event";
+			case "SESSION_CREATED":
+			case "SESSION_BOUNDARY_INFERRED":
+			case "SESSION_FORKED":
+				return "session_boundary";
+			case "COMPACTION_REQUESTED":
+			case "COMPACTION_START":
+			case "COMPACTION_END":
+				return "compaction";
+			case "RUNTIME_ERROR":
+				return "error";
+			case "CHECKPOINT_CREATED":
+			case "CHECKPOINT_RESTORED":
+			case "CHECKPOINT_FAILED":
+				return "checkpoint";
+			default:
+				return "agent_message";
+		}
 	}
 
 	private _generateSessionId(): string {

@@ -152,9 +152,9 @@ describe("SessionProjection", () => {
 		const timeline = projection.getTimeline();
 
 		expect(timeline).toHaveLength(3);
-		expect(timeline[0].type).toBe("USER_MESSAGE");
+		expect(timeline[0].kind).toBe("user_message");
 		expect(timeline[0].summary).toContain("User:");
-		expect(timeline[2].type).toBe("AGENT_MESSAGE_END");
+		expect(timeline[2].kind).toBe("agent_message");
 		expect(timeline[2].summary).toContain("Agent");
 	});
 

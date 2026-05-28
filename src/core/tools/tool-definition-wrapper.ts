@@ -1,4 +1,4 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentTool } from "../agent/types.js";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.js";
 
 /** Wrap a ToolDefinition into an AgentTool for the core runtime. */
@@ -35,7 +35,7 @@ export function wrapToolDefinitions(
 export function createToolDefinitionFromAgentTool(tool: AgentTool<any>): ToolDefinition<any, unknown> {
 	return {
 		name: tool.name,
-		label: tool.label,
+		label: tool.label ?? tool.name,
 		description: tool.description,
 		parameters: tool.parameters as any,
 		prepareArguments: tool.prepareArguments,

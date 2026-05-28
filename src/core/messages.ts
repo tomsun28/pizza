@@ -5,8 +5,28 @@
  * and provides a transformer to convert them to LLM-compatible messages.
  */
 
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type {
+	AgentMessage,
+	BashExecutionMessage,
+	BranchSummaryMessage,
+	CompactionSummaryMessage,
+	CustomMessage,
+} from "./agent/types.js";
 import type { ImageContent, Message, TextContent } from "@mariozechner/pi-ai";
+
+export type { BashExecutionMessage, BranchSummaryMessage, CompactionSummaryMessage, CustomMessage };
+
+// Extend pi-agent-core's CustomAgentMessages via declaration merging.
+// This is required while agent-session.ts still uses pi-agent-core's Agent class.
+// Will be removed in Stage 4-5 when Agent is fully replaced by EventSourcedRuntime.
+declare module "@mariozechner/pi-agent-core" {
+	interface CustomAgentMessages {
+		bashExecution: BashExecutionMessage;
+		custom: CustomMessage;
+		branchSummary: BranchSummaryMessage;
+		compactionSummary: CompactionSummaryMessage;
+	}
+}
 
 export const COMPACTION_SUMMARY_PREFIX = `The conversation history before this point was compacted into the following summary:
 
@@ -23,58 +43,6 @@ export const BRANCH_SUMMARY_PREFIX = `The following is a summary of a branch tha
 
 export const BRANCH_SUMMARY_SUFFIX = `</summary>`;
 
-/**
- * Message type for bash executions via the ! command.
- */
-export interface BashExecutionMessage {
-	role: "bashExecution";
-	command: string;
-	output: string;
-	exitCode: number | undefined;
-	cancelled: boolean;
-	truncated: boolean;
-	fullOutputPath?: string;
-	timestamp: number;
-	/** If true, this message is excluded from LLM context (!! prefix) */
-	excludeFromContext?: boolean;
-}
-
-/**
- * Message type for extension-injected messages via sendMessage().
- * These are custom messages that extensions can inject into the conversation.
- */
-export interface CustomMessage<T = unknown> {
-	role: "custom";
-	customType: string;
-	content: string | (TextContent | ImageContent)[];
-	display: boolean;
-	details?: T;
-	timestamp: number;
-}
-
-export interface BranchSummaryMessage {
-	role: "branchSummary";
-	summary: string;
-	fromId: string;
-	timestamp: number;
-}
-
-export interface CompactionSummaryMessage {
-	role: "compactionSummary";
-	summary: string;
-	tokensBefore: number;
-	timestamp: number;
-}
-
-// Extend CustomAgentMessages via declaration merging
-declare module "@mariozechner/pi-agent-core" {
-	interface CustomAgentMessages {
-		bashExecution: BashExecutionMessage;
-		custom: CustomMessage;
-		branchSummary: BranchSummaryMessage;
-		compactionSummary: CompactionSummaryMessage;
-	}
-}
 
 /**
  * Convert a BashExecutionMessage to user message text for LLM context.

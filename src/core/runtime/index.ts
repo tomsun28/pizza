@@ -1,10 +1,12 @@
 /**
  * Runtime Module
  *
- * Event-sourced runtime implementation.
+ * Event-driven (reactor-based) runtime implementation.
  */
 
-export * from "./agent-loop.js";
+export * from "./reactor.js";
+export * from "./policies.js";
+export * from "./llm-types.js";
 export * from "./runtime.js";
 export * from "./types.js";
 export * from "./local-runtime.js";

@@ -14,7 +14,7 @@ import type {
 	AgentToolUpdateCallback,
 	ThinkingLevel,
 	ToolExecutionMode,
-} from "@mariozechner/pi-agent-core";
+} from "../agent/types.js";
 import type {
 	Api,
 	AssistantMessageEvent,

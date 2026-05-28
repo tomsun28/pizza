@@ -528,7 +528,7 @@ export class AgentSession {
 				this.sessionManager.appendCustomMessageEntry(
 					event.message.customType,
 					event.message.content,
-					event.message.display,
+					!!event.message.display,
 					event.message.details,
 				);
 			} else if (
@@ -1280,7 +1280,7 @@ export class AgentSession {
 			this.sessionManager.appendCustomMessageEntry(
 				message.customType,
 				message.content,
-				message.display,
+				!!message.display,
 				message.details,
 			);
 			this._emit({ type: "message_start", message: appMessage });
@@ -2294,7 +2294,7 @@ export class AgentSession {
 		for (const tool of wrappedExtensionTools as AgentTool[]) {
 			toolRegistry.set(tool.name, tool);
 		}
-		this._toolRegistry = toolRegistry;
+		this._toolRegistry = toolRegistry as Map<string, AgentTool>;
 
 		const nextActiveToolNames = (
 			options?.activeToolNames ? [...options.activeToolNames] : [...previousActiveToolNames]

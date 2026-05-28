@@ -55,22 +55,10 @@ export interface BuildContextOptions {
 /** Built context result */
 export interface BuiltContext {
 	/** Messages for LLM consumption */
-	messages: import("@mariozechner/pi-agent-core").AgentMessage[];
+	messages: import("../agent/types.js").AgentMessage[];
 	/** Raw events used to build context */
 	events: EventBase[];
 	/** Session descriptor */
 	descriptor: SessionDescriptor;
 }
 
-// ============================================================================
-// Timeline
-// ============================================================================
-
-/** Timeline entry for UI display */
-export interface TimelineEntry {
-	event_id: string;
-	type: import("../event-store/types.js").EventType;
-	actor_id: import("../event-store/types.js").ActorId;
-	timestamp: number;
-	summary: string;
-}

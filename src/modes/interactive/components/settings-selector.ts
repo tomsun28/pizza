@@ -1,4 +1,4 @@
-import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
+import type { ThinkingLevel } from "../../../core/agent/types.js";
 import type { Transport } from "@mariozechner/pi-ai";
 import {
 	Container,

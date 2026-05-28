@@ -45,7 +45,17 @@ export interface UserInterruptEvent extends EventBase {
 	type: "USER_INTERRUPT";
 	payload: {
 		content?: string | import("./types.js").ContentBlock[];
+		images?: import("./types.js").ImageContent[];
 		reason?: string;
+	};
+}
+
+/** User queues a follow-up message: delivered after the current turn completes (no interrupt). */
+export interface UserFollowupQueuedEvent extends EventBase {
+	type: "USER_FOLLOWUP_QUEUED";
+	payload: {
+		content: string | import("./types.js").ContentBlock[];
+		images?: import("./types.js").ImageContent[];
 	};
 }
 
@@ -324,6 +334,96 @@ export interface RuntimeErrorEvent extends EventBase {
 }
 
 // ============================================================================
+// Reactor Control Events (drive the event-driven state machine)
+// ============================================================================
+
+/**
+ * Reactor decided this turn requires a new LLM call.
+ *
+ * Emitted by:
+ *   - reactor entry after USER_MESSAGE
+ *   - tool-aggregation handler after all TOOL_EXECUTION_END for a turn arrive
+ *   - retry handler when a scheduled retry fires
+ */
+export interface AgentTurnRequestedEvent extends EventBase {
+	type: "AGENT_TURN_REQUESTED";
+	payload: {
+		/** Why this turn was requested */
+		reason: "user_message" | "tool_results" | "retry" | "steer" | "follow_up";
+		/** Retry attempt counter (0 on first attempt) */
+		retry_attempt?: number;
+	};
+}
+
+/**
+ * A complete agent turn (one or more LLM calls + tools) has settled. Terminal
+ * for one user interaction unless a follow-up is queued.
+ */
+export interface AgentTurnCompletedEvent extends EventBase {
+	type: "AGENT_TURN_COMPLETED";
+	payload: {
+		reason: "stop" | "length" | "aborted" | "error";
+		error_message?: string;
+	};
+}
+
+/**
+ * Reactor wants the LLM client to make a call. Decoupled from AGENT_TURN_REQUESTED
+ * so context-building, system prompt assembly, and compaction can intercede.
+ */
+export interface LlmCallRequestedEvent extends EventBase {
+	type: "LLM_CALL_REQUESTED";
+	payload: {
+		message_count: number;
+	};
+}
+
+/** LLM call failed (network/provider/transient). Distinct from a stop_reason="error" assistant message. */
+export interface LlmCallFailedEvent extends EventBase {
+	type: "LLM_CALL_FAILED";
+	payload: {
+		error: string;
+		retryable: boolean;
+		status_code?: number;
+	};
+}
+
+/**
+ * All tool executions for the originating assistant message have completed.
+ * Emitted by the tool-aggregation handler when the expected count matches
+ * received TOOL_EXECUTION_END events sharing the same caused_by.
+ */
+export interface ToolResultsAggregatedEvent extends EventBase {
+	type: "TOOL_RESULTS_AGGREGATED";
+	payload: {
+		/** event_id of the AGENT_MESSAGE_END that produced these tool calls */
+		assistant_message_event_id: string;
+		tool_call_count: number;
+		any_error: boolean;
+	};
+}
+
+/** A retry has been scheduled. The retry handler will emit AGENT_TURN_REQUESTED after delay_ms. */
+export interface RetryScheduledEvent extends EventBase {
+	type: "RETRY_SCHEDULED";
+	payload: {
+		attempt: number;
+		max_attempts: number;
+		delay_ms: number;
+		error_message: string;
+	};
+}
+
+/** Compaction handler decided context is too large. Distinct from COMPACTION_START which records the actual run. */
+export interface CompactionRequestedEvent extends EventBase {
+	type: "COMPACTION_REQUESTED";
+	payload: {
+		reason: "manual" | "threshold" | "overflow";
+		token_count: number;
+	};
+}
+
+// ============================================================================
 // Type Exports
 // ============================================================================
 
@@ -333,7 +433,15 @@ export type TypedEvent =
 	| UserApprovalEvent
 	| UserRejectionEvent
 	| UserInterruptEvent
+	| UserFollowupQueuedEvent
 	| UserConfigChangeEvent
+	| AgentTurnRequestedEvent
+	| AgentTurnCompletedEvent
+	| LlmCallRequestedEvent
+	| LlmCallFailedEvent
+	| ToolResultsAggregatedEvent
+	| RetryScheduledEvent
+	| CompactionRequestedEvent
 	| AgentThinkingStartEvent
 	| AgentThinkingEndEvent
 	| AgentMessageStartEvent

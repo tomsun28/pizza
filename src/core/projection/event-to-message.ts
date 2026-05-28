@@ -4,7 +4,7 @@
  * Converts EventStore events to AgentMessage format for LLM consumption.
  */
 
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "../agent/types.js";
 import type { TextContent, ImageContent, ThinkingContent, ToolCall, Usage, StopReason, Api, Provider } from "@mariozechner/pi-ai";
 import type { EventBase } from "../event-store/types.js";
 import type {

@@ -5,18 +5,19 @@
  * Provides unified interface for UI layers.
  */
 
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "../agent/types.js";
 import type { EventBase, ImageContent } from "../event-store/types.js";
 import type { EventStore, SubscribeOptions } from "../event-store/store.js";
 import type { SessionDescriptor } from "../projection/types.js";
 import type { ToolRegistry, ApprovalHandler } from "../intent/types.js";
-import type { LLMClient, ModelConfig, ToolDefinition } from "./agent-loop.js";
+import type { LLMClient, ModelConfig, ToolDefinition } from "./llm-types.js";
 import { SqliteEventStore } from "../event-store/sqlite-store.js";
 import { deriveWorkspaceId, getEventDatabasePath, getSessionIndexPath } from "../event-store/workspace.js";
 import { SessionManager } from "../projection/session-manager.js";
+import { TimelineProjection, type TimelineQueryOptions } from "../projection/timeline-projection.js";
 import { IntentExecutor } from "../intent/executor.js";
 import { IntentClassifier } from "../intent/classifier.js";
-import { AgentLoop } from "./agent-loop.js";
+import { Reactor } from "./reactor.js";
 import type { CheckpointRef, RuntimeAdapter, RuntimeStatus } from "./types.js";
 import { LocalRuntimeAdapter } from "./local-runtime.js";
 
@@ -60,6 +61,10 @@ export interface EventSourcedRuntimeConfig {
 	tools: ToolDefinition[];
 	/** Context token budget */
 	contextBudget?: number;
+	/** Retry policy (default: DefaultRetryPolicy). */
+	retryPolicy?: import("./policies.js").RetryPolicy;
+	/** Compaction policy (default: NoopCompactionPolicy). */
+	compactionPolicy?: import("./policies.js").CompactionPolicy;
 }
 
 // ============================================================================
@@ -77,10 +82,13 @@ export class EventSourcedRuntime {
 	readonly sessionManager: SessionManager;
 	readonly intentExecutor: IntentExecutor;
 	readonly runtimeAdapter: RuntimeAdapter;
-	private agentLoop: AgentLoop | null = null;
-	private _isRunning = false;
+	readonly classifier: IntentClassifier;
+	private reactor: Reactor | null = null;
 	private config: EventSourcedRuntimeConfig;
 	private ownsStore: boolean;
+	private _isProcessing = false;
+	private _turnCompletionWaiters: Array<() => void> = [];
+	private _turnSubscription: (() => void) | undefined;
 
 	constructor(config: EventSourcedRuntimeConfig) {
 		this.config = config;
@@ -107,17 +115,17 @@ export class EventSourcedRuntime {
 		);
 
 		// 3. Create IntentClassifier
-		const classifier = new IntentClassifier({
+		this.classifier = new IntentClassifier({
 			approve_writes: config.classifierConfig?.approve_writes ?? false,
 			approve_edits: config.classifierConfig?.approve_edits ?? false,
 			approve_shell_moderate: config.classifierConfig?.approve_shell_moderate ?? false,
 			approve_unknown: config.classifierConfig?.approve_unknown ?? true,
 		});
 
-		// 4. Create IntentExecutor
+		// 4. Create IntentExecutor (still used for the legacy direct execution path)
 		this.intentExecutor = new IntentExecutor(
 			this.store,
-			classifier,
+			this.classifier,
 			config.toolRegistry,
 			config.approvalHandler,
 			this.runtimeAdapter,
@@ -131,48 +139,62 @@ export class EventSourcedRuntime {
 	}
 
 	/**
-	 * Process user input.
+	 * Process user input. Drives the reactor to completion (one turn cycle).
 	 */
 	async prompt(text: string, images?: ImageContent[]): Promise<void> {
-		if (this._isRunning) {
-			// Queue as steering (interrupt current turn)
+		if (this._isProcessing) {
+			// Reactor is already running — just emit USER_INTERRUPT so the running
+			// reactor sees the new input and steers.
 			this.store.append({
 				actor_id: "user",
 				type: "USER_INTERRUPT",
-				payload: { content: text, images },
+				payload: { content: text },
 			});
 			return;
 		}
 
-		this._isRunning = true;
+		this._isProcessing = true;
 
 		try {
-			// 1. Append user message event
-			const userEvent = this.store.append({
+			// Lazy-create the reactor and start it. Reactor lives only as long as the prompt cycle.
+			const projection = this.sessionManager.getActiveSession();
+
+			this.reactor = new Reactor({
+				store: this.store,
+				projection,
+				llmClient: this.config.llmClient,
+				classifier: this.classifier,
+				toolRegistry: this.config.toolRegistry,
+				approvalHandler: this.config.approvalHandler,
+				runtimeAdapter: this.runtimeAdapter,
+				systemPrompt: this.config.systemPrompt,
+				model: this.config.model,
+				contextBudget: this.config.contextBudget ?? 128000,
+				tools: this.config.tools,
+				retryPolicy: this.config.retryPolicy,
+				compactionPolicy: this.config.compactionPolicy,
+			});
+
+			await this.reactor.start();
+
+			// Wait until the reactor reaches a fully idle state. The reactor may chain
+			// multiple turns (e.g. follow-up queue draining), so we keep waiting until settled.
+			const settledPromise = this._waitUntilSettled();
+
+			// Append the user message — the reactor will pick it up
+			this.store.append({
 				actor_id: "user",
 				type: "USER_MESSAGE",
 				payload: { content: text, images },
 			});
 
-			// 2. Get active session projection
-			const projection = this.sessionManager.getActiveSession();
-
-			// 3. Create and run agent loop
-			this.agentLoop = new AgentLoop(this.store, {
-				projection,
-				systemPrompt: this.config.systemPrompt,
-				model: this.config.model,
-				tools: this.config.tools,
-				contextBudget: this.config.contextBudget ?? 128000,
-				llmClient: this.config.llmClient,
-				intentExecutor: this.intentExecutor,
-				toolRegistry: this.config.toolRegistry,
-			});
-
-			await this.agentLoop.run(userEvent.event_id);
+			await settledPromise;
 		} finally {
-			this._isRunning = false;
-			this.agentLoop = null;
+			this._turnSubscription?.();
+			this._turnSubscription = undefined;
+			this.reactor?.stop();
+			this.reactor = null;
+			this._isProcessing = false;
 		}
 	}
 
@@ -180,7 +202,7 @@ export class EventSourcedRuntime {
 	 * Check if runtime is currently processing.
 	 */
 	get isRunning(): boolean {
-		return this._isRunning;
+		return this._isProcessing;
 	}
 
 	/**
@@ -192,7 +214,39 @@ export class EventSourcedRuntime {
 			type: "USER_INTERRUPT",
 			payload: {},
 		});
-		this.agentLoop?.interrupt();
+		this.reactor?.interrupt();
+	}
+
+	/**
+	 * Wait until the reactor has settled — i.e. an AGENT_TURN_COMPLETED fires AND
+	 * no further USER_MESSAGE has been appended in the same tick (e.g. by follow-up draining).
+	 */
+	private _waitUntilSettled(): Promise<void> {
+		return new Promise<void>((resolve) => {
+			let pendingCheck = false;
+			const unsub = this.store.subscribe(
+				() => {
+					if (pendingCheck) return;
+					pendingCheck = true;
+					queueMicrotask(() => {
+						pendingCheck = false;
+						const followUpsRemaining = this.reactor?.pendingFollowUpCount ?? 0;
+						if (followUpsRemaining > 0) return;
+						const lastMsg = this.store.query({ types: ["USER_MESSAGE"], reverse: true, limit: 1 })[0];
+						const lastCompleted = this.store.query({
+							types: ["AGENT_TURN_COMPLETED"],
+							reverse: true,
+							limit: 1,
+						})[0];
+						if (lastMsg && lastCompleted && lastMsg.sequence > lastCompleted.sequence) return;
+						unsub();
+						resolve();
+					});
+				},
+				{ types: ["AGENT_TURN_COMPLETED"] },
+			);
+			this._turnSubscription = unsub;
+		});
 	}
 
 	/**
@@ -222,6 +276,14 @@ export class EventSourcedRuntime {
 	 */
 	subscribe(handler: (event: EventBase) => void, options?: SubscribeOptions): () => void {
 		return this.store.subscribe(handler, options);
+	}
+
+	/**
+	 * Query the activity timeline (for UI rendering).
+	 */
+	getTimeline(options?: TimelineQueryOptions) {
+		const projection = new TimelineProjection(this.store);
+		return projection.query(options);
 	}
 
 	/**
