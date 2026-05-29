@@ -1,4 +1,4 @@
-import type { AgentTool, ThinkingLevel } from "@mariozechner/pi-agent-core";
+import type { AgentTool, ThinkingLevel } from "../../src/core/agent/index.js";
 import { fauxAssistantMessage, fauxToolCall, type Model } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import { afterEach, describe, expect, it } from "vitest";

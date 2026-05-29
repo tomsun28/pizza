@@ -1,4 +1,4 @@
-import { Agent } from "@mariozechner/pi-agent-core";
+import { Agent } from "../src/core/agent/index.js";
 import { type AssistantMessage, getModel, type Usage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import { AgentSession } from "../src/core/agent-session.js";

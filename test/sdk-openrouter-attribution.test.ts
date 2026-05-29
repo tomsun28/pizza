@@ -141,7 +141,7 @@ describe("createAgentSession OpenRouter attribution headers", () => {
 		const headers = await captureHeaders(createModel("openrouter", "https://openrouter.ai/api/v1"));
 
 		expect(headers?.["HTTP-Referer"]).toBe("https://pi.dev");
-		expect(headers?.["X-OpenRouter-Title"]).toBe("pi");
+		expect(headers?.["X-OpenRouter-Title"]).toBe("pizza");
 		expect(headers?.["X-OpenRouter-Categories"]).toBe("cli-agent");
 	});
 
@@ -159,7 +159,7 @@ describe("createAgentSession OpenRouter attribution headers", () => {
 		const headers = await captureHeaders(createModel("custom-openrouter", "https://openrouter.ai/api/v1"));
 
 		expect(headers?.["HTTP-Referer"]).toBe("https://pi.dev");
-		expect(headers?.["X-OpenRouter-Title"]).toBe("pi");
+		expect(headers?.["X-OpenRouter-Title"]).toBe("pizza");
 		expect(headers?.["X-OpenRouter-Categories"]).toBe("cli-agent");
 	});
 

@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "../src/core/agent/index.js";
 import type { AssistantMessage, Usage } from "@mariozechner/pi-ai";
 import { getModel } from "@mariozechner/pi-ai";
 import { readFileSync } from "fs";
