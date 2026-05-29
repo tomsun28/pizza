@@ -8,7 +8,6 @@ export function wrapToolDefinition<TDetails = unknown>(
 ): AgentTool<any, TDetails> {
 	return {
 		name: definition.name,
-		label: definition.label,
 		description: definition.description,
 		parameters: definition.parameters,
 		prepareArguments: definition.prepareArguments,
@@ -35,7 +34,7 @@ export function wrapToolDefinitions(
 export function createToolDefinitionFromAgentTool(tool: AgentTool<any>): ToolDefinition<any, unknown> {
 	return {
 		name: tool.name,
-		label: tool.label ?? tool.name,
+		label: (tool as any).label, // label is inherited from Tool interface
 		description: tool.description,
 		parameters: tool.parameters as any,
 		prepareArguments: tool.prepareArguments,

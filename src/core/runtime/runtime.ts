@@ -14,6 +14,7 @@ import type { LLMClient, ModelConfig, ToolDefinition } from "./llm-types.js";
 import { SqliteEventStore } from "../event-store/sqlite-store.js";
 import { deriveWorkspaceId, getEventDatabasePath, getSessionIndexPath } from "../event-store/workspace.js";
 import { SessionManager } from "../projection/session-manager.js";
+import { SessionProjection } from "../projection/session-projection.js";
 import { TimelineProjection, type TimelineQueryOptions } from "../projection/timeline-projection.js";
 import { IntentExecutor } from "../intent/executor.js";
 import { IntentClassifier } from "../intent/classifier.js";
@@ -79,7 +80,7 @@ export interface EventSourcedRuntimeConfig {
  */
 export class EventSourcedRuntime {
 	readonly store: EventStore;
-	readonly sessionManager: SessionManager;
+	readonly sessionManager: SessionManager | undefined;
 	readonly intentExecutor: IntentExecutor;
 	readonly runtimeAdapter: RuntimeAdapter;
 	readonly classifier: IntentClassifier;
@@ -108,11 +109,11 @@ export class EventSourcedRuntime {
 			toolRegistry: config.toolRegistry,
 		});
 
-		// 2. Create or use provided SessionManager
-		this.sessionManager = config.sessionManager ?? new SessionManager(
+		// 2. Create or use provided SessionManager (optional for migration)
+		this.sessionManager = config.sessionManager ?? (config.sessionManager !== undefined ? new SessionManager(
 			this.store,
 			config.sessionIndexPath ?? getSessionIndexPath(this.store.workspace_id, config.agentDir),
-		);
+		) : undefined);
 
 		// 3. Create IntentClassifier
 		this.classifier = new IntentClassifier({
@@ -157,7 +158,17 @@ export class EventSourcedRuntime {
 
 		try {
 			// Lazy-create the reactor and start it. Reactor lives only as long as the prompt cycle.
-			const projection = this.sessionManager.getActiveSession();
+			const projection = this.sessionManager?.getActiveSession() ?? (() => {
+				// Fallback: create a minimal SessionProjection if no SessionManager
+				const desc: SessionDescriptor = {
+					session_id: "default",
+					workspace_id: this.store.workspace_id,
+					event_range: { start_event_id: "ORIGIN", end_event_id: "HEAD" },
+					created_by: "user_explicit",
+					created_at: Date.now(),
+				};
+				return new SessionProjection(this.store, desc);
+			})();
 
 			this.reactor = new Reactor({
 				store: this.store,
@@ -290,29 +301,29 @@ export class EventSourcedRuntime {
 	 * Fork session at a specific event.
 	 */
 	fork(eventId: string): SessionDescriptor {
-		return this.sessionManager.forkAt(eventId);
+		return this.sessionManager?.forkAt(eventId) as any;
 	}
 
 	/**
 	 * Switch to a different session.
 	 */
 	switchSession(sessionId: string): void {
-		this.sessionManager.switchTo(sessionId);
+		this.sessionManager?.switchTo(sessionId);
 	}
 
 	/**
 	 * Create a new session.
 	 */
 	createSession(name?: string): SessionDescriptor {
-		return this.sessionManager.createSession("user_explicit", name);
+		return this.sessionManager?.createSession("user_explicit", name) as any;
 	}
 
 	/**
 	 * Get current session descriptor.
 	 */
 	getCurrentSession(): SessionDescriptor | undefined {
-		const sessionId = this.sessionManager.getActiveSessionId();
-		return sessionId ? this.sessionManager.getSession(sessionId) : undefined;
+		const sessionId = this.sessionManager?.getActiveSessionId();
+		return sessionId ? this.sessionManager?.getSession(sessionId) : undefined;
 	}
 
 	async createCheckpoint(label?: string): Promise<CheckpointRef> {
@@ -362,7 +373,7 @@ export class EventSourcedRuntime {
 	 * Dispose the runtime.
 	 */
 	dispose(): void {
-		this.sessionManager.dispose();
+		this.sessionManager?.dispose();
 		this.intentExecutor.dispose();
 		if (this.ownsStore) {
 			(this.store as { close?: () => void }).close?.();

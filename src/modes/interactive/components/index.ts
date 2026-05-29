@@ -25,6 +25,7 @@ export { ShowImagesSelectorComponent } from "./show-images-selector.js";
 export { SkillInvocationMessageComponent } from "./skill-invocation-message.js";
 export { ThemeSelectorComponent } from "./theme-selector.js";
 export { ThinkingSelectorComponent } from "./thinking-selector.js";
+export { TimelineViewComponent, type TimelineViewOptions } from "./timeline-view.js";
 export { ToolExecutionComponent, type ToolExecutionOptions } from "./tool-execution.js";
 export { TreeSelectorComponent } from "./tree-selector.js";
 export { UserMessageComponent } from "./user-message.js";

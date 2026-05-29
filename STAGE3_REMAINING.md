@@ -36,6 +36,11 @@
 - [x] **无头集成测试** — `test/headless-integration.test.ts` 验证完整 EventStore→Projection→Reactor→Tool 管道 (7 tests)
 - [x] **工具适配器测试** — `test/tool-adapter.test.ts` 验证 AgentToolAdapter + createToolRegistry (9 tests)
 - [x] **总计测试** — 115 核心测试全部通过，编译零错误
+- [x] **Runtime Adapter** — `src/core/runtime/runtime-adapter.ts` 提供 EventSourcedRuntimeHost 桥接新运行时到遗留接口
+- [x] **SessionManager 可选** — EventSourcedRuntime 中 SessionManager 改为可选，支持渐进式迁移
+- [x] **CLI 集成** — `src/main.ts` 将 EventSourcedRuntime 作为 sidecar 添加到遗留运行时，支持渐进式迁移
+- [x] **TUI Timeline View** — `src/modes/interactive/components/timeline-view.ts` 创建时间线视图组件，支持渲染事件时间线
+- [x] **移除 pi-agent-core 类型依赖** — `src/core/agent-session.ts` 将类型导入改为 pizza 自有的 `agent/types.ts`，仅保留 Agent 类导入
 
 ## 剩余编译错误（14 个文件）（已全部解决）
 

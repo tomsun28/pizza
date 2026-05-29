@@ -8,6 +8,7 @@ export * from "./reactor.js";
 export * from "./policies.js";
 export * from "./llm-types.js";
 export * from "./runtime.js";
+export * from "./runtime-adapter.js";
 export * from "./types.js";
 export * from "./local-runtime.js";
 export * from "./checkpoint.js";

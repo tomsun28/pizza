@@ -28,6 +28,7 @@ import type { ExtensionFactory } from "./core/extensions/types.js";
 import { KeybindingsManager } from "./core/keybindings.js";
 import type { ModelRegistry } from "./core/model-registry.js";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.js";
+import { createEventSourcedRuntimeHost } from "./core/runtime/runtime-adapter.js";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.js";
 import type { CreateAgentSessionOptions } from "./core/sdk.js";
 import {
@@ -611,6 +612,17 @@ export async function main(args: string[], options?: MainOptions) {
 	});
 	const { services, session, modelFallbackMessage } = runtime;
 	const { settingsManager, modelRegistry, resourceLoader } = services;
+
+	// Add event-sourced runtime as a sidecar for new features (timeline, projections, checkpoints)
+	// This is a gradual migration approach - the legacy runtime remains primary
+	;(runtime as any).eventSourcedRuntime = await createEventSourcedRuntimeHost({
+		legacyRuntime: runtime,
+		llmClient: session.agent.state.model ? undefined as any : undefined, // TODO: extract from session
+		systemPrompt: session.agent.state.systemPrompt,
+		model: { provider: session.agent.state.model?.provider ?? "unknown", model_id: session.agent.state.model?.id ?? "unknown" },
+		tools: session.agent.state.tools,
+		approvalHandler: undefined,
+	});
 
 	if (parsed.help) {
 		const extensionFlags = resourceLoader

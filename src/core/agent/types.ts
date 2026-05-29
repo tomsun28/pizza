@@ -138,8 +138,6 @@ export type AgentToolUpdateCallback<T = unknown> = (partial: AgentToolResult<T>)
 /** Pizza's tool definition. */
 export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = unknown>
 	extends Tool<TParameters> {
-	/** Human-readable label for UI display. */
-	label?: string;
 	/** Controls whether a tool runs sequentially or in parallel with other tool calls. */
 	executionMode?: ToolExecutionMode;
 	/** Optional shim for raw tool-call arguments before schema validation. */
