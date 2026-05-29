@@ -16,17 +16,8 @@ import type { ImageContent, Message, TextContent } from "@mariozechner/pi-ai";
 
 export type { BashExecutionMessage, BranchSummaryMessage, CompactionSummaryMessage, CustomMessage };
 
-// Extend pi-agent-core's CustomAgentMessages via declaration merging.
-// This is required while agent-session.ts still uses pi-agent-core's Agent class.
-// Will be removed in Stage 4-5 when Agent is fully replaced by EventSourcedRuntime.
-declare module "@mariozechner/pi-agent-core" {
-	interface CustomAgentMessages {
-		bashExecution: BashExecutionMessage;
-		custom: CustomMessage;
-		branchSummary: BranchSummaryMessage;
-		compactionSummary: CompactionSummaryMessage;
-	}
-}
+// Custom message types are now defined directly in src/core/agent/types.ts.
+// No declaration merging needed since pizza owns the Agent class.
 
 export const COMPACTION_SUMMARY_PREFIX = `The conversation history before this point was compacted into the following summary:
 

@@ -15,7 +15,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import type { Agent } from "@mariozechner/pi-agent-core";
+import type { Agent } from "./agent/index.js";
 import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "@mariozechner/pi-ai";
 import type {
 	AgentEvent,
@@ -804,7 +804,7 @@ export class AgentSession {
 				validToolNames.push(name);
 			}
 		}
-		this.agent.state.tools = tools as any; // Cast to pi-agent-core's AgentTool type
+		this.agent.state.tools = tools;
 
 		// Rebuild base system prompt with new tool set
 		this._baseSystemPrompt = this._rebuildSystemPrompt(validToolNames);

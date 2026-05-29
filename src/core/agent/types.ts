@@ -12,9 +12,12 @@
 import type {
 	AssistantMessage,
 	AssistantMessageEvent,
+	Context,
 	ImageContent,
 	Message,
 	Model,
+	SimpleStreamOptions,
+	streamSimple,
 	TextContent,
 	ThinkingLevel as PiThinkingLevel,
 	Tool,
@@ -220,7 +223,7 @@ export function toLlmMessages(messages: AgentMessage[]): Message[] {
 // AgentEvent — the event union emitted by the agent runtime during execution
 // ============================================================================
 
-/** Events emitted during agent execution (mirrors pi-agent-core's AgentEvent). */
+/** Events emitted during agent execution. */
 export type AgentEvent =
 	| { type: "agent_start" }
 	| { type: "agent_end"; messages: AgentMessage[] }
@@ -232,3 +235,82 @@ export type AgentEvent =
 	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: any }
 	| { type: "tool_execution_update"; toolCallId: string; toolName: string; args: any; partialResult: any }
 	| { type: "tool_execution_end"; toolCallId: string; toolName: string; result: any; isError: boolean };
+
+// ============================================================================
+// Agent loop / runtime support types — used by `agent-loop.ts` & `agent.ts`
+// ============================================================================
+
+/**
+ * Stream function used by the agent loop.
+ *
+ * Mirrors pi-ai's `streamSimple` shape so that pi-ai can be plugged in directly.
+ */
+export type StreamFn = (
+	...args: Parameters<typeof streamSimple>
+) => ReturnType<typeof streamSimple> | Promise<ReturnType<typeof streamSimple>>;
+
+/** A single tool-call content block emitted by an assistant message. */
+export type AgentToolCall = Extract<
+	AssistantMessage["content"][number],
+	{ type: "toolCall" }
+>;
+
+/** Result returned from `beforeToolCall`. */
+export interface BeforeToolCallResult {
+	block?: boolean;
+	reason?: string;
+}
+
+/** Partial override returned from `afterToolCall`. */
+export interface AfterToolCallResult {
+	content?: (TextContent | ImageContent)[];
+	details?: unknown;
+	isError?: boolean;
+}
+
+/** Context passed to `beforeToolCall`. */
+export interface BeforeToolCallContext {
+	assistantMessage: AssistantMessage;
+	toolCall: AgentToolCall;
+	args: unknown;
+	context: AgentContext;
+}
+
+/** Context passed to `afterToolCall`. */
+export interface AfterToolCallContext {
+	assistantMessage: AssistantMessage;
+	toolCall: AgentToolCall;
+	args: unknown;
+	result: AgentToolResult<any>;
+	isError: boolean;
+	context: AgentContext;
+}
+
+/** Context snapshot passed into the low-level agent loop. */
+export interface AgentContext {
+	systemPrompt: string;
+	messages: AgentMessage[];
+	tools?: AgentTool<any>[];
+}
+
+/** Configuration for one agent loop run. */
+export interface AgentLoopConfig extends SimpleStreamOptions {
+	model: Model<any>;
+	convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
+	transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
+	getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
+	getSteeringMessages?: () => Promise<AgentMessage[]>;
+	getFollowUpMessages?: () => Promise<AgentMessage[]>;
+	toolExecution?: ToolExecutionMode;
+	beforeToolCall?: (
+		context: BeforeToolCallContext,
+		signal?: AbortSignal,
+	) => Promise<BeforeToolCallResult | undefined>;
+	afterToolCall?: (
+		context: AfterToolCallContext,
+		signal?: AbortSignal,
+	) => Promise<AfterToolCallResult | undefined>;
+}
+
+// Re-export Context for downstream typing convenience
+export type { Context };
