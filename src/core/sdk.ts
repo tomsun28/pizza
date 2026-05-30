@@ -69,6 +69,12 @@ export interface CreateAgentSessionOptions {
 	settingsManager?: SettingsManager;
 	/** Session start event metadata for extension runtime startup. */
 	sessionStartEvent?: SessionStartEvent;
+	/**
+	 * Experimental: when true, the underlying Agent drives an EventSourcedRuntime
+	 * (reactor + EventStore) instead of the legacy in-process loop. Same external
+	 * AgentEvent shape so AgentSession does not need to change. Default: false.
+	 */
+	useEventSourcedRuntime?: boolean;
 }
 
 /** Result from createAgentSession */
@@ -341,6 +347,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		transport: settingsManager.getTransport(),
 		thinkingBudgets: settingsManager.getThinkingBudgets(),
 		maxRetryDelayMs: settingsManager.getRetrySettings().maxDelayMs,
+		useEventSourcedRuntime: options.useEventSourcedRuntime ?? false,
 	});
 
 	// Restore messages if session has existing data

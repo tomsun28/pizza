@@ -101,7 +101,12 @@ export interface AgentMessageStartEvent extends EventBase {
 export interface AgentMessageChunkEvent extends EventBase {
 	type: "AGENT_MESSAGE_CHUNK";
 	payload: {
-		chunk: string | import("./types.js").ContentBlock;
+		/**
+		 * A single streaming chunk. Shape matches `LLMChunk` from `runtime/llm-types.ts`.
+		 * Kept as `unknown` here to avoid a cross-package type dependency; consumers
+		 * should narrow on `chunk.kind`.
+		 */
+		chunk: unknown;
 	};
 }
 

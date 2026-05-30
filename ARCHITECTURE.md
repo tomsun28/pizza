@@ -56,7 +56,13 @@ pizza 当前并存 **两套运行时**：
 - `projection/`：从事件流派生 session / timeline / goal 状态
 - `intent/`：工具调用的 classification + approval gating
 
-**当前角色**：作为 sidecar 跟旧运行时并行跑，记录所有事件供 timeline / projection / checkpoint 使用，但 **prompt / 流式响应 / extension hooks 仍走旧路径**。
+**当前角色**：支持 `Agent` 的 `useEventSourcedRuntime: true` 模式，桥接方式：
+- `buildLlmClientFromStreamFn()` 包装 pi-ai streamFn → reactor LLMClient 接口
+- `EventStoreToAgentEventTranslator` 把 EventStore 事件转译回 `AgentEvent` 流
+- `HookingRuntimeAdapter` 在 tool 执行前后插 beforeToolCall / afterToolCall hooks
+- 用户入口 `createAgentSession({ useEventSourcedRuntime: true })` 可启用
+
+**已知限制**：followUp/steer 排队、retry、streaming deltas、abort cleanup、concurrent guard 尚未实现。
 
 ---
 
@@ -65,19 +71,38 @@ pizza 当前并存 **两套运行时**：
 把旧 `Agent` loop 完全替换为 reactor 还需要：
 
 ### 2.1 reactor 基建补齐
-- [ ] LLM streaming chunk 事件：reactor 当前跳过 chunk，UI 看不到打字效果
+- [x] LLM streaming chunk 事件：reactor 通过 `AGENT_MESSAGE_CHUNK` 传递 chunk
 - [ ] 新增事件类型：BASH_EXECUTION / CUSTOM_MESSAGE / BRANCH_SUMMARY
 - [ ] `event-to-message.ts` 支持完整 `AgentMessage[]` 重建（目前只处理 3 种事件）
-- [ ] reactor 暴露 `beforeToolCall` / `afterToolCall` hook（extension 拦截依赖）
+- [x] reactor 暴露 `beforeToolCall` / `afterToolCall` hook（通过 `HookingRuntimeAdapter`）
 - [ ] compaction 在事件溯源下的语义：作废旧事件 + 注入 summary 事件，而不是覆盖 `state.messages`
 
-### 2.2 AgentSession 改造
+### 2.2 Agent reactor 模式已完成
+- [x] `useEventSourcedRuntime` 开关可选启用 reactor 模式
+- [x] 纯文本回复 happy path
+- [x] Tool call 执行 + continuation（多轮）
+- [x] `beforeToolCall` / `afterToolCall` hooks
+- [x] `stopReason` 自动修正（faux provider 兼容）
+- [x] 每次 prompt 重建 runtime（最新 tools 生效）
+- [x] EventStore 持久化跨 prompt
+- [x] AgentSession 层面通过 `createAgentSession({ useEventSourcedRuntime: true })` 启用
+- [x] e2e 测试验证 legacy ↔ reactor 行为一致
+
+### 2.3 翻转默认值的前置条件
+尝试翻转 `useEventSourcedRuntime` 默认为 `true` 后，19 个测试失败。缺失功能：
+- [ ] `followUp()` / `steer()` 在 streaming 中排队执行
+- [ ] `retry` on transient error
+- [ ] streaming delta events（`message_update` 事件需发射给 UI）
+- [ ] `abort()` during streaming + 清理
+- [ ] concurrent prompt guard（第二次 prompt() 时 throw）
+
+### 2.4 AgentSession 改造（可选）
 - [ ] 54 处 `this.agent.*` 调用改写
 - [ ] `_handleAgentEvent` 9 种 `AgentEvent` 映射到对应 `EventBase`
 - [ ] `state.messages` 读取改为 `projection.buildContext()`
 - [ ] `state.messages = ...` 写入改为事件追加
 
-### 2.3 消费方迁移
+### 2.5 消费方迁移
 - [ ] `interactive-mode.ts` (4916 行) 订阅 9 种 `AgentEvent` → 订阅 `EventStore`
 - [ ] `rpc-mode.ts` / `rpc-client.ts` 同上
 - [ ] `compaction/compaction.ts` (839 行) 重写为事件流操作

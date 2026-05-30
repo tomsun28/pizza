@@ -42,7 +42,7 @@ import type {
 	ToolRegistry,
 } from "../intent/types.js";
 import type { IntentClassifier } from "../intent/classifier.js";
-import type { LLMClient, LLMResponse, ToolDefinition } from "./llm-types.js";
+import type { LLMChunk, LLMClient, LLMResponse, ToolDefinition } from "./llm-types.js";
 import type { RuntimeAdapter } from "./types.js";
 import { extractToolCalls } from "../projection/event-to-message.js";
 import type { SessionProjection } from "../projection/session-projection.js";
@@ -397,15 +397,34 @@ export class Reactor {
 		const context = this._pendingContext ?? this.config.projection.buildContext({ max_tokens: this.config.contextBudget });
 		this._pendingContext = undefined;
 
+		// Emit AGENT_MESSAGE_START up front so chunks have a parent in the causal chain.
+		const msgStart = this._emit({
+			actor_id: "coder_agent",
+			type: "AGENT_MESSAGE_START",
+			payload: { model: { provider: this.config.model.provider, model_id: this.config.model.model_id } },
+			caused_by: event.event_id,
+		});
+
 		try {
 			const response = await this.config.llmClient.complete({
 				messages: context.messages,
 				systemPrompt: this.config.systemPrompt,
 				model: this.config.model,
 				tools: this.config.tools,
+				signal: this.abortController?.signal,
+				onChunk: (chunk: LLMChunk) => {
+					// Translate LLMChunk into an AGENT_MESSAGE_CHUNK event so projections / UI
+					// can render the streaming response in real time.
+					this._emit({
+						actor_id: "coder_agent",
+						type: "AGENT_MESSAGE_CHUNK",
+						payload: { chunk: chunk as any },
+						caused_by: msgStart.event_id,
+					});
+				},
 			});
 
-			this._handleLlmResponse(response, event.event_id);
+			this._handleLlmResponse(response, event.event_id, msgStart.event_id);
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			const isRetryable = this.retryPolicy.isRetryable({ message: msg });
@@ -419,14 +438,19 @@ export class Reactor {
 		}
 	}
 
-	private _handleLlmResponse(response: LLMResponse, causedBy: string): void {
-		// Emit message start
-		this._emit({
-			actor_id: "coder_agent",
-			type: "AGENT_MESSAGE_START",
-			payload: { model: { provider: response.provider, model_id: response.model } },
-			caused_by: causedBy,
-		});
+	private _handleLlmResponse(response: LLMResponse, causedBy: string, msgStartEventId?: string): void {
+		// AGENT_MESSAGE_START is now emitted by _onLlmCallRequested before the call so chunks
+		// can reference it. For backwards compat with callers that don't stream, emit it here
+		// if not already emitted.
+		if (!msgStartEventId) {
+			const started = this._emit({
+				actor_id: "coder_agent",
+				type: "AGENT_MESSAGE_START",
+				payload: { model: { provider: response.provider, model_id: response.model } },
+				caused_by: causedBy,
+			});
+			msgStartEventId = started.event_id;
+		}
 
 		// Emit message end (the chunking is optional; for now we skip to end for simplicity)
 		const toolCalls = extractToolCalls(response.content);

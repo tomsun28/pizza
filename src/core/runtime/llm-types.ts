@@ -21,6 +21,19 @@ export interface ToolDefinition {
 	input_schema: Record<string, unknown>;
 }
 
+/**
+ * Streaming chunk emitted by an LLM client during a call.
+ *
+ * Producers map provider-specific streaming events onto this minimal shape.
+ * Consumers (the reactor) translate each chunk into AGENT_MESSAGE_CHUNK events
+ * appended to the EventStore.
+ */
+export type LLMChunk =
+	| { kind: "text_delta"; contentIndex: number; delta: string }
+	| { kind: "thinking_delta"; contentIndex: number; delta: string }
+	| { kind: "toolcall_start"; contentIndex: number; tool_call_id: string; tool_name: string }
+	| { kind: "toolcall_delta"; contentIndex: number; delta: string };
+
 /** LLM client interface */
 export interface LLMClient {
 	complete(request: {
@@ -28,6 +41,16 @@ export interface LLMClient {
 		systemPrompt?: string;
 		model: ModelConfig;
 		tools?: ToolDefinition[];
+		/**
+		 * Optional streaming callback. Fires once per LLM chunk while the call
+		 * is in flight. Reactors use this to emit AGENT_MESSAGE_CHUNK events to
+		 * the EventStore for live UI rendering.
+		 *
+		 * Clients that cannot stream may simply not call this.
+		 */
+		onChunk?: (chunk: LLMChunk) => void;
+		/** Abort signal for in-flight requests. */
+		signal?: AbortSignal;
 	}): Promise<LLMResponse>;
 }
 

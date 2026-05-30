@@ -15,6 +15,14 @@ import type {
 	Transport,
 } from "@mariozechner/pi-ai";
 import { runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
+import {
+	EventStoreToAgentEventTranslator,
+	buildLlmClientFromStreamFn,
+	buildToolDefinitions,
+	buildToolRegistry,
+	createHookingRuntimeAdapter,
+	toModelConfig,
+} from "./event-sourced-adapter.js";
 import type {
 	AgentContext,
 	AgentEvent,
@@ -159,6 +167,17 @@ export interface AgentOptions {
 	transport?: Transport;
 	maxRetryDelayMs?: number;
 	toolExecution?: ToolExecutionMode;
+	/**
+	 * Experimental: when true, prompt() drives an EventSourcedRuntime (reactor)
+	 * instead of the legacy in-process loop. The legacy `AgentEvent` stream is
+	 * synthesized from EventStore events so subscribers see the same shape.
+	 *
+	 * Coverage: user prompt → assistant text → optional tool calls is wired.
+	 * Compaction, branching, follow-up/steering queue modes other than
+	 * "one-at-a-time", and several edge cases are NOT yet supported.
+	 * Defaults to false.
+	 */
+	useEventSourcedRuntime?: boolean;
 }
 
 // ============================================================================
@@ -236,7 +255,16 @@ export class Agent {
 		this.transport = options.transport ?? "sse";
 		this.maxRetryDelayMs = options.maxRetryDelayMs;
 		this.toolExecution = options.toolExecution ?? "parallel";
+
+		// Reactor mode fields (initialized lazily when first needed)
+		this._useEventSourcedRuntime = options.useEventSourcedRuntime ?? false;
 	}
+
+	// ─── Reactor mode ──────────────────────────────────────────────────────
+
+	private readonly _useEventSourcedRuntime: boolean;
+	private _eventTranslator?: EventStoreToAgentEventTranslator;
+	private _runtimeAbortController?: AbortController;
 
 	/**
 	 * Subscribe to agent lifecycle events.
@@ -349,6 +377,23 @@ export class Agent {
 			);
 		}
 		const messages = this.normalizePromptInput(input, images);
+		if (this._useEventSourcedRuntime) {
+			// Set activeRun BEFORE awaiting so the double-prompt guard works
+			const ac = new AbortController();
+			let resolveActive = () => {};
+			this.activeRun = { promise: new Promise((r) => { resolveActive = r; }), resolve: resolveActive, abortController: ac };
+			this._state.isStreaming = true;
+			try {
+				await this.runPromptViaReactor(messages);
+			} finally {
+				this._state.isStreaming = false;
+				(this._state as any).streamingMessage = undefined;
+				this._state.pendingToolCalls = new Set<string>();
+				this.activeRun?.resolve();
+				this.activeRun = undefined;
+			}
+			return;
+		}
 		await this.runPromptMessages(messages);
 	}
 
@@ -549,5 +594,152 @@ export class Agent {
 		for (const listener of this.listeners) {
 			await listener(event, signal);
 		}
+	}
+
+	// =========================================================================
+	// Reactor-mode execution path
+	// =========================================================================
+
+	/**
+	 * Run a prompt through the EventSourcedRuntime instead of the legacy loop.
+	 *
+	 * Translates EventStore events back into the legacy AgentEvent stream so
+	 * subscribers (AgentSession, etc.) see the same shape as before.
+	 */
+	private async runPromptViaReactor(messages: AgentMessage[]): Promise<void> {
+		const runtime = await this.ensureRuntime();
+		const translator = new EventStoreToAgentEventTranslator();
+		this._eventTranslator = translator;
+
+		// activeRun + isStreaming are set by prompt() before calling us.
+		const abortController = this.activeRun!.abortController;
+		this._runtimeAbortController = abortController;
+		this._state.errorMessage = undefined;
+
+		const pendingListenerCalls: Array<Promise<void>> = [];
+
+		const dispatchToListeners = async (event: AgentEvent) => {
+			const signal = abortController.signal;
+			for (const l of this.listeners) {
+				const maybe = l(event, signal);
+				if (maybe instanceof Promise) {
+					pendingListenerCalls.push(maybe);
+				}
+			}
+			// Maintain Agent-side state mirrors
+			switch (event.type) {
+				case "message_end":
+					this._state.messages.push(event.message);
+					break;
+				case "tool_execution_start": {
+					const pending = new Set(this._state.pendingToolCalls);
+					pending.add(event.toolCallId);
+					this._state.pendingToolCalls = pending;
+					break;
+				}
+				case "tool_execution_end": {
+					const pending = new Set(this._state.pendingToolCalls);
+					pending.delete(event.toolCallId);
+					this._state.pendingToolCalls = pending;
+					break;
+				}
+				case "turn_end":
+					if (event.message.role === "assistant" && (event.message as any).errorMessage) {
+						this._state.errorMessage = (event.message as any).errorMessage;
+					}
+					break;
+			}
+		};
+
+		// Subscribe to EventStore and translate events live
+		const unsub = runtime.store.subscribe((storeEvent) => {
+			const agentEvents = translator.translate(storeEvent);
+			for (const ae of agentEvents) {
+				void dispatchToListeners(ae);
+			}
+		});
+
+		try {
+			const userText = messages
+				.filter((m) => m.role === "user")
+				.map((m) => {
+					if (typeof (m as any).content === "string") return (m as any).content;
+					return ((m as any).content ?? [])
+						.filter((c: any) => c.type === "text")
+						.map((c: any) => c.text)
+						.join("");
+				})
+				.join("\n\n");
+
+			await runtime.prompt(userText);
+			await Promise.all(pendingListenerCalls);
+		} catch (err) {
+			this._state.errorMessage = err instanceof Error ? err.message : String(err);
+		} finally {
+			unsub();
+			this._runtimeAbortController = undefined;
+			this._eventTranslator = undefined;
+		}
+	}
+
+	/**
+	 * Lazily construct an EventSourcedRuntime from this Agent's configuration.
+	 * Uses an in-memory SQLite store for now (tied to a tmp DB file unless caller pre-wires).
+	 */
+	/** Cached in-memory store. Persists across prompts. */
+	private _eventStore?: import("../event-store/sqlite-store.js").SqliteEventStore;
+
+	private async ensureRuntime(): Promise<import("../runtime/runtime.js").EventSourcedRuntime> {
+		const { EventSourcedRuntime } = await import("../runtime/runtime.js");
+		const { SqliteEventStore } = await import("../event-store/sqlite-store.js");
+
+		if (!this._state.model) {
+			throw new Error("useEventSourcedRuntime: state.model must be set before prompt()");
+		}
+
+		// Lazily create the in-memory store once (persists across prompts).
+		if (!this._eventStore) {
+			this._eventStore = new SqliteEventStore("in-memory", ":memory:");
+		}
+
+		// Build LLM client + tool registry with latest state each prompt so changes
+		// to state.tools / streamFn / model take effect.
+		const llmClient = buildLlmClientFromStreamFn(this._state.model as any, this.streamFn, {
+			getApiKey: this.getApiKey,
+			thinkingBudgets: this.thinkingBudgets,
+			transport: this.transport,
+			onPayload: this.onPayload,
+			onResponse: this.onResponse,
+		});
+
+		const toolRegistry = buildToolRegistry(this._state.tools as AgentTool<any>[]);
+		const toolDefs = buildToolDefinitions(this._state.tools as AgentTool<any>[]);
+
+		// Build runtime adapter with optional beforeToolCall/afterToolCall hooks.
+		const { LocalRuntimeAdapter } = await import("../runtime/local-runtime.js");
+		const baseAdapter = new LocalRuntimeAdapter({
+			workspace_id: this._eventStore.workspace_id,
+			cwd: process.cwd(),
+			toolRegistry,
+		});
+		const runtimeAdapter =
+			this.beforeToolCall || this.afterToolCall
+				? createHookingRuntimeAdapter(baseAdapter, {
+						beforeToolCall: this.beforeToolCall as any,
+						afterToolCall: this.afterToolCall as any,
+					}, () => this._state)
+				: baseAdapter;
+
+		return new EventSourcedRuntime({
+			cwd: process.cwd(),
+			store: this._eventStore,
+			toolRegistry,
+			runtimeAdapter,
+			llmClient,
+			systemPrompt: this._state.systemPrompt,
+			model: toModelConfig(this._state.model as any, this._state.thinkingLevel),
+			tools: toolDefs,
+			classifierConfig: { approve_unknown: false },
+		});
 	}
 }

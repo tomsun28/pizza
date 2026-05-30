@@ -63,6 +63,8 @@ export interface HarnessOptions {
 	resourceLoader?: ResourceLoader;
 	extensionFactories?: Array<ExtensionFactory | CreateTestExtensionsResultInput>;
 	withConfiguredAuth?: boolean;
+	/** Experimental: drive the underlying Agent through EventSourcedRuntime. */
+	useEventSourcedRuntime?: boolean;
 }
 
 export interface Harness {
@@ -135,6 +137,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 			tools: [],
 		},
 		convertToLlm,
+		useEventSourcedRuntime: options.useEventSourcedRuntime ?? false,
 		onPayload: async (payload) => {
 			const runner = extensionRunnerRef.current;
 			if (!runner?.hasHandlers("before_provider_request")) {
