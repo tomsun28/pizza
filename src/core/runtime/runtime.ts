@@ -90,7 +90,7 @@ export class EventSourcedRuntime {
 	private _isProcessing = false;
 	private _turnCompletionWaiters: Array<() => void> = [];
 	private _turnSubscription: (() => void) | undefined;
-
+	private _resolveSettled: (() => void) | undefined;
 	constructor(config: EventSourcedRuntimeConfig) {
 		this.config = config;
 		this.ownsStore = !config.store;
@@ -226,14 +226,55 @@ export class EventSourcedRuntime {
 			payload: {},
 		});
 		this.reactor?.interrupt();
+		// Resolve the settled promise — abort may be called before the LLM call starts
+		// and no AGENT_TURN_COMPLETED would ever fire.
+		if (this._resolveSettled) {
+			this._resolveSettled();
+		}
+	}
+
+	/**
+	 * Inject a steer message — interrupts the current turn and delivers the message
+	 * as a follow-up after the current turn settles.
+	 */
+	steer(text: string, images?: ImageContent[]): void {
+		this.store.append({
+			actor_id: "user",
+			type: "USER_INTERRUPT",
+			payload: { content: text, images, reason: "steer" },
+		});
+	}
+
+	/**
+	 * Tracks whether a follow-up was queued during a settled turn.
+	 * _nextStep() sets this to true when it processes a queued follow-up,
+	 * so _waitUntilSettled() knows to wait for the next turn.
+	 */
+	private _followUpQueuedInTurn = false;
+
+	/**
+	 * Queue a follow-up message — delivered after the current turn naturally completes.
+	 * If the runtime is not processing, queues it for the next prompt.
+	 */
+	followUp(text: string, images?: ImageContent[]): void {
+		this._followUpQueuedInTurn = true;
+		this.store.append({
+			actor_id: "user",
+			type: "USER_FOLLOWUP_QUEUED",
+			payload: { content: text, images },
+		});
 	}
 
 	/**
 	 * Wait until the reactor has settled — i.e. an AGENT_TURN_COMPLETED fires AND
 	 * no further USER_MESSAGE has been appended in the same tick (e.g. by follow-up draining).
+	 * Also waits for another turn if a follow-up was consumed in the current turn
+	 * (detected via _followUpQueuedInTurn flag, which _nextStep() sets when it processes
+	 * a queued follow-up vs. a newly-appended one).
 	 */
 	private _waitUntilSettled(): Promise<void> {
 		return new Promise<void>((resolve) => {
+			this._resolveSettled = resolve;
 			let pendingCheck = false;
 			const unsub = this.store.subscribe(
 				() => {
@@ -243,6 +284,12 @@ export class EventSourcedRuntime {
 						pendingCheck = false;
 						const followUpsRemaining = this.reactor?.pendingFollowUpCount ?? 0;
 						if (followUpsRemaining > 0) return;
+						// Detect whether a follow-up was consumed in the current turn by
+						// checking the flag _nextStep sets when processing a queued follow-up.
+						if (this._followUpQueuedInTurn) {
+							this._followUpQueuedInTurn = false;
+							return; // Wait for next turn
+						}
 						const lastMsg = this.store.query({ types: ["USER_MESSAGE"], reverse: true, limit: 1 })[0];
 						const lastCompleted = this.store.query({
 							types: ["AGENT_TURN_COMPLETED"],

@@ -23,6 +23,9 @@ const CONTEXT_RELEVANT_EVENT_TYPES: EventType[] = [
 	"TOOL_EXECUTION_END",
 	"COMPACTION_END",
 	"FILE_MUTATION_APPLIED",
+	"BASH_EXECUTION",
+	"CUSTOM_MESSAGE",
+	"BRANCH_SUMMARY",
 ];
 
 // ============================================================================

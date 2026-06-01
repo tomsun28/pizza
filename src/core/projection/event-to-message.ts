@@ -11,6 +11,9 @@ import type {
 	ToolExecutionEndEvent,
 	UserMessageEvent,
 	AgentMessageEndEvent,
+	BashExecutionEvent,
+	CustomMessageEvent,
+	BranchSummaryEvent,
 } from "../event-store/events.js";
 
 // ============================================================================
@@ -111,6 +114,57 @@ export function eventToMessage(event: EventBase): AgentMessage | null {
 			};
 		}
 
+
+
+		case "BASH_EXECUTION": {
+			const payload = event.payload as BashExecutionEvent["payload"];
+			return {
+				role: "bashExecution",
+				command: payload.command,
+				output: payload.output ?? "",
+				stdout: payload.stdout,
+				stderr: payload.stderr,
+				exitCode: payload.exit_code,
+				durationMs: payload.duration_ms,
+				cwd: payload.cwd,
+				cancelled: payload.cancelled ?? false,
+				truncated: payload.truncated ?? false,
+				fullOutputPath: payload.full_output_path,
+				excludeFromContext: payload.exclude_from_context,
+				timestamp: event.timestamp,
+			} as AgentMessage;
+		}
+
+		case "CUSTOM_MESSAGE": {
+			const payload = event.payload as CustomMessageEvent["payload"];
+			// Transform event data into CustomMessage shape
+			let content: string | (TextContent | ImageContent)[] = "";
+			let details: unknown = payload.data;
+			if (typeof payload.data === "string") {
+				content = payload.data;
+				details = undefined;
+			} else if (Array.isArray(payload.data)) {
+				content = payload.data as (TextContent | ImageContent)[];
+			}
+			return {
+				role: "custom",
+				customType: `${payload.extension_id}:${payload.kind}`,
+				content,
+				display: payload.display,
+				details,
+				timestamp: event.timestamp,
+			} as AgentMessage;
+		}
+
+		case "BRANCH_SUMMARY": {
+			const payload = event.payload as BranchSummaryEvent["payload"];
+			return {
+				role: "branchSummary",
+				summary: payload.summary,
+				fromId: payload.from_id,
+				timestamp: event.timestamp,
+			} as AgentMessage;
+		}
 		// Skip other event types - they don't produce messages
 		default:
 			return null;

@@ -10,7 +10,7 @@
  * "event-sourced" without touching the 3000-line AgentSession class.
  */
 
-import type { AssistantMessage, ImageContent, Model } from "@mariozechner/pi-ai";
+import type { AssistantMessage, AssistantMessageEvent, ImageContent, Model, TextContent, ToolCall } from "@mariozechner/pi-ai";
 import { eventToMessage } from "../projection/event-to-message.js";
 import type { EventBase } from "../event-store/types.js";
 import type { EventStore } from "../event-store/store.js";
@@ -85,34 +85,35 @@ export function buildLlmClientFromStreamFn(
 			// Drive the stream and translate events into LLMChunks
 			for await (const event of stream) {
 				switch (event.type) {
+					case "start":
+						onChunk?.({ kind: "text_start", contentIndex: 0 } as LLMChunk);
+						break;
+					case "text_start":
+						onChunk?.({ kind: "text_start", contentIndex: event.contentIndex } as LLMChunk);
+						break;
 					case "text_delta":
-						onChunk?.({
-							kind: "text_delta",
-							contentIndex: event.contentIndex,
-							delta: event.delta,
-						} as LLMChunk);
+						onChunk?.({ kind: "text_delta", contentIndex: event.contentIndex, delta: event.delta } as LLMChunk);
+						break;
+					case "text_end":
+						onChunk?.({ kind: "text_end", contentIndex: event.contentIndex, content: event.content } as LLMChunk);
+						break;
+					case "thinking_start":
+						onChunk?.({ kind: "thinking_start", contentIndex: event.contentIndex } as LLMChunk);
 						break;
 					case "thinking_delta":
-						onChunk?.({
-							kind: "thinking_delta",
-							contentIndex: event.contentIndex,
-							delta: event.delta,
-						} as LLMChunk);
+						onChunk?.({ kind: "thinking_delta", contentIndex: event.contentIndex, delta: event.delta } as LLMChunk);
+						break;
+					case "thinking_end":
+						onChunk?.({ kind: "thinking_end", contentIndex: event.contentIndex, content: event.content } as LLMChunk);
 						break;
 					case "toolcall_start":
-						onChunk?.({
-							kind: "toolcall_start",
-							contentIndex: event.contentIndex,
-							tool_call_id: (event as any).id ?? "",
-							tool_name: (event as any).toolName ?? "",
-						} as LLMChunk);
+						onChunk?.({ kind: "toolcall_start", contentIndex: event.contentIndex, tool_call_id: (event as any).id ?? "", tool_name: (event as any).toolName ?? "" } as LLMChunk);
 						break;
 					case "toolcall_delta":
-						onChunk?.({
-							kind: "toolcall_delta",
-							contentIndex: event.contentIndex,
-							delta: event.delta,
-						} as LLMChunk);
+						onChunk?.({ kind: "toolcall_delta", contentIndex: event.contentIndex, delta: event.delta } as LLMChunk);
+						break;
+					case "toolcall_end":
+						onChunk?.({ kind: "toolcall_end", contentIndex: event.contentIndex, tool_call_id: (event as any).id ?? "", tool_name: (event as any).toolName ?? "", arguments: (event as any).toolCall?.arguments ?? {} } as LLMChunk);
 						break;
 					case "done":
 					case "error":
@@ -120,7 +121,6 @@ export function buildLlmClientFromStreamFn(
 						break;
 				}
 			}
-
 			if (!finalMessage) {
 				finalMessage = await (stream as any).result();
 			}
@@ -182,6 +182,19 @@ export class EventStoreToAgentEventTranslator {
 	private _toolResultsPending: AgentMessage[] = [];
 	private _lastMessageEvent: AgentMessage | undefined;
 
+	// ─── Streaming state ──────────────────────────────────────────────────────
+
+	/** Whether we have emitted message_start for the current assistant message */
+	private _hasEmittedMessageStart = false;
+	/** Partial text accumulated so far */
+	private _partialText = "";
+	/** Partial thinking text accumulated so far */
+	private _partialThinking = "";
+	/** Partial tool call fragments accumulated. Key is contentIndex. */
+	private _partialToolCalls: Map<number, { id: string; name: string; args: string }> = new Map();
+	/** Last content index we saw (for ordering) */
+	private _lastContentIndex = 0;
+
 	/**
 	 * Translate one EventStore event → 0+ AgentEvents.
 	 * Returns the events in order they should be emitted.
@@ -190,6 +203,142 @@ export class EventStoreToAgentEventTranslator {
 		const out: AgentEvent[] = [];
 
 		switch (event.type) {
+			// ─── Streaming ────────────────────────────────────────────────────
+
+			case "AGENT_MESSAGE_START": {
+				this._hasEmittedMessageStart = false;
+				this._partialText = "";
+				this._partialThinking = "";
+				this._partialToolCalls = new Map();
+				this._lastContentIndex = 0;
+				break;
+			}
+
+			case "AGENT_MESSAGE_CHUNK": {
+				const chunk = (event.payload as { chunk: any }).chunk as {
+					kind: string;
+					contentIndex?: number;
+					delta?: string;
+					tool_call_id?: string;
+					tool_name?: string;
+					content?: string;
+					arguments?: unknown;
+				};
+
+				const idx = chunk.contentIndex ?? this._lastContentIndex;
+				if (chunk.contentIndex !== undefined) this._lastContentIndex = chunk.contentIndex;
+
+				const ensureStart = () => {
+					if (!this._hasEmittedMessageStart) {
+						this._hasEmittedMessageStart = true;
+						const msg = this._buildStreamingMessage();
+						out.push({ type: "message_start", message: msg });
+					}
+				};
+
+				switch (chunk.kind) {
+					case "text_start": {
+						ensureStart();
+						const msg = this._buildStreamingMessage();
+						out.push({
+							type: "message_update",
+							message: msg,
+							assistantMessageEvent: { type: "text_start", contentIndex: idx, partial: msg } as AssistantMessageEvent,
+						});
+						break;
+					}
+					case "text_delta": {
+						this._partialText += chunk.delta ?? "";
+						ensureStart();
+						const msg1 = this._buildStreamingMessage();
+						out.push({
+							type: "message_update",
+							message: msg1,
+							assistantMessageEvent: { type: "text_delta", contentIndex: idx, delta: chunk.delta ?? "", partial: msg1 } as AssistantMessageEvent,
+						});
+						break;
+					}
+					case "text_end": {
+						ensureStart();
+						const msg = this._buildStreamingMessage();
+						out.push({
+							type: "message_update",
+							message: msg,
+							assistantMessageEvent: { type: "text_end", contentIndex: idx, content: chunk.content ?? this._partialText, partial: msg } as AssistantMessageEvent,
+						});
+						break;
+					}
+					case "thinking_start": {
+						ensureStart();
+						const msg = this._buildStreamingMessage();
+						out.push({
+							type: "message_update",
+							message: msg,
+							assistantMessageEvent: { type: "thinking_start", contentIndex: idx, partial: msg } as AssistantMessageEvent,
+						});
+						break;
+					}
+					case "thinking_delta": {
+						this._partialThinking += chunk.delta ?? "";
+						ensureStart();
+						const msg2 = this._buildStreamingMessage();
+						out.push({
+							type: "message_update",
+							message: msg2,
+							assistantMessageEvent: { type: "thinking_delta", contentIndex: idx, delta: chunk.delta ?? "", partial: msg2 } as AssistantMessageEvent,
+						});
+						break;
+					}
+					case "thinking_end": {
+						ensureStart();
+						const msg = this._buildStreamingMessage();
+						out.push({
+							type: "message_update",
+							message: msg,
+							assistantMessageEvent: { type: "thinking_end", contentIndex: idx, content: chunk.content ?? this._partialThinking, partial: msg } as AssistantMessageEvent,
+						});
+						break;
+					}
+					case "toolcall_start": {
+						this._partialToolCalls.set(idx, { id: chunk.tool_call_id ?? "", name: chunk.tool_name ?? "", args: "" });
+						ensureStart();
+						const msg3 = this._buildStreamingMessage();
+						out.push({
+							type: "message_update",
+							message: msg3,
+							assistantMessageEvent: { type: "toolcall_start", contentIndex: idx, partial: msg3 } as AssistantMessageEvent,
+						});
+						break;
+					}
+					case "toolcall_delta": {
+						const tc = this._partialToolCalls.get(idx);
+						if (tc) tc.args += chunk.delta ?? "";
+						ensureStart();
+						const msg4 = this._buildStreamingMessage();
+						out.push({
+							type: "message_update",
+							message: msg4,
+							assistantMessageEvent: { type: "toolcall_delta", contentIndex: idx, delta: chunk.delta ?? "", partial: msg4 } as AssistantMessageEvent,
+						});
+						break;
+					}
+					case "toolcall_end": {
+						ensureStart();
+						const tc = this._partialToolCalls.get(idx);
+						const msg5 = this._buildStreamingMessage();
+						out.push({
+							type: "message_update",
+							message: msg5,
+							assistantMessageEvent: { type: "toolcall_end", contentIndex: idx, toolCall: { type: "toolCall", id: tc?.id ?? chunk.tool_call_id ?? "", name: tc?.name ?? chunk.tool_name ?? "", arguments: chunk.arguments ?? {} } as ToolCall, partial: msg5 } as AssistantMessageEvent,
+						});
+						break;
+					}
+				}
+				break;
+			}
+
+			// ─── Turn lifecycle ───────────────────────────────────────────────
+
 			case "USER_MESSAGE": {
 				if (!this._hasEmittedAgentStart) {
 					out.push({ type: "agent_start" });
@@ -205,6 +354,11 @@ export class EventStoreToAgentEventTranslator {
 			}
 
 			case "AGENT_MESSAGE_END": {
+				this._hasEmittedMessageStart = false;
+				this._partialText = "";
+				this._partialThinking = "";
+				this._partialToolCalls = new Map();
+				this._lastContentIndex = 0;
 				const msg = eventToMessage(event);
 				if (msg) {
 					this._lastMessageEvent = msg;
@@ -217,11 +371,7 @@ export class EventStoreToAgentEventTranslator {
 			case "AGENT_TURN_END": {
 				const message = this._lastMessageEvent;
 				if (message) {
-					out.push({
-						type: "turn_end",
-						message,
-						toolResults: this._toolResultsPending as any,
-					});
+					out.push({ type: "turn_end", message, toolResults: this._toolResultsPending as any });
 					this._toolResultsPending = [];
 				}
 				break;
@@ -229,7 +379,6 @@ export class EventStoreToAgentEventTranslator {
 
 			case "AGENT_TURN_REQUESTED": {
 				const payload = event.payload as { reason?: string };
-				// New turn (not the first user message → that already emitted turn_start)
 				if (payload.reason === "tool_results" || payload.reason === "follow_up") {
 					out.push({ type: "turn_start" });
 				}
@@ -238,31 +387,13 @@ export class EventStoreToAgentEventTranslator {
 
 			case "TOOL_EXECUTION_START": {
 				const p = event.payload as { tool_call_id: string; tool_name: string; arguments: any };
-				out.push({
-					type: "tool_execution_start",
-					toolCallId: p.tool_call_id,
-					toolName: p.tool_name,
-					args: p.arguments,
-				});
+				out.push({ type: "tool_execution_start", toolCallId: p.tool_call_id, toolName: p.tool_name, args: p.arguments });
 				break;
 			}
 
 			case "TOOL_EXECUTION_END": {
-				const p = event.payload as {
-					tool_call_id: string;
-					tool_name: string;
-					result: any;
-					is_error: boolean;
-				};
-				out.push({
-					type: "tool_execution_end",
-					toolCallId: p.tool_call_id,
-					toolName: p.tool_name,
-					result: { content: p.result, details: {} },
-					isError: p.is_error,
-				});
-
-				// Also emit the tool-result message
+				const p = event.payload as { tool_call_id: string; tool_name: string; result: any; is_error: boolean };
+				out.push({ type: "tool_execution_end", toolCallId: p.tool_call_id, toolName: p.tool_name, result: { content: p.result, details: {} }, isError: p.is_error });
 				const msg = eventToMessage(event);
 				if (msg) {
 					this._toolResultsPending.push(msg);
@@ -278,12 +409,36 @@ export class EventStoreToAgentEventTranslator {
 				break;
 			}
 
-			// Other event types (AGENT_MESSAGE_START, AGENT_MESSAGE_CHUNK, etc.)
-			// are intentionally ignored — they don't map to legacy AgentEvents.
-			// AGENT_MESSAGE_CHUNK could later become message_update if needed.
+			// Other event types are intentionally ignored for the legacy AgentEvent stream
 		}
 
 		return out;
+	}
+
+	/**
+	 * Build a partial streaming assistant message from current state.
+	 * Used for both message_start and message_update events.
+	 */
+	private _buildStreamingMessage(): AssistantMessage {
+		const content: any[] = [];
+
+		if (this._partialThinking) {
+			content.push({ type: "thinking", thinking: this._partialThinking });
+		}
+
+		if (this._partialText) {
+			content.push({ type: "text", text: this._partialText } as TextContent);
+		}
+
+		const sortedTcKeys = Array.from(this._partialToolCalls.keys()).sort((a, b) => a - b);
+		for (const k of sortedTcKeys) {
+			const tc = this._partialToolCalls.get(k)!;
+			let parsedArgs: unknown = tc.args;
+			try { parsedArgs = JSON.parse(tc.args); } catch { /* keep raw string */ }
+			content.push({ type: "toolCall", id: tc.id, name: tc.name, arguments: parsedArgs } as ToolCall);
+		}
+
+		return { role: "assistant", content: content as any, timestamp: Date.now() } as AssistantMessage;
 	}
 }
 

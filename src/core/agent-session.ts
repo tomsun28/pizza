@@ -445,15 +445,14 @@ export class AgentSession {
 
 	/** Internal handler for agent events - shared by subscribe and reconnect */
 	private _handleAgentEvent = (event: AgentEvent): void => {
-		// Create retry promise synchronously before queueing async processing.
-		// Agent.emit() calls this handler synchronously, and prompt() calls waitForRetry()
-		// as soon as agent.prompt() resolves. If _retryPromise is created only inside
-		// _processAgentEvent, slow earlier queued events can delay agent_end processing
-		// and waitForRetry() can miss the in-flight retry.
-		this._createRetryPromiseForAgentEnd(event);
-
+		// Queue async processing
 		this._agentEventQueue = this._agentEventQueue.then(
-			() => this._processAgentEvent(event),
+			async () => {
+				await this._processAgentEvent(event);
+				// Check retry after _processAgentEvent so agent.state.messages includes
+				// the assistant message (reactor path pushes via dispatchToListeners).
+				this._createRetryPromiseForAgentEnd(event);
+			},
 			() => this._processAgentEvent(event),
 		);
 
@@ -471,7 +470,13 @@ export class AgentSession {
 			return;
 		}
 
-		const lastAssistant = this._findLastAssistantInMessages(event.messages);
+		// Fall back to agent.state.messages if event.messages is empty (reactor path).
+		// By the time this runs (after _processAgentEvent in the queue), the message
+		// has been pushed via dispatchToListeners → message_end → this.agent.state.messages.
+		const lastAssistant =
+			event.messages.length > 0
+				? this._findLastAssistantInMessages(event.messages)
+				: this._findLastAssistantMessage();
 		if (!lastAssistant || !this._isRetryableError(lastAssistant)) {
 			return;
 		}

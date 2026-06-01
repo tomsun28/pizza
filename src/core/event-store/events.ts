@@ -235,6 +235,57 @@ export interface CommandExecutedEvent extends EventBase {
 	};
 }
 
+
+/**
+ * Bash execution event - records a bash command run by the runtime/UI
+ * (not a tool call from the LLM). Used for `!cmd` user shell-escapes
+ * and other side-channel runs that still need to appear in the timeline.
+ */
+export interface BashExecutionEvent extends EventBase {
+	type: "BASH_EXECUTION";
+	payload: {
+		command: string;
+		output: string;
+		stdout?: string;
+		stderr?: string;
+		exit_code?: number;
+		duration_ms?: number;
+		cwd?: string;
+		cancelled?: boolean;
+		truncated?: boolean;
+		full_output_path?: string;
+		exclude_from_context?: boolean;
+	};
+}
+
+/**
+ * Custom message event - extension-provided opaque payload that should
+ * appear as a `CustomMessage` in the session timeline.
+ */
+export interface CustomMessageEvent extends EventBase {
+	type: "CUSTOM_MESSAGE";
+	payload: {
+		extension_id: string;
+		kind: string;
+		data: unknown;
+		display?: boolean | string;
+	};
+}
+
+/**
+ * Branch summary event - injected when switching branches; records
+ * a textual summary of the branch that was left behind so the LLM
+ * can stay oriented.
+ */
+export interface BranchSummaryEvent extends EventBase {
+	type: "BRANCH_SUMMARY";
+	payload: {
+		summary: string;
+		from_branch?: string;
+		from_id?: string;
+		to_branch?: string;
+	};
+}
 // ============================================================================
 // Session Lifecycle Events
 // ============================================================================
@@ -462,6 +513,9 @@ export type TypedEvent =
 	| ToolExecutionEndEvent
 	| FileMutationAppliedEvent
 	| CommandExecutedEvent
+	| BashExecutionEvent
+	| CustomMessageEvent
+	| BranchSummaryEvent
 	| SessionCreatedEvent
 	| SessionBoundaryInferredEvent
 	| SessionForkedEvent

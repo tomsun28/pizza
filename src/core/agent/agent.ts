@@ -257,7 +257,7 @@ export class Agent {
 		this.toolExecution = options.toolExecution ?? "parallel";
 
 		// Reactor mode fields (initialized lazily when first needed)
-		this._useEventSourcedRuntime = options.useEventSourcedRuntime ?? false;
+		this._useEventSourcedRuntime = options.useEventSourcedRuntime ?? true;
 	}
 
 	// ─── Reactor mode ──────────────────────────────────────────────────────
@@ -265,6 +265,7 @@ export class Agent {
 	private readonly _useEventSourcedRuntime: boolean;
 	private _eventTranslator?: EventStoreToAgentEventTranslator;
 	private _runtimeAbortController?: AbortController;
+	private _runtime?: import("../runtime/runtime.js").EventSourcedRuntime;
 
 	/**
 	 * Subscribe to agent lifecycle events.
@@ -309,14 +310,24 @@ export class Agent {
 	/** Queue a message to be injected after the current assistant turn finishes. */
 	steer(message: AgentMessage): void {
 		this.steeringQueue.enqueue(message);
+		// In reactor mode, forward to the live runtime if one is active
+		if (this._useEventSourcedRuntime && this._runtime) {
+			const text = typeof (message as any).content === "string" ? (message as any).content : "";
+			this._runtime.steer(text);
+		}
 	}
 
 	/** Queue a message to run only after the agent would otherwise stop. */
 	followUp(message: AgentMessage): void {
 		this.followUpQueue.enqueue(message);
+		// In reactor mode, forward to the live runtime if one is active
+		if (this._useEventSourcedRuntime && this._runtime) {
+			const text = typeof (message as any).content === "string" ? (message as any).content : "";
+			this._runtime.followUp(text);
+		}
 	}
-
 	/** Remove all queued steering messages. */
+
 	clearSteeringQueue(): void {
 		this.steeringQueue.clear();
 	}
@@ -342,11 +353,19 @@ export class Agent {
 		return this.activeRun?.abortController.signal;
 	}
 
-	/** Abort the current run, if one is active. */
+	/**
+	 * Abort the current run, if one is active.
+	 *
+	 * In reactor mode, ALSO emits USER_INTERRUPT into the EventStore so the
+	 * reactor cleanly aborts in-flight tool execution and ends the turn,
+	 * rather than leaving the runtime hanging.
+	 */
 	abort(): void {
 		this.activeRun?.abortController.abort();
+		if (this._useEventSourcedRuntime) {
+			this._runtime?.abort();
+		}
 	}
-
 	/**
 	 * Resolve when the current run and all awaited event listeners have finished.
 	 *
@@ -608,6 +627,7 @@ export class Agent {
 	 */
 	private async runPromptViaReactor(messages: AgentMessage[]): Promise<void> {
 		const runtime = await this.ensureRuntime();
+		this._runtime = runtime;
 		const translator = new EventStoreToAgentEventTranslator();
 		this._eventTranslator = translator;
 
@@ -628,7 +648,14 @@ export class Agent {
 			}
 			// Maintain Agent-side state mirrors
 			switch (event.type) {
+				case "message_start":
+					(this._state as any).streamingMessage = event.message;
+					break;
+				case "message_update":
+					(this._state as any).streamingMessage = event.message;
+					break;
 				case "message_end":
+					(this._state as any).streamingMessage = undefined;
 					this._state.messages.push(event.message);
 					break;
 				case "tool_execution_start": {
@@ -679,6 +706,7 @@ export class Agent {
 			unsub();
 			this._runtimeAbortController = undefined;
 			this._eventTranslator = undefined;
+			this._runtime = undefined;
 		}
 	}
 
@@ -740,6 +768,9 @@ export class Agent {
 			model: toModelConfig(this._state.model as any, this._state.thinkingLevel),
 			tools: toolDefs,
 			classifierConfig: { approve_unknown: false },
+			retryPolicy: new (await import("../runtime/policies.js")).DefaultRetryPolicy({
+				capDelayMs: this.maxRetryDelayMs,
+			}),
 		});
 	}
 }

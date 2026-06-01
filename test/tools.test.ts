@@ -13,6 +13,9 @@ import {
 	createWriteTool,
 } from "../src/index.js";
 import * as shellModule from "../src/utils/shell.js";
+import { getToolPath } from "../src/utils/tools-manager.js";
+
+const hasRipgrep = getToolPath("rg") !== null;
 
 const readTool = createReadTool(process.cwd());
 const writeTool = createWriteTool(process.cwd());
@@ -522,7 +525,7 @@ describe("Coding Agent Tools", () => {
 		});
 	});
 
-	describe("grep tool", () => {
+	describe.skipIf(!hasRipgrep)("grep tool", () => {
 		it("should include filename when searching a single file", async () => {
 			const testFile = join(testDir, "example.txt");
 			writeFileSync(testFile, "first line\nmatch line\nlast line");

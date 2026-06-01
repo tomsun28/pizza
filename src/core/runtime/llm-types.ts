@@ -29,10 +29,15 @@ export interface ToolDefinition {
  * appended to the EventStore.
  */
 export type LLMChunk =
+	| { kind: "text_start"; contentIndex: number }
 	| { kind: "text_delta"; contentIndex: number; delta: string }
+	| { kind: "text_end"; contentIndex: number; content: string }
+	| { kind: "thinking_start"; contentIndex: number }
 	| { kind: "thinking_delta"; contentIndex: number; delta: string }
+	| { kind: "thinking_end"; contentIndex: number; content: string }
 	| { kind: "toolcall_start"; contentIndex: number; tool_call_id: string; tool_name: string }
-	| { kind: "toolcall_delta"; contentIndex: number; delta: string };
+	| { kind: "toolcall_delta"; contentIndex: number; delta: string }
+	| { kind: "toolcall_end"; contentIndex: number; tool_call_id: string; tool_name: string; arguments: unknown };
 
 /** LLM client interface */
 export interface LLMClient {
