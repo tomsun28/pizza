@@ -267,6 +267,7 @@ export class AgentSession {
 	private _retryAttempt = 0;
 	private _retryPromise: Promise<void> | undefined = undefined;
 	private _retryResolve: (() => void) | undefined = undefined;
+	private _retryExhausted = false; // Set when max retries exceeded, prevents _createRetryPromiseForAgentEnd from creating new promise
 
 	// Bash execution state
 	private _bashAbortController: AbortController | undefined = undefined;
@@ -461,7 +462,7 @@ export class AgentSession {
 	};
 
 	private _createRetryPromiseForAgentEnd(event: AgentEvent): void {
-		if (event.type !== "agent_end" || this._retryPromise) {
+		if (event.type !== "agent_end" || this._retryPromise || this._retryExhausted) {
 			return;
 		}
 
@@ -564,6 +565,7 @@ export class AgentSession {
 						attempt: this._retryAttempt,
 					});
 					this._retryAttempt = 0;
+					this._retryExhausted = false;
 				}
 			}
 		}
@@ -1093,6 +1095,9 @@ export class AgentSession {
 
 		preflightResult?.(true);
 		await this.agent.prompt(messages);
+		// Drain the event queue to ensure _createRetryPromiseForAgentEnd has processed
+		// any agent_end events and set _retryPromise before we check it.
+		await this._agentEventQueue;
 		await this.waitForRetry();
 	}
 
@@ -2445,7 +2450,6 @@ export class AgentSession {
 		}
 
 		this._retryAttempt++;
-
 		if (this._retryAttempt > settings.maxRetries) {
 			// Max retries exceeded, emit final failure and reset
 			this._emit({
@@ -2455,6 +2459,7 @@ export class AgentSession {
 				finalError: message.errorMessage,
 			});
 			this._retryAttempt = 0;
+			this._retryExhausted = true; // Prevent _createRetryPromiseForAgentEnd from creating new promise
 			this._resolveRetry(); // Resolve so waitForRetry() completes
 			return false;
 		}
@@ -2484,6 +2489,7 @@ export class AgentSession {
 			const attempt = this._retryAttempt;
 			this._retryAttempt = 0;
 			this._retryAbortController = undefined;
+			this._retryExhausted = true; // Prevent _createRetryPromiseForAgentEnd from recreating promise
 			this._emit({
 				type: "auto_retry_end",
 				success: false,
