@@ -110,7 +110,8 @@ export class Reactor {
 	private followUpQueue: Array<{ content: string | unknown[]; images?: unknown[] }> = [];
 	/** Aborter for the current compaction run (if any). */
 	private compactionAbort: AbortController | undefined;
-
+	/** Set when abort() is called with no new content — next turn completion should discard queued follow-ups. */
+	private _abortedByUser = false;
 	constructor(config: ReactorConfig) {
 		this.config = config;
 		this.retryPolicy = config.retryPolicy ?? new DefaultRetryPolicy();
@@ -332,12 +333,15 @@ export class Reactor {
 	}
 
 	// ─── USER_INTERRUPT ─────────────────────────────────────────────────────
-
 	private async _onUserInterrupt(event: EventBase): Promise<void> {
+		const payload = event.payload as { content?: unknown; images?: unknown };
 		this.interrupt();
+		// Track hard abort (no new content) so _onAgentTurnCompleted doesn't drain follow-ups.
+		if (payload.content === undefined) {
+			this._abortedByUser = true;
+		}
 		// If steer carried new content, queue it as a follow-up so the turn-completion
 		// handler picks it up after the current turn settles (aborted state).
-		const payload = event.payload as { content?: unknown; images?: unknown };
 		if (payload.content !== undefined) {
 			this.followUpQueue.push({
 				content: payload.content as string | unknown[],
@@ -347,7 +351,6 @@ export class Reactor {
 		// Cancel any pending compaction so we don't block turn completion
 		this.compactionAbort?.abort();
 	}
-
 	// ─── USER_FOLLOWUP_QUEUED ───────────────────────────────────────────────
 
 	private async _onUserFollowupQueued(event: EventBase): Promise<void> {
@@ -743,9 +746,20 @@ export class Reactor {
 	private _onAgentTurnCompleted(event: EventBase): void {
 		const payload = event.payload as { reason: string; error_message?: string };
 
+		// If abort() was called, discard any pending follow-ups so the reactor stops.
+		// _abortedByUser is set by _onUserInterrupt when the interrupt has no new content.
+		if (this._abortedByUser) {
+			this.followUpQueue = [];
+			this._abortedByUser = false;
+			return;
+		}
+
 		// If a steer or follow-up message is queued, deliver it as a new USER_MESSAGE
 		// so the turn cycle restarts.
 		if (this.followUpQueue.length > 0) {
+			// Reset abort controller for the new turn — the previous turn's interrupt
+			// has already been handled.
+			this.abortController = new AbortController();
 			const next = this.followUpQueue.shift()!;
 			this._emit({
 				actor_id: "user",

@@ -215,9 +215,15 @@ export class EventSourcedRuntime {
 	get isRunning(): boolean {
 		return this._isProcessing;
 	}
-
 	/**
 	 * Interrupt current execution.
+	 *
+	 * Sets _abortedByUser on the reactor, which causes _onAgentTurnCompleted to discard
+	 * queued follow-ups and let the reactor settle. The settled promise resolves naturally
+	 * when the current turn finishes (via _waitUntilSettled).
+	 *
+	 * Edge case: if no turn is running (no AGENT_TURN_COMPLETED will fire), also resolve
+	 * the settled promise immediately so the caller doesn't hang.
 	 */
 	abort(): void {
 		this.store.append({
@@ -226,9 +232,12 @@ export class EventSourcedRuntime {
 			payload: {},
 		});
 		this.reactor?.interrupt();
-		// Resolve the settled promise — abort may be called before the LLM call starts
-		// and no AGENT_TURN_COMPLETED would ever fire.
-		if (this._resolveSettled) {
+		// Clear the follow-up-queued flag so _waitUntilSettled doesn't wait for
+		// a next turn that will never start (the reactor discards the queue on abort).
+		this._followUpQueuedInTurn = false;
+		// The _waitUntilSettled subscription will resolve when AGENT_TURN_COMPLETED fires.
+		// But if no turn is running (or the turn fails before starting), we resolve immediately.
+		if (!this._isProcessing && this._resolveSettled) {
 			this._resolveSettled();
 		}
 	}

@@ -312,8 +312,7 @@ export class Agent {
 		this.steeringQueue.enqueue(message);
 		// In reactor mode, forward to the live runtime if one is active
 		if (this._useEventSourcedRuntime && this._runtime) {
-			const text = typeof (message as any).content === "string" ? (message as any).content : "";
-			this._runtime.steer(text);
+			this._runtime.steer(this._extractText(message));
 		}
 	}
 
@@ -322,9 +321,16 @@ export class Agent {
 		this.followUpQueue.enqueue(message);
 		// In reactor mode, forward to the live runtime if one is active
 		if (this._useEventSourcedRuntime && this._runtime) {
-			const text = typeof (message as any).content === "string" ? (message as any).content : "";
-			this._runtime.followUp(text);
+			this._runtime.followUp(this._extractText(message));
 		}
+	}
+
+	/** Extract plain text from an AgentMessage's content field. */
+	private _extractText(message: AgentMessage): string {
+		const c = (message as any).content;
+		if (typeof c === "string") return c;
+		if (Array.isArray(c)) return c.filter((p: any) => p.type === "text").map((p: any) => p.text).join("");
+		return "";
 	}
 	/** Remove all queued steering messages. */
 
@@ -686,18 +692,26 @@ export class Agent {
 			}
 		});
 
-		try {
-			const userText = messages
-				.filter((m) => m.role === "user")
-				.map((m) => {
-					if (typeof (m as any).content === "string") return (m as any).content;
-					return ((m as any).content ?? [])
-						.filter((c: any) => c.type === "text")
-						.map((c: any) => c.text)
-						.join("");
-				})
-				.join("\n\n");
+		// Extract user text from messages
+		const userText = messages
+			.filter((m) => m.role === "user")
+			.map((m) => {
+				if (typeof (m as any).content === "string") return (m as any).content;
+				return ((m as any).content ?? [])
+					.filter((c: any) => c.type === "text")
+					.map((c: any) => c.text)
+					.join("");
+			})
+			.join("\n\n");
 
+		// Forward any follow-up messages queued before prompt() was called.
+		// These were enqueued in Agent.followUpQueue but the runtime didn't exist yet.
+		const preQueuedFollowUps = this.followUpQueue.drain();
+		for (const msg of preQueuedFollowUps) {
+			runtime.followUp(this._extractText(msg));
+		}
+
+		try {
 			await runtime.prompt(userText);
 			await Promise.all(pendingListenerCalls);
 		} catch (err) {
