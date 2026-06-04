@@ -219,6 +219,18 @@ describe("test harness", () => {
 		expect(toolcallStarts).toHaveLength(1);
 		expect(toolcallDeltas.length).toBeGreaterThan(0);
 		expect(toolcallEnds).toHaveLength(1);
+
+		const startBlock = (toolcallStarts[0]!.message as any).content[0];
+		expect(startBlock).toMatchObject({ type: "toolCall", name: "echo" });
+		expect(startBlock.id).not.toBe("");
+
+		const endEvent = toolcallEnds[0]!.assistantMessageEvent as any;
+		expect(endEvent.toolCall).toMatchObject({ type: "toolCall", name: "echo", arguments: { text: "hi" } });
+		expect(endEvent.toolCall.id).not.toBe("");
+
+		const endBlock = (toolcallEnds[0]!.message as any).content[0];
+		expect(endBlock).toMatchObject({ type: "toolCall", name: "echo", arguments: { text: "hi" } });
+		expect(endBlock.id).toBe(endEvent.toolCall.id);
 	});
 
 	it("streams thinking then text then tool call in order", async () => {

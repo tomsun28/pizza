@@ -2479,7 +2479,11 @@ export class InteractiveMode {
 							} else {
 								const component = this.pendingTools.get(content.id);
 								if (component) {
-									component.updateArgs(content.arguments);
+									component.updateToolCall(
+										content.name,
+										content.arguments,
+										this.getRegisteredToolDefinition(content.name),
+									);
 								}
 							}
 						}
@@ -2516,8 +2520,17 @@ export class InteractiveMode {
 						this.pendingTools.clear();
 					} else {
 						// Args are now complete - trigger diff computation for edit tools
-						for (const [, component] of this.pendingTools.entries()) {
-							component.setArgsComplete();
+						for (const content of this.streamingMessage.content) {
+							if (content.type !== "toolCall") continue;
+							const component = this.pendingTools.get(content.id);
+							if (component) {
+								component.updateToolCall(
+									content.name,
+									content.arguments,
+									this.getRegisteredToolDefinition(content.name),
+								);
+								component.setArgsComplete();
+							}
 						}
 					}
 					this.streamingComponent = undefined;
@@ -2545,6 +2558,12 @@ export class InteractiveMode {
 					component.setExpanded(this.toolOutputExpanded);
 					this.chatContainer.addChild(component);
 					this.pendingTools.set(event.toolCallId, component);
+				} else {
+					component.updateToolCall(
+						event.toolName,
+						event.args,
+						this.getRegisteredToolDefinition(event.toolName),
+					);
 				}
 				component.markExecutionStarted();
 				this.ui.requestRender();

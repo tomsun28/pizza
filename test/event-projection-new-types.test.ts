@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { eventToMessage } from "../src/core/projection/event-to-message.js";
+import { eventToMessage, extractToolCalls } from "../src/core/projection/event-to-message.js";
 import type { EventBase } from "../src/core/event-store/types.js";
 
 function mkEvent(
@@ -23,6 +23,56 @@ function mkEvent(
 }
 
 describe("eventToMessage — BASH_EXECUTION / CUSTOM_MESSAGE / BRANCH_SUMMARY", () => {
+	it("projects event-store tool_call blocks into assistant toolCall blocks", () => {
+		const msg = eventToMessage(
+			mkEvent("AGENT_MESSAGE_END", {
+				content: [
+					{ type: "text", text: "I'll read that." },
+					{ type: "tool_call", id: "call_1", name: "read", arguments: { path: "src/main.ts" } },
+				],
+				model: { provider: "anthropic", model_id: "claude-sonnet" },
+				usage: { input: 10, output: 20, cache_read: 0, cache_write: 0, total: 30, cost: 0.001 },
+				stop_reason: "tool_use",
+			}),
+		);
+
+		expect(msg).not.toBeNull();
+		expect(msg!.role).toBe("assistant");
+		expect((msg as any).content[1]).toEqual({
+			type: "toolCall",
+			id: "call_1",
+			name: "read",
+			arguments: { path: "src/main.ts" },
+		});
+		expect((msg as any).stopReason).toBe("toolUse");
+	});
+
+	it("keeps legacy assistant toolCall blocks when projecting assistant events", () => {
+		const msg = eventToMessage(
+			mkEvent("AGENT_MESSAGE_END", {
+				content: [
+					{ type: "toolCall", id: "call_legacy", name: "bash", arguments: { command: "echo hi" } },
+				],
+				model: { provider: "zai", model_id: "glm-5" },
+				usage: { input: 1, output: 1, cache_read: 0, cache_write: 0, total: 2, cost: 0 },
+				stop_reason: "tool_use",
+			}),
+		);
+
+		expect((msg as any).content).toEqual([
+			{ type: "toolCall", id: "call_legacy", name: "bash", arguments: { command: "echo hi" } },
+		]);
+	});
+
+	it("extracts tool calls from both event-store and legacy assistant block shapes", () => {
+		expect(extractToolCalls([{ type: "tool_call", id: "a", name: "read", arguments: { path: "a" } }])).toEqual([
+			{ id: "a", name: "read", arguments: { path: "a" } },
+		]);
+		expect(extractToolCalls([{ type: "toolCall", id: "b", name: "bash", arguments: { command: "echo b" } }])).toEqual([
+			{ id: "b", name: "bash", arguments: { command: "echo b" } },
+		]);
+	});
+
 	it("projects BASH_EXECUTION into a BashExecutionMessage", () => {
 		const msg = eventToMessage(
 			mkEvent("BASH_EXECUTION", {

@@ -210,7 +210,7 @@ export class EventStoreBridge {
 			actor_id: "coder_agent",
 			type: "AGENT_MESSAGE_END",
 			payload: {
-				content: assistant.content ?? [],
+				content: this._normalizeAssistantContent(assistant.content ?? []),
 				model: {
 					provider: assistant.provider ?? "unknown",
 					model_id: assistant.model ?? "unknown",
@@ -321,6 +321,29 @@ export class EventStoreBridge {
 			return [result as { type: string; [key: string]: unknown }];
 		}
 		return [{ type: "text", text: String(result) }];
+	}
+
+	private _normalizeAssistantContent(content: unknown[]): Array<{ type: string; [key: string]: unknown }> {
+		return content.map((block) => {
+			const b = block as {
+				type?: string;
+				id?: string;
+				tool_call_id?: string;
+				name?: string;
+				tool_name?: string;
+				arguments?: unknown;
+				[key: string]: unknown;
+			};
+			if (b.type !== "toolCall") {
+				return { ...b, type: typeof b.type === "string" ? b.type : "text" };
+			}
+			return {
+				type: "tool_call",
+				id: b.id ?? b.tool_call_id,
+				name: b.name ?? b.tool_name,
+				arguments: b.arguments ?? {},
+			};
+		});
 	}
 
 	private _mapStopReason(reason: string | undefined): string {

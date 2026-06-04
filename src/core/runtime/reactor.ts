@@ -89,6 +89,7 @@ export type EventHandlerMap = Partial<Record<EventType, EventHandler>>;
 interface TurnTracker {
 	assistantMessageEventId: string;
 	expectedCount: number;
+	expectedToolCallIds: Set<string>;
 	received: Array<{ tool_call_id: string; tool_name: string; result: ToolExecutionResult; is_error: boolean }>;
 	abortSignal?: AbortSignal;
 }
@@ -532,6 +533,7 @@ export class Reactor {
 		const tracker: TurnTracker = {
 			assistantMessageEventId: event.event_id,
 			expectedCount: toolCalls.length,
+			expectedToolCallIds: new Set(toolCalls.map((toolCall) => toolCall.id)),
 			received: [],
 			abortSignal: this.abortController?.signal,
 		};
@@ -574,6 +576,15 @@ export class Reactor {
 		};
 
 		if (payload.requires_approval) {
+			if (!this.config.approvalHandler) {
+				this._emitToolExecutionEnd(payload.tool_call_id, payload.tool_name, {
+					content: [{ type: "text", text: "Tool execution requires approval, but no approval handler is available." }],
+					is_error: true,
+					error_message: "Approval required but no approval handler is available",
+				}, event.event_id);
+				return;
+			}
+
 			// Wait for user approval/rejection
 			const approved = await new Promise<boolean>((resolve) => {
 				this._pendingApprovals.set(event.event_id, {
@@ -676,27 +687,38 @@ export class Reactor {
 		// Find the tracker for this tool call's assistant message
 		// Walk up the causal chain from the TOOL_EXECUTION_END event
 		const causedBy = event.caused_by;
-		if (!causedBy) return;
 
 		// The caused_by points to the INTENT_TOOL_CALL event.
 		// We need to find the INTENT_TOOL_CALL → AGENT_MESSAGE_END chain.
 		// Actually, the causal chain in EventStore should give us this.
 		// For now, find the tracker by looking up the chain:
-		const chain = this.config.store.getCausalChain(event.event_id);
+		const chain = causedBy ? this.config.store.getCausalChain(event.event_id) : [];
 
-		// Find the AGENT_MESSAGE_END in the causal chain
+		// Find the closest AGENT_MESSAGE_END in the causal chain. Consecutive
+		// tool-use turns include older assistant messages earlier in the chain.
 		let assistantMessageEventId: string | undefined;
-		for (const e of chain) {
+		for (let i = chain.length - 1; i >= 0; i--) {
+			const e = chain[i]!;
 			if (e.type === "AGENT_MESSAGE_END") {
 				assistantMessageEventId = e.event_id;
 				break;
 			}
 		}
 
-		if (!assistantMessageEventId) return;
+		let tracker = assistantMessageEventId ? this.turnTrackers.get(assistantMessageEventId) : undefined;
+		if (!tracker || !tracker.expectedToolCallIds.has(payload.tool_call_id)) {
+			assistantMessageEventId = undefined;
+			for (const [messageEventId, tracker] of this.turnTrackers) {
+				if (tracker.expectedToolCallIds.has(payload.tool_call_id)) {
+					assistantMessageEventId = messageEventId;
+					break;
+				}
+			}
+			tracker = assistantMessageEventId ? this.turnTrackers.get(assistantMessageEventId) : undefined;
+		}
 
-		const tracker = this.turnTrackers.get(assistantMessageEventId);
-		if (!tracker) return;
+		if (!tracker || !assistantMessageEventId) return;
+		if (tracker.received.some((result) => result.tool_call_id === payload.tool_call_id)) return;
 
 		tracker.received.push({
 			tool_call_id: payload.tool_call_id,

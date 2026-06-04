@@ -75,7 +75,26 @@ export function eventToMessage(event: EventBase): AgentMessage | null {
 			const content: (TextContent | ThinkingContent | ToolCall)[] = rawContent
 				.filter((block): block is TextContent | ThinkingContent | ToolCall => {
 					const b = block as { type?: string };
-					return b.type === "text" || b.type === "thinking" || b.type === "tool_call";
+					return b.type === "text" || b.type === "thinking" || b.type === "tool_call" || b.type === "toolCall";
+				})
+				.map((block) => {
+					const blockType = (block as { type?: string }).type;
+					if (blockType !== "tool_call" && blockType !== "toolCall") {
+						return block;
+					}
+					const toolCall = block as {
+						id?: string;
+						tool_call_id?: string;
+						name?: string;
+						tool_name?: string;
+						arguments?: unknown;
+					};
+					return {
+						type: "toolCall",
+						id: String(toolCall.id ?? toolCall.tool_call_id ?? ""),
+						name: String(toolCall.name ?? toolCall.tool_name ?? ""),
+						arguments: (toolCall.arguments as Record<string, unknown>) ?? {},
+					} as ToolCall;
 				});
 
 			// Convert stop_reason to StopReason
@@ -215,7 +234,7 @@ export function extractToolCalls(content: unknown[]): Array<{
 
 	for (const block of content) {
 		const b = block as { type?: string; id?: string; tool_call_id?: string; name?: string; tool_name?: string; arguments?: unknown };
-		if (b.type === "tool_call") {
+		if (b.type === "tool_call" || b.type === "toolCall") {
 			calls.push({
 				id: String(b.id ?? b.tool_call_id ?? ""),
 				name: String(b.name ?? b.tool_name ?? ""),

@@ -121,6 +121,31 @@ describe("ToolExecutionComponent parity", () => {
 		await promise;
 	});
 
+	test("rebases fallback call rendering when streaming later provides the built-in tool name", () => {
+		const component = new ToolExecutionComponent(
+			"",
+			"tool-streaming-name",
+			{ command: "ls -la /Users/gongchao/coding/" },
+			{},
+			undefined,
+			createFakeTui(),
+			process.cwd(),
+		);
+
+		const fallbackRendered = stripAnsi(component.render(120).join("\n"));
+		expect(fallbackRendered).toContain("\"command\"");
+
+		component.updateToolCall(
+			"bash",
+			{ command: "ls -la /Users/gongchao/coding/" },
+			undefined,
+		);
+
+		const bashRendered = stripAnsi(component.render(120).join("\n"));
+		expect(bashRendered).toContain("$ ls -la /Users/gongchao/coding/");
+		expect(bashRendered).not.toContain("\"command\"");
+	});
+
 	test("does not duplicate built-in headers when passed the active built-in definition", () => {
 		const component = new ToolExecutionComponent(
 			"read",

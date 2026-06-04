@@ -105,6 +105,16 @@ describe("IntentClassifier", () => {
 				expect(result.category).toBe("shell_moderate");
 			}
 		});
+
+		it("should not treat stderr redirection to /dev/null as dangerous", () => {
+			const result = classifier.classify("bash", {
+				command: "which zai-cli 2>/dev/null; type zai-cli 2>/dev/null; npm list -g 2>/dev/null | grep -i zai",
+			});
+
+			expect(result.risk).toBe("moderate");
+			expect(result.requires_approval).toBe(false);
+			expect(result.category).toBe("shell_moderate");
+		});
 	});
 
 	describe("unknown tools", () => {

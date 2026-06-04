@@ -19,6 +19,20 @@ import type { FauxProviderRegistration } from "@mariozechner/pi-ai";
 import { Agent } from "../src/core/agent/index.js";
 import type { AgentEvent } from "../src/core/agent/types.js";
 
+async function withTimeout<T>(promise: Promise<T>, ms = 2000): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		return await Promise.race([
+			promise,
+			new Promise<never>((_, reject) => {
+				timer = setTimeout(() => reject(new Error(`Timed out after ${ms}ms`)), ms);
+			}),
+		]);
+	} finally {
+		if (timer) clearTimeout(timer);
+	}
+}
+
 describe("Agent with useEventSourcedRuntime: true", () => {
 	let faux: FauxProviderRegistration;
 
@@ -231,6 +245,59 @@ describe("Agent with useEventSourcedRuntime: true", () => {
 
 		const roles = agent.state.messages.map((m) => m.role);
 		expect(roles).toEqual(["user", "assistant", "toolResult", "assistant"]);
+	});
+
+	it("continues across consecutive tool-use turns", async () => {
+		const toolRuns: string[] = [];
+		const agent = new Agent({
+			initialState: {
+				model: faux.getModel(),
+				tools: [
+					{
+						name: "echo",
+						label: "Echo",
+						description: "echo",
+						parameters: {
+							type: "object",
+							properties: { text: { type: "string" } },
+							required: ["text"],
+							additionalProperties: false,
+						} as any,
+						execute: async (_id, params: any) => {
+							toolRuns.push(String(params.text));
+							return { content: [{ type: "text", text: `echo:${params.text}` }], details: {} };
+						},
+					} as any,
+				],
+			},
+			useEventSourcedRuntime: true,
+		});
+
+		const events: AgentEvent[] = [];
+		agent.subscribe((e) => events.push(e));
+
+		faux.setResponses([
+			fauxAssistantMessage([fauxToolCall("echo", { text: "first" })]),
+			fauxAssistantMessage([fauxToolCall("echo", { text: "second" })]),
+			fauxAssistantMessage(fauxText("done")),
+		]);
+
+		await withTimeout(agent.prompt("call echo twice"));
+
+		expect(toolRuns).toEqual(["first", "second"]);
+		expect(agent.state.messages.map((m) => m.role)).toEqual([
+			"user",
+			"assistant",
+			"toolResult",
+			"assistant",
+			"toolResult",
+			"assistant",
+		]);
+
+		const types = events.map((e) => e.type);
+		expect(types.filter((t) => t === "tool_execution_end")).toHaveLength(2);
+		expect(types.filter((t) => t === "turn_end")).toHaveLength(3);
+		expect(types).toContain("agent_end");
 	});
 
 	it("explicit useEventSourcedRuntime: false uses legacy loop", async () => {

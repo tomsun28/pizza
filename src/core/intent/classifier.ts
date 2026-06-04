@@ -118,7 +118,7 @@ export class IntentClassifier {
 			{ pattern: /\bcurl\b.*\|\s*bash/i, description: "Download and execute" },
 			{ pattern: /\bwget\b.*\|\s*bash/i, description: "Download and execute" },
 			{ pattern: /\bchmod\s+777/i, description: "World-writable permissions" },
-			{ pattern: /\b>\s*\/dev\//i, description: "Redirect to device" },
+			{ pattern: /\b>\s*\/dev\/(?!null\b)/i, description: "Redirect to device" },
 			{ pattern: /\n\s*rm\s+/i, description: "Embedded delete command" },
 			{ pattern: /\bdd\b/i, description: "Direct disk access" },
 			{ pattern: /\bmkfs\b/i, description: "Filesystem format" },

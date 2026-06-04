@@ -33,6 +33,18 @@ import type {
 import type { ToolExecutionRequest, RuntimeAdapter } from "../runtime/types.js";
 import type { ToolExecutionResult } from "../intent/types.js";
 
+function getStreamToolCall(event: AssistantMessageEvent): ToolCall | undefined {
+	const direct = (event as any).toolCall;
+	if (direct?.type === "toolCall") return direct as ToolCall;
+
+	const contentIndex = (event as any).contentIndex;
+	const partialContent = (event as any).partial?.content;
+	const partialBlock = Array.isArray(partialContent) && typeof contentIndex === "number"
+		? partialContent[contentIndex]
+		: undefined;
+	return partialBlock?.type === "toolCall" ? partialBlock as ToolCall : undefined;
+}
+
 // ============================================================================
 // LLMClient adapter — wraps a pi-ai streamFn into the reactor's LLMClient interface
 // ============================================================================
@@ -106,15 +118,30 @@ export function buildLlmClientFromStreamFn(
 					case "thinking_end":
 						onChunk?.({ kind: "thinking_end", contentIndex: event.contentIndex, content: event.content } as LLMChunk);
 						break;
-					case "toolcall_start":
-						onChunk?.({ kind: "toolcall_start", contentIndex: event.contentIndex, tool_call_id: (event as any).id ?? "", tool_name: (event as any).toolName ?? "" } as LLMChunk);
+					case "toolcall_start": {
+						const toolCall = getStreamToolCall(event);
+						onChunk?.({
+							kind: "toolcall_start",
+							contentIndex: event.contentIndex,
+							tool_call_id: (event as any).id ?? toolCall?.id ?? "",
+							tool_name: (event as any).toolName ?? toolCall?.name ?? "",
+						} as LLMChunk);
 						break;
+					}
 					case "toolcall_delta":
 						onChunk?.({ kind: "toolcall_delta", contentIndex: event.contentIndex, delta: event.delta } as LLMChunk);
 						break;
-					case "toolcall_end":
-						onChunk?.({ kind: "toolcall_end", contentIndex: event.contentIndex, tool_call_id: (event as any).id ?? "", tool_name: (event as any).toolName ?? "", arguments: (event as any).toolCall?.arguments ?? {} } as LLMChunk);
+					case "toolcall_end": {
+						const toolCall = getStreamToolCall(event);
+						onChunk?.({
+							kind: "toolcall_end",
+							contentIndex: event.contentIndex,
+							tool_call_id: (event as any).id ?? toolCall?.id ?? "",
+							tool_name: (event as any).toolName ?? toolCall?.name ?? "",
+							arguments: toolCall?.arguments ?? {},
+						} as LLMChunk);
 						break;
+					}
 					case "done":
 					case "error":
 						finalMessage = await (stream as any).result();
@@ -323,13 +350,25 @@ export class EventStoreToAgentEventTranslator {
 						break;
 					}
 					case "toolcall_end": {
+						const previous = this._partialToolCalls.get(idx);
+						const args =
+							chunk.arguments === undefined
+								? (previous?.args ?? "")
+								: typeof chunk.arguments === "string"
+									? chunk.arguments
+									: (JSON.stringify(chunk.arguments) ?? previous?.args ?? "");
+						const updated = {
+							id: chunk.tool_call_id || previous?.id || "",
+							name: chunk.tool_name || previous?.name || "",
+							args,
+						};
+						this._partialToolCalls.set(idx, updated);
 						ensureStart();
-						const tc = this._partialToolCalls.get(idx);
 						const msg5 = this._buildStreamingMessage();
 						out.push({
 							type: "message_update",
 							message: msg5,
-							assistantMessageEvent: { type: "toolcall_end", contentIndex: idx, toolCall: { type: "toolCall", id: tc?.id ?? chunk.tool_call_id ?? "", name: tc?.name ?? chunk.tool_name ?? "", arguments: chunk.arguments ?? {} } as ToolCall, partial: msg5 } as AssistantMessageEvent,
+							assistantMessageEvent: { type: "toolcall_end", contentIndex: idx, toolCall: { type: "toolCall", id: updated.id, name: updated.name, arguments: chunk.arguments ?? {} } as ToolCall, partial: msg5 } as AssistantMessageEvent,
 						});
 						break;
 					}

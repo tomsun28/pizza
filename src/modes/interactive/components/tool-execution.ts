@@ -69,13 +69,19 @@ export class ToolExecutionComponent extends Container {
 		this.contentText = new Text("", 1, 1, (text: string) => theme.bg("toolPendingBg", text));
 		this.selfRenderContainer = new Container();
 
+		this.attachRenderShell();
+
+		this.updateDisplay();
+	}
+
+	private attachRenderShell(): void {
+		this.clear();
+		this.addChild(new Spacer(1));
 		if (this.hasRendererDefinition()) {
 			this.addChild(this.getRenderShell() === "self" ? this.selfRenderContainer : this.contentBox);
 		} else {
 			this.addChild(this.contentText);
 		}
-
-		this.updateDisplay();
 	}
 
 	private getCallRenderer(): ToolDefinition<any, any>["renderCall"] | undefined {
@@ -146,6 +152,32 @@ export class ToolExecutionComponent extends Container {
 
 	updateArgs(args: any): void {
 		this.args = args;
+		this.updateDisplay();
+	}
+
+	updateToolCall(toolName: string, args: any, toolDefinition: ToolDefinition<any, any> | undefined): void {
+		const previousToolName = this.toolName;
+		const previousToolDefinition = this.toolDefinition;
+		const hadRendererDefinition = this.hasRendererDefinition();
+		const previousRenderShell = hadRendererDefinition ? this.getRenderShell() : undefined;
+
+		this.toolName = toolName;
+		this.args = args;
+		this.toolDefinition = toolDefinition;
+		this.builtInToolDefinition = createAllToolDefinitions(this.cwd)[toolName as ToolName];
+
+		if (previousToolName !== toolName || previousToolDefinition !== toolDefinition) {
+			this.callRendererComponent = undefined;
+			this.resultRendererComponent = undefined;
+			this.rendererState = {};
+		}
+
+		const hasRendererDefinition = this.hasRendererDefinition();
+		const renderShell = hasRendererDefinition ? this.getRenderShell() : undefined;
+		if (hadRendererDefinition !== hasRendererDefinition || previousRenderShell !== renderShell) {
+			this.attachRenderShell();
+		}
+
 		this.updateDisplay();
 	}
 

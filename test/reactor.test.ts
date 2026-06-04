@@ -15,6 +15,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { EventSourcedRuntime } from "../src/core/runtime/runtime.js";
+import { SqliteEventStore } from "../src/core/event-store/sqlite-store.js";
+import { IntentClassifier } from "../src/core/intent/classifier.js";
+import { Reactor } from "../src/core/runtime/reactor.js";
 import type { LLMClient, LLMResponse } from "../src/core/runtime/llm-types.js";
 import type { ToolExecutor, ToolRegistry } from "../src/core/intent/types.js";
 import type { ContentBlock } from "../src/core/event-store/types.js";
@@ -50,6 +53,25 @@ describe("Reactor (event-driven core)", () => {
 			},
 			list() {
 				return ["echo"];
+			},
+		};
+	}
+
+	function makeBashRegistry(): ToolRegistry {
+		return {
+			get(name: string): ToolExecutor | undefined {
+				if (name !== "bash") return undefined;
+				return {
+					async execute(args) {
+						return { content: [{ type: "text", text: String(args.command ?? "") }], is_error: false };
+					},
+					getMetadata() {
+						return { name: "bash", category: "shell_moderate", defaultRisk: "moderate" };
+					},
+				};
+			},
+			list() {
+				return ["bash"];
 			},
 		};
 	}
@@ -115,6 +137,55 @@ describe("Reactor (event-driven core)", () => {
 
 		const completed = runtime.store.query({ types: ["AGENT_TURN_COMPLETED"] })[0];
 		expect((completed.payload as { reason: string }).reason).toBe("stop");
+
+		runtime.dispose();
+	});
+
+	it("executes legacy camelCase toolCall blocks returned by a provider", async () => {
+		const cwd = makeTempDir();
+		const registry = makeRegistry();
+		let calls = 0;
+		const client: LLMClient = {
+			async complete(): Promise<LLMResponse> {
+				calls++;
+				if (calls === 1) {
+					return {
+						content: [
+							{ type: "toolCall", id: "call_legacy", name: "echo", arguments: { text: "hello" } } as any,
+						],
+						provider: "test",
+						model: "test",
+						usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, cost: 0 },
+						stopReason: "tool_use",
+					};
+				}
+				return {
+					content: [{ type: "text", text: "done" } as ContentBlock],
+					provider: "test",
+					model: "test",
+					usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, cost: 0 },
+					stopReason: "stop",
+				};
+			},
+		};
+
+		const runtime = new EventSourcedRuntime({
+			cwd,
+			agentDir: cwd,
+			toolRegistry: registry,
+			llmClient: client,
+			classifierConfig: { approve_unknown: false },
+			systemPrompt: "test system",
+			model: { provider: "test", model_id: "test" },
+			tools: [],
+		});
+
+		await runtime.prompt("please echo hello");
+
+		expect(calls).toBe(2);
+		expect(runtime.store.query({ types: ["INTENT_TOOL_CALL"] })).toHaveLength(1);
+		expect(runtime.store.query({ types: ["TOOL_EXECUTION_END"] })).toHaveLength(1);
+		expect(runtime.store.query({ types: ["AGENT_TURN_COMPLETED"] })).toHaveLength(1);
 
 		runtime.dispose();
 	});
@@ -239,5 +310,200 @@ describe("Reactor (event-driven core)", () => {
 		expect((aggregated.payload as { any_error: boolean }).any_error).toBe(false);
 
 		runtime.dispose();
+	});
+
+	it("executes dev-null redirected shell lookups in a parallel tool batch", async () => {
+		const cwd = makeTempDir();
+		const registry = makeBashRegistry();
+
+		let calls = 0;
+		const client: LLMClient = {
+			async complete(): Promise<LLMResponse> {
+				calls++;
+				if (calls === 1) {
+					return {
+						content: [
+							{ type: "tool_call", id: "c1", name: "bash", arguments: { command: "ls -la .claude/" } } as ContentBlock,
+							{ type: "tool_call", id: "c2", name: "bash", arguments: { command: "ls -la .crush/" } } as ContentBlock,
+							{
+								type: "tool_call",
+								id: "c3",
+								name: "bash",
+								arguments: {
+									command: "which zai-cli 2>/dev/null; type zai-cli 2>/dev/null; npm list -g 2>/dev/null | grep -i zai",
+								},
+							} as ContentBlock,
+						],
+						provider: "test",
+						model: "test",
+						usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, cost: 0 },
+						stopReason: "tool_use",
+					};
+				}
+				return {
+					content: [{ type: "text", text: "done" } as ContentBlock],
+					provider: "test",
+					model: "test",
+					usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, cost: 0 },
+					stopReason: "stop",
+				};
+			},
+		};
+
+		const runtime = new EventSourcedRuntime({
+			cwd,
+			agentDir: cwd,
+			toolRegistry: registry,
+			llmClient: client,
+			classifierConfig: { approve_unknown: false },
+			systemPrompt: "",
+			model: { provider: "test", model_id: "test" },
+			tools: [],
+		});
+
+		await runtime.prompt("run three shell lookups");
+
+		const intents = runtime.store.query({ types: ["INTENT_TOOL_CALL"] });
+		expect(intents).toHaveLength(3);
+		expect((intents[2].payload as { requires_approval: boolean }).requires_approval).toBe(false);
+		expect(runtime.store.query({ types: ["TOOL_EXECUTION_START"] })).toHaveLength(3);
+		expect(runtime.store.query({ types: ["TOOL_EXECUTION_END"] })).toHaveLength(3);
+		expect(runtime.store.query({ types: ["AGENT_TURN_COMPLETED"] })).toHaveLength(1);
+		expect(calls).toBe(2);
+
+		runtime.dispose();
+	});
+
+	it("does not hang when approval is required without an approval handler", async () => {
+		const cwd = makeTempDir();
+		const registry = makeBashRegistry();
+
+		let calls = 0;
+		const client: LLMClient = {
+			async complete(): Promise<LLMResponse> {
+				calls++;
+				if (calls === 1) {
+					return {
+						content: [
+							{ type: "tool_call", id: "danger", name: "bash", arguments: { command: "sudo whoami" } } as ContentBlock,
+						],
+						provider: "test",
+						model: "test",
+						usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, cost: 0 },
+						stopReason: "tool_use",
+					};
+				}
+				return {
+					content: [{ type: "text", text: "done" } as ContentBlock],
+					provider: "test",
+					model: "test",
+					usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, cost: 0 },
+					stopReason: "stop",
+				};
+			},
+		};
+
+		const runtime = new EventSourcedRuntime({
+			cwd,
+			agentDir: cwd,
+			toolRegistry: registry,
+			llmClient: client,
+			classifierConfig: { approve_unknown: false },
+			systemPrompt: "",
+			model: { provider: "test", model_id: "test" },
+			tools: [],
+		});
+
+		await runtime.prompt("run dangerous command");
+
+		const starts = runtime.store.query({ types: ["TOOL_EXECUTION_START"] });
+		const ends = runtime.store.query({ types: ["TOOL_EXECUTION_END"] });
+		expect(starts).toHaveLength(0);
+		expect(ends).toHaveLength(1);
+		expect((ends[0].payload as { is_error: boolean }).is_error).toBe(true);
+		expect(JSON.stringify((ends[0].payload as { result: unknown }).result)).toContain("no approval handler");
+		expect(runtime.store.query({ types: ["TOOL_RESULTS_AGGREGATED"] })).toHaveLength(1);
+		expect(runtime.store.query({ types: ["AGENT_TURN_COMPLETED"] })).toHaveLength(1);
+		expect(calls).toBe(2);
+
+		runtime.dispose();
+	});
+
+	it("aggregates completed tools by tool_call_id when causal chain is unavailable", async () => {
+		const cwd = makeTempDir();
+		const store = new SqliteEventStore("reactor-causality-fallback", ":memory:");
+		const registry = makeRegistry();
+		const reactor = new Reactor({
+			store,
+			projection: {} as any,
+			llmClient: { async complete() { throw new Error("not used"); } },
+			classifier: new IntentClassifier({ approve_writes: false, approve_edits: false, approve_shell_moderate: false, approve_unknown: false }),
+			toolRegistry: registry,
+			runtimeAdapter: {
+				runtime_id: "test_runtime",
+				workspace_id: store.workspace_id,
+				kind: "local",
+				async executeTool() {
+					return { content: [{ type: "text", text: "not used" }], is_error: false };
+				},
+				async createCheckpoint() {
+					return { id: "checkpoint", label: "checkpoint", runtime_id: "test_runtime", created_at: Date.now(), metadata: {} };
+				},
+				async restoreCheckpoint() {},
+				async getStatus() {
+					return { runtime_id: "test_runtime", workspace_id: store.workspace_id, kind: "local", cwd, status: "idle" };
+				},
+			},
+			systemPrompt: "",
+			model: { provider: "test", model_id: "test" },
+			contextBudget: 128000,
+			tools: [],
+		});
+
+		const assistantEnd = store.append({
+			actor_id: "coder_agent",
+			type: "AGENT_MESSAGE_END",
+			payload: {
+				content: [
+					{ type: "tool_call", id: "missing_chain_1", name: "echo", arguments: { text: "a" } },
+					{ type: "tool_call", id: "missing_chain_2", name: "echo", arguments: { text: "b" } },
+				],
+				model: { provider: "test", model_id: "test" },
+				usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, cost: 0 },
+				stop_reason: "tool_use",
+			},
+		});
+
+		await (reactor as any)._onAgentMessageEnd(assistantEnd);
+
+		const firstResult = store.append({
+			actor_id: "runtime",
+			type: "TOOL_EXECUTION_END",
+			payload: {
+				tool_call_id: "missing_chain_1",
+				tool_name: "echo",
+				result: [{ type: "text", text: "a" }],
+				is_error: false,
+			},
+		});
+		const secondResult = store.append({
+			actor_id: "runtime",
+			type: "TOOL_EXECUTION_END",
+			payload: {
+				tool_call_id: "missing_chain_2",
+				tool_name: "echo",
+				result: [{ type: "text", text: "b" }],
+				is_error: false,
+			},
+		});
+
+		await (reactor as any)._onToolExecutionEnd(firstResult);
+		await (reactor as any)._onToolExecutionEnd(secondResult);
+
+		expect(store.query({ types: ["TOOL_RESULTS_AGGREGATED"] })).toHaveLength(1);
+		const aggregated = store.query({ types: ["TOOL_RESULTS_AGGREGATED"] })[0];
+		expect((aggregated.payload as { tool_call_count: number }).tool_call_count).toBe(2);
+
+		store.close();
 	});
 });
