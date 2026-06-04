@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { join } from "node:path";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { JsonlEventStore } from "../src/core/event-store/jsonl-store.js";
+import { SqliteEventStore } from "../src/core/event-store/sqlite-store.js";
 import { IntentExecutor } from "../src/core/intent/executor.js";
 import { IntentClassifier } from "../src/core/intent/classifier.js";
 import type { ToolRegistry, ToolExecutor, ToolExecutionResult, ToolMetadata } from "../src/core/intent/types.js";
@@ -32,14 +32,15 @@ function createMockToolRegistry(tools: Record<string, (args: Record<string, unkn
 
 describe("IntentExecutor", () => {
 	const testDir = join(tmpdir(), ".test-pizza-executor", String(Date.now()));
-	let store: JsonlEventStore;
+	let store: SqliteEventStore;
 
 	beforeEach(() => {
 		mkdirSync(testDir, { recursive: true });
-		store = new JsonlEventStore("test-ws", testDir);
+		store = new SqliteEventStore("test-ws", join(testDir, "events.sqlite"));
 	});
 
 	afterEach(() => {
+		store.close();
 		if (existsSync(testDir)) {
 			rmSync(testDir, { recursive: true });
 		}

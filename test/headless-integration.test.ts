@@ -10,7 +10,6 @@
  * 3. GoalProjection + GoalScheduler integration
  * 4. TimelineProjection output
  * 5. Reactor event flow (mock LLM)
- * 6. DualWriteEventStore
  */
 
 import { describe, it, expect, beforeEach } from "vitest";

@@ -7,7 +7,6 @@
  * Storage layout:
  *   <agentDir>/workspaces/<workspace_id>/
  *     events.sqlite             # Primary event log
- *     events-YYYY-MM-DD.jsonl   # Optional debug/export event log files
  *     meta.json
  *     sessions.json
  */
@@ -38,42 +37,9 @@ export function getWorkspaceDir(workspaceId: string, agentDir: string = getDefau
 	return dir;
 }
 
-/** Returns the events directory for a workspace. */
-export function getEventLogDir(workspaceId: string, agentDir?: string): string {
-	return getWorkspaceDir(workspaceId, agentDir);
-}
-
 /** Returns the primary SQLite event database path for a workspace. */
 export function getEventDatabasePath(workspaceId: string, agentDir?: string): string {
 	return join(getWorkspaceDir(workspaceId, agentDir), "events.sqlite");
-}
-
-/**
- * Returns the events file path for a specific date.
- * Format: events-YYYY-MM-DD.jsonl
- */
-export function getEventLogPath(workspaceId: string, date: string, agentDir?: string): string {
-	return join(getWorkspaceDir(workspaceId, agentDir), `events-${date}.jsonl`);
-}
-
-/** Returns today's date string (YYYY-MM-DD). */
-export function getTodayDate(): string {
-	return new Date().toISOString().slice(0, 10);
-}
-
-/**
- * Returns the events file path for today.
- */
-export function getTodayEventLogPath(workspaceId: string, agentDir?: string): string {
-	return getEventLogPath(workspaceId, getTodayDate(), agentDir);
-}
-
-/**
- * Returns the events file path given the workspace directory and date.
- * Internal use by JsonlEventStore._persist.
- */
-export function getEventLogPathInDir(workspaceDir: string, date: string): string {
-	return join(workspaceDir, `events-${date}.jsonl`);
 }
 
 /** Returns the meta.json path for a workspace. */

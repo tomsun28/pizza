@@ -6,21 +6,22 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { join } from "node:path";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { JsonlEventStore } from "../src/core/event-store/jsonl-store.js";
+import { SqliteEventStore } from "../src/core/event-store/sqlite-store.js";
 import { SessionProjection } from "../src/core/projection/session-projection.js";
 import { SessionManager } from "../src/core/projection/session-manager.js";
 import type { SessionDescriptor } from "../src/core/projection/types.js";
 
 describe("SessionProjection", () => {
 	const testDir = join(tmpdir(), ".test-pizza-projection", String(Date.now()));
-	let store: JsonlEventStore;
+	let store: SqliteEventStore;
 
 	beforeEach(() => {
 		mkdirSync(testDir, { recursive: true });
-		store = new JsonlEventStore("test-ws", testDir);
+		store = new SqliteEventStore("test-ws", join(testDir, "projection-events.sqlite"));
 	});
 
 	afterEach(() => {
+		store.close();
 		if (existsSync(testDir)) {
 			rmSync(testDir, { recursive: true });
 		}
@@ -175,14 +176,15 @@ describe("SessionProjection", () => {
 
 describe("SessionManager", () => {
 	const testDir = join(tmpdir(), ".test-pizza-session-mgr", String(Date.now()));
-	let store: JsonlEventStore;
+	let store: SqliteEventStore;
 
 	beforeEach(() => {
 		mkdirSync(testDir, { recursive: true });
-		store = new JsonlEventStore("test-ws", testDir);
+		store = new SqliteEventStore("test-ws", join(testDir, "session-events.sqlite"));
 	});
 
 	afterEach(() => {
+		store.close();
 		if (existsSync(testDir)) {
 			rmSync(testDir, { recursive: true });
 		}

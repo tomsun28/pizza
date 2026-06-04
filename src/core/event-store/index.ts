@@ -9,6 +9,3 @@ export * from "./events.js";
 export * from "./store.js";
 export * from "./workspace.js";
 export * from "./sqlite-store.js";
-export * from "./migrations.js";
-export { JsonlEventStore } from "./jsonl-store.js";
-export { DualWriteEventStore, createDualStore } from "./dual-store.js";
