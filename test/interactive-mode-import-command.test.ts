@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { SessionImportFileNotFoundError } from "../src/core/agent-session-runtime.js";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.js";
 
 type PathCommand = "/export" | "/import";
@@ -12,7 +11,6 @@ type InteractiveModePrototype = {
 type ImportCommandContext = {
 	loadingAnimation?: { stop: () => void };
 	statusContainer: { clear: () => void };
-	runtimeHost: { importFromJsonl: (inputPath: string, cwdOverride?: string) => Promise<{ cancelled: boolean }> };
 	showError: (message: string) => void;
 	showStatus: (message: string) => void;
 	showExtensionConfirm: (title: string, message: string) => Promise<boolean>;
@@ -51,15 +49,13 @@ describe("InteractiveMode /import parsing", () => {
 		);
 	});
 
-	it("passes unquoted path to runtimeHost.importFromJsonl", async () => {
-		const importFromJsonl = vi.fn(async () => ({ cancelled: false }));
+	it("rejects legacy JSONL import without calling runtimeHost", async () => {
 		const showExtensionConfirm = vi.fn(async () => true);
 		const showStatus = vi.fn();
 		const showError = vi.fn();
 
 		const context: ImportCommandContext = {
 			statusContainer: { clear: vi.fn() },
-			runtimeHost: { importFromJsonl },
 			showError,
 			showStatus,
 			showExtensionConfirm,
@@ -74,24 +70,18 @@ describe("InteractiveMode /import parsing", () => {
 
 		await interactiveModePrototype.handleImportCommand.call(context, '/import "path/to/session.jsonl"');
 
-		expect(showExtensionConfirm).toHaveBeenCalledWith(
-			"Import session",
-			"Replace current session with path/to/session.jsonl?",
-		);
-		expect(importFromJsonl).toHaveBeenCalledWith("path/to/session.jsonl");
-		expect(showError).not.toHaveBeenCalled();
-		expect(showStatus).toHaveBeenCalledWith("Session imported from: path/to/session.jsonl");
+		expect(showExtensionConfirm).not.toHaveBeenCalled();
+		expect(showError).toHaveBeenCalledWith("Legacy JSONL session import is no longer supported.");
+		expect(showStatus).not.toHaveBeenCalled();
 	});
 
-	it("passes unquoted apostrophe path to runtimeHost.importFromJsonl unchanged", async () => {
-		const importFromJsonl = vi.fn(async () => ({ cancelled: false }));
+	it("rejects unquoted apostrophe JSONL import without calling runtimeHost", async () => {
 		const showExtensionConfirm = vi.fn(async () => true);
 		const showStatus = vi.fn();
 		const showError = vi.fn();
 
 		const context: ImportCommandContext = {
 			statusContainer: { clear: vi.fn() },
-			runtimeHost: { importFromJsonl },
 			showError,
 			showStatus,
 			showExtensionConfirm,
@@ -106,15 +96,11 @@ describe("InteractiveMode /import parsing", () => {
 
 		await interactiveModePrototype.handleImportCommand.call(context, "/import john's/session.jsonl");
 
-		expect(importFromJsonl).toHaveBeenCalledWith("john's/session.jsonl");
-		expect(showError).not.toHaveBeenCalled();
-		expect(showStatus).toHaveBeenCalledWith("Session imported from: john's/session.jsonl");
+		expect(showError).toHaveBeenCalledWith("Legacy JSONL session import is no longer supported.");
+		expect(showStatus).not.toHaveBeenCalled();
 	});
 
-	it("shows a non-fatal error when /import path does not exist", async () => {
-		const importFromJsonl = vi.fn(async () => {
-			throw new SessionImportFileNotFoundError("/tmp/missing-session.jsonl");
-		});
+	it("rejects absolute legacy JSONL import without a fatal runtime error", async () => {
 		const showExtensionConfirm = vi.fn(async () => true);
 		const showStatus = vi.fn();
 		const showError = vi.fn();
@@ -124,7 +110,6 @@ describe("InteractiveMode /import parsing", () => {
 
 		const context: ImportCommandContext = {
 			statusContainer: { clear: vi.fn() },
-			runtimeHost: { importFromJsonl },
 			showError,
 			showStatus,
 			showExtensionConfirm,
@@ -137,7 +122,7 @@ describe("InteractiveMode /import parsing", () => {
 
 		await interactiveModePrototype.handleImportCommand.call(context, "/import /tmp/missing-session.jsonl");
 
-		expect(showError).toHaveBeenCalledWith("Failed to import session: File not found: /tmp/missing-session.jsonl");
+		expect(showError).toHaveBeenCalledWith("Legacy JSONL session import is no longer supported.");
 		expect(showStatus).not.toHaveBeenCalled();
 		expect(handleFatalRuntimeError).not.toHaveBeenCalled();
 	});

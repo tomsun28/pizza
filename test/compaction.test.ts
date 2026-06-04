@@ -19,10 +19,9 @@ import {
 	buildSessionContext,
 	type CompactionEntry,
 	type ModelChangeEntry,
-	migrateSessionEntries,
-	parseSessionEntries,
 	type SessionEntry,
 	type SessionMessageEntry,
+	type SessionHeader,
 	type ThinkingLevelChangeEntry,
 } from "../src/core/session-manager.js";
 
@@ -33,9 +32,39 @@ import {
 function loadLargeSessionEntries(): SessionEntry[] {
 	const sessionPath = join(__dirname, "fixtures/large-session.jsonl");
 	const content = readFileSync(sessionPath, "utf-8");
-	const entries = parseSessionEntries(content);
-	migrateSessionEntries(entries); // Add id/parentId for v1 fixtures
+	const entries = parseLegacyFixtureEntries(content);
 	return entries.filter((e): e is SessionEntry => e.type !== "session");
+}
+
+function parseLegacyFixtureEntries(content: string): Array<SessionHeader | SessionEntry> {
+	const entries = content
+		.trim()
+		.split("\n")
+		.filter((line) => line.trim().length > 0)
+		.map((line) => JSON.parse(line) as SessionHeader | (SessionEntry & { firstKeptEntryIndex?: number }));
+
+	let previousId: string | null = null;
+	let nextId = 0;
+	for (const entry of entries) {
+		if (entry.type === "session") {
+			entry.version = 3;
+			continue;
+		}
+
+		entry.id = entry.id ?? `legacy-${++nextId}`;
+		entry.parentId = entry.parentId ?? previousId;
+		previousId = entry.id;
+
+		if (entry.type === "compaction" && typeof entry.firstKeptEntryIndex === "number") {
+			const firstKept = entries[entry.firstKeptEntryIndex];
+			if (firstKept && firstKept.type !== "session") {
+				entry.firstKeptEntryId = firstKept.id;
+			}
+			delete entry.firstKeptEntryIndex;
+		}
+	}
+
+	return entries;
 }
 
 function createMockUsage(input: number, output: number, cacheRead = 0, cacheWrite = 0): Usage {

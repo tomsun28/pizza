@@ -28,7 +28,7 @@ import { createToolRegistry } from "../intent/tool-adapter.js";
  * This is a bridge layer that allows interactive-mode to work with the new
  * event-sourced runtime while we gradually migrate away from AgentSession.
  *
- * Session operations (switch, new, fork, import) delegate to the legacy runtime.
+	 * Session operations (switch, new, fork) delegate to the legacy runtime.
  * Event-sourced features (timeline, projections, checkpoints) use the new runtime.
  */
 export class EventSourcedRuntimeHost {
@@ -79,10 +79,6 @@ export class EventSourcedRuntimeHost {
 
 	async fork(entryId: string, options?: any) {
 		return this.legacyRuntime.fork(entryId, options);
-	}
-
-	async importFromJsonl(inputPath: string, selectedCwd?: string) {
-		return this.legacyRuntime.importFromJsonl(inputPath, selectedCwd);
 	}
 
 	async dispose() {

@@ -1,25 +1,12 @@
-import { writeFileSync } from "node:fs";
-import { stat } from "node:fs/promises";
+import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { SessionHeader } from "../src/core/session-manager.js";
 import { SessionManager } from "../src/core/session-manager.js";
 import { initTheme } from "../src/modes/interactive/theme/theme.js";
 
-function createSessionFile(path: string): void {
-	const header: SessionHeader = {
-		type: "session",
-		id: "test-session",
-		version: 3,
-		timestamp: new Date(0).toISOString(),
-		cwd: "/tmp",
-	};
-	writeFileSync(path, `${JSON.stringify(header)}\n`, "utf8");
-
-	// SessionManager only persists once it has seen at least one assistant message.
-	// Add a minimal assistant entry so subsequent appends are persisted.
-	const mgr = SessionManager.open(path);
+function createSession(agentDir: string): SessionManager {
+	const mgr = SessionManager.create("/tmp", agentDir);
 	mgr.appendMessage({
 		role: "assistant",
 		content: [{ type: "text", text: "hi" }],
@@ -37,6 +24,7 @@ function createSessionFile(path: string): void {
 		stopReason: "stop",
 		timestamp: Date.now(),
 	});
+	return mgr;
 }
 
 describe("SessionInfo.modified", () => {
@@ -47,14 +35,9 @@ describe("SessionInfo.modified", () => {
 	});
 
 	it("uses last user/assistant message timestamp instead of file mtime", async () => {
-		const filePath = join(tmpdir(), `pi-session-${Date.now()}-modified.jsonl`);
-		createSessionFile(filePath);
-
-		const before = await stat(filePath);
-		// Ensure the file mtime can differ from our message timestamp even on coarse filesystems.
-		await new Promise((r) => setTimeout(r, 10));
-
-		const mgr = SessionManager.open(filePath);
+		const agentDir = join(tmpdir(), `pi-session-${Date.now()}-modified`);
+		mkdirSync(agentDir, { recursive: true });
+		const mgr = createSession(agentDir);
 		const msgTime = Date.now();
 		mgr.appendMessage({
 			role: "assistant",
@@ -74,10 +57,10 @@ describe("SessionInfo.modified", () => {
 			timestamp: msgTime,
 		});
 
-		const sessions = await SessionManager.list("/tmp", dirname(filePath));
-		const s = sessions.find((x) => x.path === filePath);
+		const sessions = await SessionManager.list("/tmp", agentDir);
+		const s = sessions.find((x) => x.path === mgr.getSessionFile());
 		expect(s).toBeDefined();
 		expect(s!.modified.getTime()).toBe(msgTime);
-		expect(s!.modified.getTime()).not.toBe(before.mtime.getTime());
+		rmSync(agentDir, { recursive: true, force: true });
 	});
 });

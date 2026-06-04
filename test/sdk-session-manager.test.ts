@@ -5,6 +5,7 @@ import { getModel } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createAgentSession } from "../src/core/sdk.js";
 import { SessionManager } from "../src/core/session-manager.js";
+import { deriveWorkspaceId, getWorkspaceDir } from "../src/core/event-store/workspace.js";
 
 describe("createAgentSession session manager defaults", () => {
 	let tempDir: string;
@@ -25,7 +26,7 @@ describe("createAgentSession session manager defaults", () => {
 		}
 	});
 
-	it("uses agentDir for the default persisted session path", async () => {
+	it("uses agentDir for the default persisted event workspace", async () => {
 		const model = getModel("anthropic", "claude-sonnet-4-5");
 		expect(model).toBeTruthy();
 
@@ -35,13 +36,13 @@ describe("createAgentSession session manager defaults", () => {
 			model: model!,
 		});
 
-		const safePath = `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
-		const expectedSessionDir = join(agentDir, "sessions", safePath);
+		const workspaceId = deriveWorkspaceId(cwd);
+		const expectedSessionDir = getWorkspaceDir(workspaceId, agentDir);
 		const sessionDir = session.sessionManager.getSessionDir();
-		const sessionFile = session.sessionManager.getSessionFile();
+		const sessionRef = session.sessionManager.getSessionFile();
 
 		expect(sessionDir).toBe(expectedSessionDir);
-		expect(sessionFile?.startsWith(`${expectedSessionDir}/`)).toBe(true);
+		expect(sessionRef?.startsWith(`event-session:${workspaceId}:`)).toBe(true);
 
 		session.dispose();
 	});

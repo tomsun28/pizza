@@ -1,6 +1,6 @@
 import type { AgentState } from "../agent/types.js";
-import { existsSync, readFileSync, writeFileSync } from "fs";
-import { basename, join } from "path";
+import { readFileSync, writeFileSync } from "fs";
+import { join } from "path";
 import { APP_NAME, getExportTemplateDir } from "../../config.js";
 import { getResolvedThemeColors, getThemeExportColors } from "../../modes/interactive/theme/theme.js";
 import type { ToolDefinition } from "../extensions/types.js";
@@ -36,6 +36,10 @@ export interface ExportOptions {
 	themeName?: string;
 	/** Optional tool renderer for custom tools */
 	toolRenderer?: ToolHtmlRenderer;
+}
+
+function sanitizeFileNameSegment(value: string): string {
+	return value.replace(/[^a-zA-Z0-9._-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || "session";
 }
 
 /** Parse a color string to RGB values. Supports hex (#RRGGBB) and rgb(r,g,b) formats. */
@@ -243,9 +247,6 @@ export async function exportSessionToHtml(
 	if (!sessionFile) {
 		throw new Error("Cannot export in-memory session to HTML");
 	}
-	if (!existsSync(sessionFile)) {
-		throw new Error("Nothing to export yet - start a conversation first");
-	}
 
 	const entries = sm.getEntries();
 
@@ -272,7 +273,7 @@ export async function exportSessionToHtml(
 
 	let outputPath = opts.outputPath;
 	if (!outputPath) {
-		const sessionBasename = basename(sessionFile, ".jsonl");
+		const sessionBasename = sanitizeFileNameSegment(sm.getSessionId() || sessionFile);
 		outputPath = `${APP_NAME}-session-${sessionBasename}.html`;
 	}
 
@@ -281,14 +282,14 @@ export async function exportSessionToHtml(
 }
 
 /**
- * Export session file to HTML (standalone, without AgentState).
- * Used by CLI for exporting arbitrary session files.
+ * Export a persisted event session to HTML (standalone, without AgentState).
+ * Used by CLI for exporting a session reference or exact session id.
  */
 export async function exportFromFile(inputPath: string, options?: ExportOptions | string): Promise<string> {
 	const opts: ExportOptions = typeof options === "string" ? { outputPath: options } : options || {};
 
-	if (!existsSync(inputPath)) {
-		throw new Error(`File not found: ${inputPath}`);
+	if (inputPath.includes("/") || inputPath.includes("\\") || inputPath.endsWith(".jsonl")) {
+		throw new Error("Legacy JSONL session export is no longer supported; pass an event session reference instead.");
 	}
 
 	const sm = SessionManager.open(inputPath);
@@ -305,7 +306,7 @@ export async function exportFromFile(inputPath: string, options?: ExportOptions 
 
 	let outputPath = opts.outputPath;
 	if (!outputPath) {
-		const inputBasename = basename(inputPath, ".jsonl");
+		const inputBasename = sanitizeFileNameSegment(sm.getSessionId() || inputPath);
 		outputPath = `${APP_NAME}-session-${inputBasename}.html`;
 	}
 

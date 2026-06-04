@@ -135,32 +135,30 @@ async function prepareInitialMessage(
 
 /** Result from resolving a session argument */
 type ResolvedSession =
-	| { type: "path"; path: string } // Direct file path
 	| { type: "local"; path: string } // Found in current project
 	| { type: "global"; path: string; cwd: string } // Found in different project
 	| { type: "not_found"; arg: string }; // Not found anywhere
 
 /**
- * Resolve a session argument to a file path.
- * If it looks like a path, use as-is. Otherwise try to match as session ID prefix.
+ * Resolve a session argument to an event-session reference.
+ * Accepts a full event-session ref or a session ID prefix.
  */
 async function resolveSessionPath(sessionArg: string, cwd: string, sessionDir?: string): Promise<ResolvedSession> {
-	// If it looks like a file path, use as-is
 	if (sessionArg.includes("/") || sessionArg.includes("\\") || sessionArg.endsWith(".jsonl")) {
-		return { type: "path", path: sessionArg };
+		return { type: "not_found", arg: `${sessionArg} (legacy JSONL paths are no longer supported)` };
 	}
 
 	// Try to match as session ID in current project first
 	const localSessions = await SessionManager.list(cwd, sessionDir);
-	const localMatches = localSessions.filter((s) => s.id.startsWith(sessionArg));
+	const localMatches = localSessions.filter((s) => s.id.startsWith(sessionArg) || s.path === sessionArg);
 
 	if (localMatches.length >= 1) {
 		return { type: "local", path: localMatches[0].path };
 	}
 
 	// Try global search across all projects
-	const allSessions = await SessionManager.listAll();
-	const globalMatches = allSessions.filter((s) => s.id.startsWith(sessionArg));
+	const allSessions = await SessionManager.listAll(undefined, sessionDir);
+	const globalMatches = allSessions.filter((s) => s.id.startsWith(sessionArg) || s.path === sessionArg);
 
 	if (globalMatches.length >= 1) {
 		const match = globalMatches[0];
@@ -225,7 +223,6 @@ async function createSessionManager(
 		const resolved = await resolveSessionPath(parsed.fork, cwd, sessionDir);
 
 		switch (resolved.type) {
-			case "path":
 			case "local":
 			case "global":
 				return forkSessionOrExit(resolved.path, cwd, sessionDir);
@@ -240,7 +237,6 @@ async function createSessionManager(
 		const resolved = await resolveSessionPath(parsed.session, cwd, sessionDir);
 
 		switch (resolved.type) {
-			case "path":
 			case "local":
 				return SessionManager.open(resolved.path, sessionDir);
 
@@ -264,9 +260,9 @@ async function createSessionManager(
 		initTheme(settingsManager.getTheme(), true);
 		try {
 			const selectedPath = await selectSession(
-				(onProgress) => SessionManager.list(cwd, sessionDir, onProgress),
-				SessionManager.listAll,
-			);
+					(onProgress) => SessionManager.list(cwd, sessionDir, onProgress),
+					(onProgress) => SessionManager.listAll(onProgress, sessionDir),
+				);
 			if (!selectedPath) {
 				console.log(chalk.dim("No session selected"));
 				process.exit(0);

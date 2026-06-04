@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync } from "fs";
+import { mkdirSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { describe, expect, it } from "vitest";
@@ -474,12 +474,8 @@ describe("createBranchedSession", () => {
 			session.appendMessage(assistantMsg("second answer"));
 
 			// Fork from the very first user message (no assistant in the branched path)
-			const newFile = session.createBranchedSession(id1);
-			expect(newFile).toBeDefined();
-
-			// The branched path has no assistant, so the file should not exist yet
-			// (deferred to _persist on first assistant, matching newSession() contract)
-			expect(existsSync(newFile!)).toBe(false);
+			const newRef = session.createBranchedSession(id1);
+			expect(newRef).toBeDefined();
 
 			// Simulate extension adding entry before assistant (like preset on turn_start)
 			session.appendCustomEntry("preset-state", { name: "plan" });
@@ -487,18 +483,8 @@ describe("createBranchedSession", () => {
 			// Now the assistant responds
 			session.appendMessage(assistantMsg("new answer"));
 
-			// File should now exist with exactly one header and no duplicate IDs
-			expect(existsSync(newFile!)).toBe(true);
-			const content = readFileSync(newFile!, "utf-8");
-			const lines = content.trim().split("\n").filter(Boolean);
-			const records = lines.map((line) => JSON.parse(line));
-
-			expect(records.filter((r) => r.type === "session")).toHaveLength(1);
-
-			const entryIds = records
-				.filter((r) => r.type !== "session")
-				.map((r) => r.id)
-				.filter((id): id is string => typeof id === "string");
+			const reopened = SessionManager.open(newRef!, tempDir);
+			const entryIds = reopened.getEntries().map((entry) => entry.id);
 			expect(new Set(entryIds).size).toBe(entryIds.length);
 		} finally {
 			rmSync(tempDir, { recursive: true, force: true });
@@ -517,15 +503,12 @@ describe("createBranchedSession", () => {
 			session.appendMessage(assistantMsg("second answer"));
 
 			// Fork including the assistant message
-			const newFile = session.createBranchedSession(id2);
-			expect(newFile).toBeDefined();
+			const newRef = session.createBranchedSession(id2);
+			expect(newRef).toBeDefined();
 
-			// Path includes an assistant, so file should be written immediately
-			expect(existsSync(newFile!)).toBe(true);
-			const content = readFileSync(newFile!, "utf-8");
-			const lines = content.trim().split("\n").filter(Boolean);
-			const records = lines.map((line) => JSON.parse(line));
-			expect(records.filter((r) => r.type === "session")).toHaveLength(1);
+			const reopened = SessionManager.open(newRef!, tempDir);
+			expect(reopened.getHeader()?.type).toBe("session");
+			expect(reopened.getEntries().map((entry) => entry.id)).toEqual([session.getEntries()[0]!.id, id2]);
 		} finally {
 			rmSync(tempDir, { recursive: true, force: true });
 		}

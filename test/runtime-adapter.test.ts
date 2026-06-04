@@ -170,12 +170,11 @@ describe("EventSourcedRuntimeHost", () => {
 			modelFallbackMessage: undefined,
 			eventStore: new SqliteEventStore("ws_test", join(cwd, "events.db")),
 			setRebindSession: () => {},
-			switchSession: async () => ({ cancelled: false }),
-			newSession: async () => ({ cancelled: false }),
-			fork: async () => ({ cancelled: false }),
-			importFromJsonl: async () => ({ cancelled: false }),
-			dispose: async () => {},
-		} as any;
+				switchSession: async () => ({ cancelled: false }),
+				newSession: async () => ({ cancelled: false }),
+				fork: async () => ({ cancelled: false }),
+				dispose: async () => {},
+			} as any;
 
 		const host = await createEventSourcedRuntimeHost({
 			legacyRuntime: mockRuntime,

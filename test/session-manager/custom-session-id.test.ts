@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -60,50 +60,31 @@ describe("SessionManager.newSession with custom id", () => {
 		expect(session.getHeader()!.id).toBe(session.getSessionId());
 	});
 
-	it("generates a UUIDv7 id when forking from another session file", () => {
+	it("generates a UUIDv7 id when forking from another event session", () => {
 		const tempDir = mkdtempSync(join(tmpdir(), "pi-session-manager-"));
-		const sourcePath = join(tempDir, "source.jsonl");
-		writeFileSync(
-			sourcePath,
-			`${[
-				JSON.stringify({
-					type: "session",
-					version: 3,
-					id: "legacy-session-id",
-					timestamp: new Date().toISOString(),
-					cwd: tempDir,
-				}),
-				JSON.stringify({
-					type: "message",
-					id: "entry-1",
-					parentId: null,
-					timestamp: new Date().toISOString(),
-					message: {
-						role: "assistant",
-						content: [{ type: "text", text: "hello" }],
-						api: "openai-responses",
-						provider: "openai",
-						model: "gpt-5.4",
-						usage: {
-							input: 0,
-							output: 0,
-							cacheRead: 0,
-							cacheWrite: 0,
-							totalTokens: 0,
-							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-						},
-						stopReason: "stop",
-						timestamp: Date.now(),
-					},
-				}),
-			].join("\n")}
-`,
-		);
+		const source = SessionManager.create(tempDir, tempDir);
+		source.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "hello" }],
+			api: "openai-responses",
+			provider: "openai",
+			model: "gpt-5.4",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		});
 
-		const forked = SessionManager.forkFrom(sourcePath, tempDir, tempDir);
+		const forked = SessionManager.forkFrom(source.getSessionFile()!, tempDir, tempDir);
 		const header = forked.getHeader();
 		expect(header).not.toBeNull();
 		expect(header!.id).toMatch(UUID_V7_RE);
-		expect(header!.parentSession).toBe(sourcePath);
+		expect(header!.parentSession).toBe(source.getSessionFile());
 	});
 });

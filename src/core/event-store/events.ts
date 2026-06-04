@@ -319,6 +319,16 @@ export interface SessionForkedEvent extends EventBase {
 	};
 }
 
+/** Legacy-compatible session tree entry stored in the event log. */
+export interface SessionEntryAppendedEvent extends EventBase {
+	type: "SESSION_ENTRY_APPENDED";
+	payload: {
+		session_id: string;
+		entry: unknown;
+		leaf_id?: string | null;
+	};
+}
+
 // ============================================================================
 // Compaction Events
 // ============================================================================
@@ -519,6 +529,7 @@ export type TypedEvent =
 	| SessionCreatedEvent
 	| SessionBoundaryInferredEvent
 	| SessionForkedEvent
+	| SessionEntryAppendedEvent
 	| CompactionStartEvent
 	| CompactionEndEvent
 	| CheckpointCreatedEvent
