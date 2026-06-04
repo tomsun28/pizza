@@ -35,8 +35,6 @@ export interface SettingsConfig {
 	autoResizeImages: boolean;
 	blockImages: boolean;
 	enableSkillCommands: boolean;
-	steeringMode: "all" | "one-at-a-time";
-	followUpMode: "all" | "one-at-a-time";
 	transport: Transport;
 	thinkingLevel: ThinkingLevel;
 	availableThinkingLevels: ThinkingLevel[];
@@ -61,8 +59,6 @@ export interface SettingsCallbacks {
 	onAutoResizeImagesChange: (enabled: boolean) => void;
 	onBlockImagesChange: (blocked: boolean) => void;
 	onEnableSkillCommandsChange: (enabled: boolean) => void;
-	onSteeringModeChange: (mode: "all" | "one-at-a-time") => void;
-	onFollowUpModeChange: (mode: "all" | "one-at-a-time") => void;
 	onTransportChange: (transport: Transport) => void;
 	onThinkingLevelChange: (level: ThinkingLevel) => void;
 	onThemeChange: (theme: string) => void;
@@ -165,22 +161,6 @@ export class SettingsSelectorComponent extends Container {
 				description: "Automatically compact context when it gets too large",
 				currentValue: config.autoCompact ? "true" : "false",
 				values: ["true", "false"],
-			},
-			{
-				id: "steering-mode",
-				label: "Steering mode",
-				description:
-					"Enter while streaming queues steering messages. 'one-at-a-time': deliver one, wait for response. 'all': deliver all at once.",
-				currentValue: config.steeringMode,
-				values: ["one-at-a-time", "all"],
-			},
-			{
-				id: "follow-up-mode",
-				label: "Follow-up mode",
-				description:
-					"Alt+Enter queues follow-up messages until agent stops. 'one-at-a-time': deliver one, wait for response. 'all': deliver all at once.",
-				currentValue: config.followUpMode,
-				values: ["one-at-a-time", "all"],
 			},
 			{
 				id: "transport",
@@ -398,12 +378,6 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "skill-commands":
 						callbacks.onEnableSkillCommandsChange(newValue === "true");
-						break;
-					case "steering-mode":
-						callbacks.onSteeringModeChange(newValue as "all" | "one-at-a-time");
-						break;
-					case "follow-up-mode":
-						callbacks.onFollowUpModeChange(newValue as "all" | "one-at-a-time");
 						break;
 					case "transport":
 						callbacks.onTransportChange(newValue as Transport);

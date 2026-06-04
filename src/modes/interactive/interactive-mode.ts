@@ -3449,8 +3449,6 @@ export class InteractiveMode {
 					autoResizeImages: this.settingsManager.getImageAutoResize(),
 					blockImages: this.settingsManager.getBlockImages(),
 					enableSkillCommands: this.settingsManager.getEnableSkillCommands(),
-					steeringMode: this.session.steeringMode,
-					followUpMode: this.session.followUpMode,
 					transport: this.settingsManager.getTransport(),
 					thinkingLevel: this.session.thinkingLevel,
 					availableThinkingLevels: this.session.getAvailableThinkingLevels(),
@@ -3497,12 +3495,6 @@ export class InteractiveMode {
 					onEnableSkillCommandsChange: (enabled) => {
 						this.settingsManager.setEnableSkillCommands(enabled);
 						this.setupAutocomplete(this.fdPath);
-					},
-					onSteeringModeChange: (mode) => {
-						this.session.setSteeringMode(mode);
-					},
-					onFollowUpModeChange: (mode) => {
-						this.session.setFollowUpMode(mode);
 					},
 					onTransportChange: (transport) => {
 						this.settingsManager.setTransport(transport);

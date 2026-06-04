@@ -302,7 +302,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			thinkingLevel,
 			tools: [],
 		},
-		convertToLlm: convertToLlmWithBlockImages,
 		streamFn: async (model, context, options) => {
 			const auth = await modelRegistry.getApiKeyAndHeaders(model);
 			if (!auth.ok) {
@@ -337,17 +336,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			});
 		},
 		sessionId: sessionManager.getSessionId(),
-		transformContext: async (messages) => {
-			const runner = extensionRunnerRef.current;
-			if (!runner) return messages;
-			return runner.emitContext(messages);
-		},
-		steeringMode: settingsManager.getSteeringMode(),
-		followUpMode: settingsManager.getFollowUpMode(),
 		transport: settingsManager.getTransport(),
 		thinkingBudgets: settingsManager.getThinkingBudgets(),
 		maxRetryDelayMs: settingsManager.getRetrySettings().maxDelayMs,
-		useEventSourcedRuntime: options.useEventSourcedRuntime ?? false,
 	});
 
 	// Restore messages if session has existing data

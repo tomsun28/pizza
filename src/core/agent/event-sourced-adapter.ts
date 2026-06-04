@@ -86,7 +86,7 @@ export function buildLlmClientFromStreamFn(
 			for await (const event of stream) {
 				switch (event.type) {
 					case "start":
-						onChunk?.({ kind: "text_start", contentIndex: 0 } as LLMChunk);
+						// Stream started - wait for actual content events to emit chunks
 						break;
 					case "text_start":
 						onChunk?.({ kind: "text_start", contentIndex: event.contentIndex } as LLMChunk);
@@ -354,6 +354,7 @@ export class EventStoreToAgentEventTranslator {
 			}
 
 			case "AGENT_MESSAGE_END": {
+				const hadEmittedMessageStart = this._hasEmittedMessageStart;
 				this._hasEmittedMessageStart = false;
 				this._partialText = "";
 				this._partialThinking = "";
@@ -362,7 +363,10 @@ export class EventStoreToAgentEventTranslator {
 				const msg = eventToMessage(event);
 				if (msg) {
 					this._lastMessageEvent = msg;
-					out.push({ type: "message_start", message: msg });
+					// Only emit message_start if it wasn't already emitted during streaming
+					if (!hadEmittedMessageStart) {
+						out.push({ type: "message_start", message: msg });
+					}
 					out.push({ type: "message_end", message: msg });
 				}
 				break;

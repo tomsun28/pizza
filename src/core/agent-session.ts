@@ -832,16 +832,6 @@ export class AgentSession {
 		return this.agent.state.messages;
 	}
 
-	/** Current steering mode */
-	get steeringMode(): "all" | "one-at-a-time" {
-		return this.agent.steeringMode;
-	}
-
-	/** Current follow-up mode */
-	get followUpMode(): "all" | "one-at-a-time" {
-		return this.agent.followUpMode;
-	}
-
 	/** Current session file path, or undefined if sessions are disabled */
 	get sessionFile(): string | undefined {
 		return this.sessionManager.getSessionFile();
@@ -1064,9 +1054,16 @@ export class AgentSession {
 				this._baseSystemPrompt,
 				this._baseSystemPromptOptions,
 			);
-			// Add all custom messages from extensions
+			// Add all custom messages from extensions and merge their content into user message
 			if (result?.messages) {
 				for (const msg of result.messages) {
+					// Merge extension message content into user message content (for LLM context)
+					if (typeof msg.content === "string") {
+						userContent.push({ type: "text", text: msg.content } as TextContent);
+					} else if (Array.isArray(msg.content)) {
+						userContent.push(...(msg.content as any));
+					}
+					// Add as custom message (for UI display)
 					messages.push({
 						role: "custom",
 						customType: msg.customType,
@@ -1584,24 +1581,6 @@ export class AgentSession {
 	// =========================================================================
 	// Queue Mode Management
 	// =========================================================================
-
-	/**
-	 * Set steering message mode.
-	 * Saves to settings.
-	 */
-	setSteeringMode(mode: "all" | "one-at-a-time"): void {
-		this.agent.steeringMode = mode;
-		this.settingsManager.setSteeringMode(mode);
-	}
-
-	/**
-	 * Set follow-up message mode.
-	 * Saves to settings.
-	 */
-	setFollowUpMode(mode: "all" | "one-at-a-time"): void {
-		this.agent.followUpMode = mode;
-		this.settingsManager.setFollowUpMode(mode);
-	}
 
 	// =========================================================================
 	// Compaction

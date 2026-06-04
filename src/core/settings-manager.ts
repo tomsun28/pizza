@@ -68,8 +68,6 @@ export interface Settings {
 	defaultModel?: string;
 	defaultThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 	transport?: TransportSetting; // default: "sse"
-	steeringMode?: "all" | "one-at-a-time";
-	followUpMode?: "all" | "one-at-a-time";
 	theme?: string;
 	compaction?: CompactionSettings;
 	branchSummary?: BranchSummarySettings;
@@ -318,12 +316,6 @@ export class SettingsManager {
 
 	/** Migrate old settings format to new format */
 	private static migrateSettings(settings: Record<string, unknown>): Settings {
-		// Migrate queueMode -> steeringMode
-		if ("queueMode" in settings && !("steeringMode" in settings)) {
-			settings.steeringMode = settings.queueMode;
-			delete settings.queueMode;
-		}
-
 		// Migrate legacy websockets boolean -> transport enum
 		if (!("transport" in settings) && typeof settings.websockets === "boolean") {
 			settings.transport = settings.websockets ? "websocket" : "sse";
@@ -574,26 +566,6 @@ export class SettingsManager {
 		this.globalSettings.defaultModel = modelId;
 		this.markModified("defaultProvider");
 		this.markModified("defaultModel");
-		this.save();
-	}
-
-	getSteeringMode(): "all" | "one-at-a-time" {
-		return this.settings.steeringMode || "one-at-a-time";
-	}
-
-	setSteeringMode(mode: "all" | "one-at-a-time"): void {
-		this.globalSettings.steeringMode = mode;
-		this.markModified("steeringMode");
-		this.save();
-	}
-
-	getFollowUpMode(): "all" | "one-at-a-time" {
-		return this.settings.followUpMode || "one-at-a-time";
-	}
-
-	setFollowUpMode(mode: "all" | "one-at-a-time"): void {
-		this.globalSettings.followUpMode = mode;
-		this.markModified("followUpMode");
 		this.save();
 	}
 

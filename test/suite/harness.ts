@@ -12,7 +12,6 @@ import { registerFauxProvider } from "@mariozechner/pi-ai";
 import { AgentSession, type AgentSessionEvent } from "../../src/core/agent-session.js";
 import { AuthStorage } from "../../src/core/auth-storage.js";
 import type { ExtensionRunner } from "../../src/core/extensions/index.js";
-import { convertToLlm } from "../../src/core/messages.js";
 import { ModelRegistry } from "../../src/core/model-registry.js";
 import { SessionManager } from "../../src/core/session-manager.js";
 import type { Settings } from "../../src/core/settings-manager.js";
@@ -63,8 +62,6 @@ export interface HarnessOptions {
 	resourceLoader?: ResourceLoader;
 	extensionFactories?: Array<ExtensionFactory | CreateTestExtensionsResultInput>;
 	withConfiguredAuth?: boolean;
-	/** Experimental: drive the underlying Agent through EventSourcedRuntime. */
-	useEventSourcedRuntime?: boolean;
 }
 
 export interface Harness {
@@ -136,8 +133,6 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 			systemPrompt: options.systemPrompt ?? "You are a test assistant.",
 			tools: [],
 		},
-		convertToLlm,
-		useEventSourcedRuntime: options.useEventSourcedRuntime ?? false,
 		onPayload: async (payload) => {
 			const runner = extensionRunnerRef.current;
 			if (!runner?.hasHandlers("before_provider_request")) {
@@ -155,11 +150,6 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 				status: response.status,
 				headers: response.headers,
 			});
-		},
-		transformContext: async (messages: AgentMessage[]) => {
-			const runner = extensionRunnerRef.current;
-			if (!runner) return messages;
-			return runner.emitContext(messages);
 		},
 	});
 	const extensionsResult = options.extensionFactories

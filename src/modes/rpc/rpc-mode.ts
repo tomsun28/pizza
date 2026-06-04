@@ -421,8 +421,6 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 					thinkingLevel: session.thinkingLevel,
 					isStreaming: session.isStreaming,
 					isCompacting: session.isCompacting,
-					steeringMode: session.steeringMode,
-					followUpMode: session.followUpMode,
 					sessionFile: session.sessionFile,
 					sessionId: session.sessionId,
 					sessionName: session.sessionName,
@@ -475,20 +473,6 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 					return success(id, "cycle_thinking_level", null);
 				}
 				return success(id, "cycle_thinking_level", { level });
-			}
-
-			// =================================================================
-			// Queue Modes
-			// =================================================================
-
-			case "set_steering_mode": {
-				session.setSteeringMode(command.mode);
-				return success(id, "set_steering_mode");
-			}
-
-			case "set_follow_up_mode": {
-				session.setFollowUpMode(command.mode);
-				return success(id, "set_follow_up_mode");
 			}
 
 			// =================================================================

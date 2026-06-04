@@ -50,9 +50,18 @@ export function eventToMessage(event: EventBase): AgentMessage | null {
 	switch (event.type) {
 		case "USER_MESSAGE": {
 			const payload = event.payload as UserMessageEvent["payload"];
+			// Merge images into content array if present
+			let content: string | (TextContent | ImageContent)[] = payload.content as string | (TextContent | ImageContent)[];
+			if (payload.images && payload.images.length > 0) {
+				if (typeof content === "string") {
+					content = [{ type: "text", text: content } as TextContent, ...(payload.images as any)];
+				} else {
+					content = [...content, ...(payload.images as any)];
+				}
+			}
 			return {
 				role: "user",
-				content: payload.content as string | (TextContent | ImageContent)[],
+				content,
 				timestamp: event.timestamp,
 			};
 		}

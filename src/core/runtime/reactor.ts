@@ -472,15 +472,7 @@ export class Reactor {
 			caused_by: causedBy,
 		});
 
-		// Emit turn end
-		this._emit({
-			actor_id: "coder_agent",
-			type: "AGENT_TURN_END",
-			payload: { tool_calls_count: toolCalls.length },
-			caused_by: msgEnd.event_id,
-		});
-
-		// Emit thinking end
+		// Emit thinking end (turn_end is now emitted in _onAgentMessageEnd)
 		this._emit({
 			actor_id: "coder_agent",
 			type: "AGENT_THINKING_END",
@@ -494,7 +486,22 @@ export class Reactor {
 	// ─── AGENT_MESSAGE_END ──────────────────────────────────────────────────
 
 	private async _onAgentMessageEnd(event: EventBase): Promise<void> {
+		const payload = event.payload as {
+			content: unknown[];
+			stop_reason: string;
+			error_message?: string;
+		};
+
+		const toolCalls = extractToolCalls(payload.content as Parameters<typeof extractToolCalls>[0]);
+
 		if (this._shouldInterrupt()) {
+			// Emit turn end before completion when interrupted
+			this._emit({
+				actor_id: "coder_agent",
+				type: "AGENT_TURN_END",
+				payload: { tool_calls_count: toolCalls.length },
+				caused_by: event.event_id,
+			});
 			this._emit({
 				actor_id: "coder_agent",
 				type: "AGENT_TURN_COMPLETED",
@@ -504,16 +511,14 @@ export class Reactor {
 			return;
 		}
 
-		const payload = event.payload as {
-			content: unknown[];
-			stop_reason: string;
-			error_message?: string;
-		};
-
-		const toolCalls = extractToolCalls(payload.content as Parameters<typeof extractToolCalls>[0]);
-
 		if (toolCalls.length === 0 || payload.stop_reason !== "tool_use") {
-			// No tool calls — turn is complete
+			// No tool calls — emit turn end and complete the turn
+			this._emit({
+				actor_id: "coder_agent",
+				type: "AGENT_TURN_END",
+				payload: { tool_calls_count: 0 },
+				caused_by: event.event_id,
+			});
 			this._emit({
 				actor_id: "coder_agent",
 				type: "AGENT_TURN_COMPLETED",
@@ -719,7 +724,16 @@ export class Reactor {
 	// ─── TOOL_RESULTS_AGGREGATED ────────────────────────────────────────────
 
 	private async _onToolResultsAggregated(event: EventBase): Promise<void> {
+		const payload = event.payload as { tool_call_count: number; any_error: boolean };
+
 		if (this._shouldInterrupt()) {
+			// Emit turn end before completion when interrupted
+			this._emit({
+				actor_id: "coder_agent",
+				type: "AGENT_TURN_END",
+				payload: { tool_calls_count: payload.tool_call_count },
+				caused_by: event.event_id,
+			});
 			this._emit({
 				actor_id: "coder_agent",
 				type: "AGENT_TURN_COMPLETED",
@@ -728,6 +742,14 @@ export class Reactor {
 			});
 			return;
 		}
+
+		// Emit turn end to signal completion of this tool-call turn
+		this._emit({
+			actor_id: "coder_agent",
+			type: "AGENT_TURN_END",
+			payload: { tool_calls_count: payload.tool_call_count },
+			caused_by: event.event_id,
+		});
 
 		// Kick off the next turn with the tool results
 		this._emit({
@@ -784,6 +806,13 @@ export class Reactor {
 		const attempt = this._attemptCount(event.event_id);
 
 		if (!payload.retryable || attempt >= this.retryPolicy.maxAttempts) {
+			// Emit turn end before completion
+			this._emit({
+				actor_id: "coder_agent",
+				type: "AGENT_TURN_END",
+				payload: { tool_calls_count: 0 },
+				caused_by: event.event_id,
+			});
 			this._emit({
 				actor_id: "coder_agent",
 				type: "AGENT_TURN_COMPLETED",
@@ -802,6 +831,13 @@ export class Reactor {
 		const nextAttempt = attempt + 1;
 		const delayMs = this.retryPolicy.nextDelayMs(nextAttempt);
 		if (delayMs === null) {
+			// Emit turn end before completion
+			this._emit({
+				actor_id: "coder_agent",
+				type: "AGENT_TURN_END",
+				payload: { tool_calls_count: 0 },
+				caused_by: event.event_id,
+			});
 			this._emit({
 				actor_id: "coder_agent",
 				type: "AGENT_TURN_COMPLETED",
