@@ -21,6 +21,7 @@ import { IntentClassifier } from "../intent/classifier.js";
 import { Reactor } from "./reactor.js";
 import type { CheckpointRef, RuntimeAdapter, RuntimeStatus } from "./types.js";
 import { LocalRuntimeAdapter } from "./local-runtime.js";
+import { CompactionEngine, type CompactionEngineSettings } from "../compaction/compaction-engine.js";
 
 // ============================================================================
 // Runtime Configuration
@@ -64,8 +65,17 @@ export interface EventSourcedRuntimeConfig {
 	contextBudget?: number;
 	/** Retry policy (default: DefaultRetryPolicy). */
 	retryPolicy?: import("./policies.js").RetryPolicy;
+	/** Whether assistant messages that complete with stop_reason=error should be retried by the reactor. */
+	retryAssistantErrorCompletions?: boolean;
 	/** Compaction policy (default: NoopCompactionPolicy). */
 	compactionPolicy?: import("./policies.js").CompactionPolicy;
+	/** Settings for the default event-sourced compaction engine. Ignored when compactionPolicy is provided. */
+	compactionEngineSettings?: CompactionEngineSettings;
+}
+
+export interface RuntimeCompactOptions {
+	reason?: "manual" | "threshold" | "overflow";
+	token_count?: number;
 }
 
 // ============================================================================
@@ -144,31 +154,16 @@ export class EventSourcedRuntime {
 	 */
 	async prompt(text: string, images?: ImageContent[]): Promise<void> {
 		if (this._isProcessing) {
-			// Reactor is already running — just emit USER_INTERRUPT so the running
-			// reactor sees the new input and steers.
-			this.store.append({
-				actor_id: "user",
-				type: "USER_INTERRUPT",
-				payload: { content: text },
-			});
-			return;
+			throw new Error(
+				"EventSourcedRuntime is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion.",
+			);
 		}
 
 		this._isProcessing = true;
 
 		try {
 			// Lazy-create the reactor and start it. Reactor lives only as long as the prompt cycle.
-			const projection = this.sessionManager?.getActiveSession() ?? (() => {
-				// Fallback: create a minimal SessionProjection if no SessionManager
-				const desc: SessionDescriptor = {
-					session_id: "default",
-					workspace_id: this.store.workspace_id,
-					event_range: { start_event_id: "ORIGIN", end_event_id: "HEAD" },
-					created_by: "user_explicit",
-					created_at: Date.now(),
-				};
-				return new SessionProjection(this.store, desc);
-			})();
+			const projection = this.getProjection();
 
 			this.reactor = new Reactor({
 				store: this.store,
@@ -183,7 +178,17 @@ export class EventSourcedRuntime {
 				contextBudget: this.config.contextBudget ?? 128000,
 				tools: this.config.tools,
 				retryPolicy: this.config.retryPolicy,
-				compactionPolicy: this.config.compactionPolicy,
+				retryAssistantErrorCompletions: this.config.retryAssistantErrorCompletions,
+				compactionPolicy: this.config.compactionPolicy ?? new CompactionEngine({
+					store: this.store,
+					projection,
+					llmClient: this.config.llmClient,
+					model: this.config.model,
+					settings: {
+						contextWindow: this.config.contextBudget ?? 128000,
+						...this.config.compactionEngineSettings,
+					},
+				}),
 			});
 
 			await this.reactor.start();
@@ -206,6 +211,7 @@ export class EventSourcedRuntime {
 			this.reactor?.stop();
 			this.reactor = null;
 			this._isProcessing = false;
+			this._resolveIdleWaiters();
 		}
 	}
 
@@ -215,6 +221,26 @@ export class EventSourcedRuntime {
 	get isRunning(): boolean {
 		return this._isProcessing;
 	}
+
+	get signal(): AbortSignal | undefined {
+		return this.reactor?.signal;
+	}
+
+	/**
+	 * Resolve when the current prompt cycle is fully settled.
+	 */
+	waitForIdle(): Promise<void> {
+		if (!this._isProcessing) return Promise.resolve();
+		return new Promise((resolve) => {
+			this._turnCompletionWaiters.push(resolve);
+		});
+	}
+
+	private _resolveIdleWaiters(): void {
+		const waiters = this._turnCompletionWaiters.splice(0);
+		for (const resolve of waiters) resolve();
+	}
+
 	/**
 	 * Interrupt current execution.
 	 *
@@ -232,9 +258,6 @@ export class EventSourcedRuntime {
 			payload: {},
 		});
 		this.reactor?.interrupt();
-		// Clear the follow-up-queued flag so _waitUntilSettled doesn't wait for
-		// a next turn that will never start (the reactor discards the queue on abort).
-		this._followUpQueuedInTurn = false;
 		// The _waitUntilSettled subscription will resolve when AGENT_TURN_COMPLETED fires.
 		// But if no turn is running (or the turn fails before starting), we resolve immediately.
 		if (!this._isProcessing && this._resolveSettled) {
@@ -247,6 +270,14 @@ export class EventSourcedRuntime {
 	 * as a follow-up after the current turn settles.
 	 */
 	steer(text: string, images?: ImageContent[]): void {
+		if (!this._isProcessing) {
+			this.store.append({
+				actor_id: "user",
+				type: "USER_MESSAGE",
+				payload: { content: text, images },
+			});
+			return;
+		}
 		this.store.append({
 			actor_id: "user",
 			type: "USER_INTERRUPT",
@@ -255,18 +286,10 @@ export class EventSourcedRuntime {
 	}
 
 	/**
-	 * Tracks whether a follow-up was queued during a settled turn.
-	 * _nextStep() sets this to true when it processes a queued follow-up,
-	 * so _waitUntilSettled() knows to wait for the next turn.
-	 */
-	private _followUpQueuedInTurn = false;
-
-	/**
 	 * Queue a follow-up message — delivered after the current turn naturally completes.
 	 * If the runtime is not processing, queues it for the next prompt.
 	 */
 	followUp(text: string, images?: ImageContent[]): void {
-		this._followUpQueuedInTurn = true;
 		this.store.append({
 			actor_id: "user",
 			type: "USER_FOLLOWUP_QUEUED",
@@ -275,11 +298,100 @@ export class EventSourcedRuntime {
 	}
 
 	/**
+	 * Request context compaction. The active reactor handles this immediately when
+	 * running; otherwise the request is recorded for the event stream.
+	 */
+	compact(options?: RuntimeCompactOptions): void {
+		this.store.append({
+			actor_id: "user",
+			type: "COMPACTION_REQUESTED",
+			payload: {
+				reason: options?.reason ?? "manual",
+				token_count: options?.token_count ?? 0,
+			},
+		});
+	}
+
+	setModel(provider: string, modelId: string): void {
+		const previous_provider = this.config.model.provider;
+		const previous_model_id = this.config.model.model_id;
+		this.config.model.provider = provider;
+		this.config.model.model_id = modelId;
+		this.store.append({
+			actor_id: "user",
+			type: "MODEL_CHANGED",
+			payload: {
+				provider,
+				model_id: modelId,
+				previous_provider,
+				previous_model_id,
+			},
+		});
+	}
+
+	getModel(): ModelConfig {
+		return { ...this.config.model };
+	}
+
+	setThinkingLevel(level: string): void {
+		const previous_level = this.config.model.thinking_level;
+		this.config.model.thinking_level = level;
+		this.store.append({
+			actor_id: "user",
+			type: "THINKING_LEVEL_CHANGED",
+			payload: { level, previous_level },
+		});
+	}
+
+	getThinkingLevel(): string | undefined {
+		return this.config.model.thinking_level;
+	}
+
+	getProjection(): SessionProjection {
+		return this.sessionManager?.getActiveSession() ?? this._createDefaultProjection();
+	}
+
+	getTools(): ToolDefinition[] {
+		return [...this.config.tools];
+	}
+
+	setTools(tools: ToolDefinition[]): void {
+		this.config.tools.splice(0, this.config.tools.length, ...tools);
+		this.store.append({
+			actor_id: "user",
+			type: "USER_CONFIG_CHANGE",
+			payload: { key: "tools", old_value: undefined, new_value: tools.map((tool) => tool.name) },
+		});
+	}
+
+	getSystemPrompt(): string {
+		return this.config.systemPrompt;
+	}
+
+	setSystemPrompt(prompt: string): void {
+		const old_value = this.config.systemPrompt;
+		this.config.systemPrompt = prompt;
+		this.store.append({
+			actor_id: "user",
+			type: "USER_CONFIG_CHANGE",
+			payload: { key: "systemPrompt", old_value, new_value: prompt },
+		});
+	}
+
+	private _createDefaultProjection(): SessionProjection {
+		const desc: SessionDescriptor = {
+			session_id: "default",
+			workspace_id: this.store.workspace_id,
+			event_range: { start_event_id: "ORIGIN", end_event_id: "HEAD" },
+			created_by: "user_explicit",
+			created_at: Date.now(),
+		};
+		return new SessionProjection(this.store, desc);
+	}
+
+	/**
 	 * Wait until the reactor has settled — i.e. an AGENT_TURN_COMPLETED fires AND
 	 * no further USER_MESSAGE has been appended in the same tick (e.g. by follow-up draining).
-	 * Also waits for another turn if a follow-up was consumed in the current turn
-	 * (detected via _followUpQueuedInTurn flag, which _nextStep() sets when it processes
-	 * a queued follow-up vs. a newly-appended one).
 	 */
 	private _waitUntilSettled(): Promise<void> {
 		return new Promise<void>((resolve) => {
@@ -293,12 +405,8 @@ export class EventSourcedRuntime {
 						pendingCheck = false;
 						const followUpsRemaining = this.reactor?.pendingFollowUpCount ?? 0;
 						if (followUpsRemaining > 0) return;
-						// Detect whether a follow-up was consumed in the current turn by
-						// checking the flag _nextStep sets when processing a queued follow-up.
-						if (this._followUpQueuedInTurn) {
-							this._followUpQueuedInTurn = false;
-							return; // Wait for next turn
-						}
+						const retriesRemaining = this.reactor?.pendingRetryCount ?? 0;
+						if (retriesRemaining > 0) return;
 						const lastMsg = this.store.query({ types: ["USER_MESSAGE"], reverse: true, limit: 1 })[0];
 						const lastCompleted = this.store.query({
 							types: ["AGENT_TURN_COMPLETED"],
@@ -468,5 +576,8 @@ export function createEventSourcedRuntime(
 		model: config.model,
 		tools: config.tools,
 		contextBudget: config.contextBudget,
+		retryPolicy: config.retryPolicy,
+		compactionPolicy: config.compactionPolicy,
+		compactionEngineSettings: config.compactionEngineSettings,
 	});
 }

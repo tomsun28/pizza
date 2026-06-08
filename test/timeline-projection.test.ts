@@ -108,6 +108,20 @@ describe("TimelineProjection", () => {
 		expect(entries[0].summary).toBe("modify src/main.ts");
 	});
 
+	it("includes nested file mutation payloads", () => {
+		store.append({
+			actor_id: "runtime",
+			type: "FILE_MUTATION_APPLIED",
+			payload: { mutation: { path: "README.md", operation: "create" } },
+		});
+
+		const entries = timeline.query();
+		expect(entries).toHaveLength(1);
+		expect(entries[0].kind).toBe("file_mutation");
+		expect(entries[0].summary).toBe("create README.md");
+		expect(entries[0].metadata?.path).toBe("README.md");
+	});
+
 	it("includes goal events", () => {
 		store.append({
 			actor_id: "user",
@@ -190,5 +204,25 @@ describe("TimelineProjection", () => {
 		expect(entries).toHaveLength(1);
 		expect(entries[0].kind).toBe("error");
 		expect(entries[0].summary).toBe("LLM rate limited");
+	});
+
+	it("includes agent errors and aborted compactions", () => {
+		store.append({
+			actor_id: "coder_agent",
+			type: "AGENT_ERROR",
+			payload: { error: "Malformed provider response" },
+		});
+		store.append({
+			actor_id: "compactor",
+			type: "COMPACTION_ABORTED",
+			payload: { message: "User cancelled" },
+		});
+
+		const entries = timeline.query();
+		expect(entries).toHaveLength(2);
+		expect(entries[0].kind).toBe("error");
+		expect(entries[0].summary).toBe("Malformed provider response");
+		expect(entries[1].kind).toBe("compaction");
+		expect(entries[1].summary).toBe("Context compaction aborted: User cancelled");
 	});
 });

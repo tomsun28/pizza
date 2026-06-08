@@ -1,0 +1,297 @@
+/**
+ * Event-backed session context for extensions.
+ *
+ * This keeps the read-only shape extensions already use while sourcing data
+ * from EventStore and SessionProjection instead of the legacy JSONL manager.
+ */
+
+import type { AgentMessage } from "../agent/types.js";
+import type { EventBase } from "../event-store/types.js";
+import type { EventStore, SubscribeOptions } from "../event-store/store.js";
+import { eventToMessage } from "../projection/event-to-message.js";
+import type { BuildContextOptions, BuiltContext } from "../projection/types.js";
+import type { SessionProjection } from "../projection/session-projection.js";
+import type {
+	BranchSummaryEntry,
+	CompactionEntry,
+	CustomMessageEntry,
+	ModelChangeEntry,
+	ReadonlySessionManager,
+	SessionEntry,
+	SessionHeader,
+	SessionInfoEntry,
+	SessionMessageEntry,
+	SessionTreeNode,
+	ThinkingLevelChangeEntry,
+} from "../session-manager.js";
+
+export interface ExtensionSessionManager extends ReadonlySessionManager {
+	/** Present when the session view is backed by EventStore. */
+	readonly eventStore?: EventStore;
+	/** Present when the session view is backed by a SessionProjection. */
+	readonly projection?: SessionProjection;
+	buildContext?: (options?: BuildContextOptions) => BuiltContext;
+	subscribe?: (listener: (event: EventBase) => void, options?: SubscribeOptions) => () => void;
+}
+
+export interface EventStoreExtensionSessionManagerOptions {
+	store: EventStore;
+	projection: SessionProjection;
+	cwd: string;
+	sessionDir?: string;
+	sessionFile?: string;
+}
+
+export class EventStoreExtensionSessionManager implements ExtensionSessionManager {
+	readonly eventStore: EventStore;
+	readonly projection: SessionProjection;
+	private cwd: string;
+	private sessionDir: string;
+	private sessionFile: string;
+
+	constructor(options: EventStoreExtensionSessionManagerOptions) {
+		this.eventStore = options.store;
+		this.projection = options.projection;
+		this.cwd = options.cwd;
+		const descriptor = options.projection.getDescriptor();
+		this.sessionDir = options.sessionDir ?? options.cwd;
+		this.sessionFile = options.sessionFile ?? `event-session:${descriptor.session_id}`;
+	}
+
+	getCwd(): string {
+		return this.cwd;
+	}
+
+	getSessionDir(): string {
+		return this.sessionDir;
+	}
+
+	getSessionId(): string {
+		return this.projection.getDescriptor().session_id;
+	}
+
+	getSessionFile(): string {
+		return this.sessionFile;
+	}
+
+	getLeafId(): string {
+		return this.getLeafEntry()?.id ?? this.projection.getDescriptor().event_range.start_event_id;
+	}
+
+	getLeafEntry(): SessionEntry | undefined {
+		return this.getEntries().at(-1);
+	}
+
+	getEntry(entryId: string): SessionEntry | undefined {
+		return this.getEntries().find((entry) => entry.id === entryId);
+	}
+
+	getLabel(entryId: string): string | undefined {
+		let label: string | undefined;
+		for (const entry of this.getEntries()) {
+			if (entry.type === "label" && entry.targetId === entryId) {
+				label = entry.label;
+			}
+		}
+		return label;
+	}
+
+	getBranch(): SessionEntry[] {
+		return this.getEntries();
+	}
+
+	getHeader(): SessionHeader {
+		const descriptor = this.projection.getDescriptor();
+		return {
+			type: "session",
+			id: descriptor.session_id,
+			timestamp: new Date(descriptor.created_at).toISOString(),
+			cwd: this.cwd,
+			parentSession: descriptor.parent_session_id,
+		};
+	}
+
+	getEntries(): SessionEntry[] {
+		return this.getSessionEvents()
+			.map((event) => this.eventToEntry(event))
+			.filter((entry): entry is SessionEntry => entry !== undefined);
+	}
+
+	getTree(): SessionTreeNode[] {
+		const nodes = new Map<string, SessionTreeNode>();
+		const roots: SessionTreeNode[] = [];
+
+		for (const entry of this.getEntries()) {
+			const node: SessionTreeNode = { entry, children: [] };
+			nodes.set(entry.id, node);
+
+			if (entry.parentId && nodes.has(entry.parentId)) {
+				nodes.get(entry.parentId)!.children.push(node);
+			} else {
+				roots.push(node);
+			}
+		}
+
+		return roots;
+	}
+
+	getSessionName(): string | undefined {
+		let name = this.projection.getDescriptor().name;
+		for (const entry of this.getEntries()) {
+			if (entry.type === "session_info") {
+				name = entry.name;
+			}
+		}
+		return name;
+	}
+
+	buildContext(options?: BuildContextOptions): BuiltContext {
+		return this.projection.buildContext(options);
+	}
+
+	subscribe(listener: (event: EventBase) => void, options?: SubscribeOptions): () => void {
+		return this.eventStore.subscribe(listener, options);
+	}
+
+	private getSessionEvents(): EventBase[] {
+		const descriptor = this.projection.getDescriptor();
+		return this.eventStore.query({
+			after: descriptor.event_range.start_event_id === "ORIGIN" ? undefined : descriptor.event_range.start_event_id,
+			before: descriptor.event_range.end_event_id === "HEAD" ? undefined : descriptor.event_range.end_event_id,
+			reverse: false,
+		});
+	}
+
+	private eventToEntry(event: EventBase): SessionEntry | undefined {
+		if (event.type === "SESSION_ENTRY_APPENDED") {
+			const payload = event.payload as { entry?: unknown };
+			if (this.isSessionEntry(payload.entry)) return payload.entry;
+		}
+
+		if (event.type === "MODEL_CHANGED") {
+			const payload = event.payload as { provider: string; model_id: string };
+			const entry: ModelChangeEntry = {
+				...this.baseEntry(event),
+				type: "model_change",
+				provider: payload.provider,
+				modelId: payload.model_id,
+			};
+			return entry;
+		}
+
+		if (event.type === "THINKING_LEVEL_CHANGED") {
+			const payload = event.payload as { level: string };
+			const entry: ThinkingLevelChangeEntry = {
+				...this.baseEntry(event),
+				type: "thinking_level_change",
+				thinkingLevel: payload.level,
+			};
+			return entry;
+		}
+
+		if (event.type === "COMPACTION_END") {
+			const payload = event.payload as { summary: string; first_kept_event_id: string; tokens_before: number };
+			const entry: CompactionEntry = {
+				...this.baseEntry(event),
+				type: "compaction",
+				summary: payload.summary,
+				firstKeptEntryId: payload.first_kept_event_id,
+				tokensBefore: payload.tokens_before,
+			};
+			return entry;
+		}
+
+		if (event.type === "BRANCH_SUMMARY") {
+			const payload = event.payload as { summary: string; from_id?: string };
+			const entry: BranchSummaryEntry = {
+				...this.baseEntry(event),
+				type: "branch_summary",
+				fromId: payload.from_id ?? event.caused_by ?? event.event_id,
+				summary: payload.summary,
+			};
+			return entry;
+		}
+
+		if (event.type === "CUSTOM_MESSAGE") {
+			const payload = event.payload as {
+				kind: string;
+				data: unknown;
+				display?: boolean | string;
+			};
+			const entry: CustomMessageEntry = {
+				...this.baseEntry(event),
+				type: "custom_message",
+				customType: payload.kind,
+				content: typeof payload.data === "string" ? payload.data : JSON.stringify(payload.data),
+				details: payload.data,
+				display: payload.display !== false,
+			};
+			return entry;
+		}
+
+		const message = eventToMessage(event);
+		if (!message) return undefined;
+		return this.messageToEntry(event, message);
+	}
+
+	private messageToEntry(event: EventBase, message: AgentMessage): SessionEntry | undefined {
+		if (message.role === "compactionSummary") {
+			const entry: CompactionEntry = {
+				...this.baseEntry(event),
+				type: "compaction",
+				summary: message.summary,
+				firstKeptEntryId: event.event_id,
+				tokensBefore: message.tokensBefore,
+			};
+			return entry;
+		}
+
+		if (message.role === "branchSummary") {
+			const entry: BranchSummaryEntry = {
+				...this.baseEntry(event),
+				type: "branch_summary",
+				fromId: message.fromId ?? event.caused_by ?? event.event_id,
+				summary: message.summary,
+			};
+			return entry;
+		}
+
+		if (message.role === "custom") {
+			const entry: CustomMessageEntry = {
+				...this.baseEntry(event),
+				type: "custom_message",
+				customType: message.customType,
+				content: message.content,
+				details: message.details,
+				display: message.display !== false,
+			};
+			return entry;
+		}
+
+		const entry: SessionMessageEntry = {
+			...this.baseEntry(event),
+			type: "message",
+			message,
+		};
+		return entry;
+	}
+
+	private baseEntry(event: EventBase) {
+		return {
+			id: event.event_id,
+			parentId: event.caused_by ?? null,
+			timestamp: new Date(event.timestamp).toISOString(),
+		};
+	}
+
+	private isSessionEntry(value: unknown): value is SessionEntry {
+		return (
+			typeof value === "object" &&
+			value !== null &&
+			"type" in value &&
+			"id" in value &&
+			"parentId" in value &&
+			"timestamp" in value
+		);
+	}
+}

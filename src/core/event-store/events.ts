@@ -122,6 +122,18 @@ export interface AgentMessageEndEvent extends EventBase {
 	};
 }
 
+/** Runtime-level agent error. Distinct from RUNTIME_ERROR, which is reserved for system/reactor failures. */
+export interface AgentErrorEvent extends EventBase {
+	type: "AGENT_ERROR";
+	payload: {
+		error: string;
+		stack?: string;
+		retryable?: boolean;
+		/** Event that caused the agent error */
+		causing_event_id?: string;
+	};
+}
+
 /** Agent turn starts */
 export interface AgentTurnStartEvent extends EventBase {
 	type: "AGENT_TURN_START";
@@ -219,8 +231,14 @@ export interface ToolExecutionEndEvent extends EventBase {
 export interface FileMutationAppliedEvent extends EventBase {
 	type: "FILE_MUTATION_APPLIED";
 	payload: {
-		mutation: import("./types.js").FileMutation;
+		/** Current flat payload shape emitted by the reactor. */
+		path?: string;
+		operation?: import("./types.js").FileMutation["operation"];
+		diff?: string;
+		/** Legacy nested payload shape accepted by projections. */
+		mutation?: import("./types.js").FileMutation;
 		tool_call_id?: string;
+		tool_name?: string;
 	};
 }
 
@@ -355,6 +373,18 @@ export interface CompactionEndEvent extends EventBase {
 	};
 }
 
+/** Compaction was cancelled before producing a summary. */
+export interface CompactionAbortedEvent extends EventBase {
+	type: "COMPACTION_ABORTED";
+	payload: {
+		reason?: "user_cancelled" | "runtime_shutdown" | "error" | string;
+		message?: string;
+		/** COMPACTION_START event_id when known */
+		started_event_id?: string;
+		token_count?: number;
+	};
+}
+
 // ============================================================================
 // Runtime Events
 // ============================================================================
@@ -480,6 +510,18 @@ export interface RetryScheduledEvent extends EventBase {
 	};
 }
 
+/** A scheduled or pending retry was cancelled. */
+export interface RetryAbortedEvent extends EventBase {
+	type: "RETRY_ABORTED";
+	payload: {
+		attempt?: number;
+		reason?: "user_interrupt" | "non_retryable" | "runtime_shutdown" | string;
+		error_message?: string;
+		/** RETRY_SCHEDULED event_id when known */
+		scheduled_event_id?: string;
+	};
+}
+
 /** Compaction handler decided context is too large. Distinct from COMPACTION_START which records the actual run. */
 export interface CompactionRequestedEvent extends EventBase {
 	type: "COMPACTION_REQUESTED";
@@ -507,12 +549,14 @@ export type TypedEvent =
 	| LlmCallFailedEvent
 	| ToolResultsAggregatedEvent
 	| RetryScheduledEvent
+	| RetryAbortedEvent
 	| CompactionRequestedEvent
 	| AgentThinkingStartEvent
 	| AgentThinkingEndEvent
 	| AgentMessageStartEvent
 	| AgentMessageChunkEvent
 	| AgentMessageEndEvent
+	| AgentErrorEvent
 	| AgentTurnStartEvent
 	| AgentTurnEndEvent
 	| IntentToolCallEvent
@@ -532,6 +576,7 @@ export type TypedEvent =
 	| SessionEntryAppendedEvent
 	| CompactionStartEvent
 	| CompactionEndEvent
+	| CompactionAbortedEvent
 	| CheckpointCreatedEvent
 	| ModelChangedEvent
 	| ThinkingLevelChangedEvent

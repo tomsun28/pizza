@@ -97,6 +97,62 @@ describe("SessionProjection", () => {
 		expect(context.messages[1].role).toBe("toolResult");
 	});
 
+	it("should include compaction events once when building context", () => {
+		const summary = store.append({
+			actor_id: "compactor",
+			type: "COMPACTION_END",
+			payload: {
+				summary: "Compacted context",
+				first_kept_event_id: "evt-keep",
+				tokens_before: 12000,
+				tokens_after: 900,
+			},
+		});
+
+		const projection = new SessionProjection(
+			store,
+			createDescriptor({ summary_event_id: summary.event_id }),
+		);
+		const context = projection.buildContext();
+
+		expect(context.messages).toHaveLength(1);
+		expect(context.messages[0].role).toBe("compactionSummary");
+		expect((context.messages[0] as any).summary).toBe("Compacted context");
+	});
+
+	it("should treat COMPACTION_END first_kept_event_id as a context boundary", () => {
+		store.append({ actor_id: "user", type: "USER_MESSAGE", payload: { content: "old request" } });
+		store.append({
+			actor_id: "coder_agent",
+			type: "AGENT_MESSAGE_END",
+			payload: {
+				content: [{ type: "text", text: "old response" }],
+				model: { provider: "anthropic", model_id: "claude" },
+				usage: { input: 5, output: 10, cache_read: 0, cache_write: 0, total: 15, cost: 0 },
+				stop_reason: "stop",
+			},
+		});
+		const kept = store.append({ actor_id: "user", type: "USER_MESSAGE", payload: { content: "kept request" } });
+		store.append({
+			actor_id: "compactor",
+			type: "COMPACTION_END",
+			payload: {
+				summary: "Old request and response were summarized",
+				first_kept_event_id: kept.event_id,
+				tokens_before: 9000,
+				tokens_after: 1000,
+			},
+		});
+
+		const projection = new SessionProjection(store, createDescriptor());
+		const context = projection.buildContext();
+
+		expect(context.messages).toHaveLength(2);
+		expect(context.messages[0].role).toBe("compactionSummary");
+		expect((context.messages[1] as any).content).toBe("kept request");
+		expect(context.messages.some((message) => JSON.stringify(message).includes("old request"))).toBe(false);
+	});
+
 	it("should skip non-context events like AGENT_THINKING_START", () => {
 		store.append({ actor_id: "user", type: "USER_MESSAGE", payload: { content: "Hi" } });
 		store.append({ actor_id: "coder_agent", type: "AGENT_THINKING_START", payload: {} });

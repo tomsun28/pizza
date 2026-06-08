@@ -146,6 +146,8 @@ export interface AgentOptions {
 	thinkingBudgets?: ThinkingBudgets;
 	transport?: Transport;
 	maxRetryDelayMs?: number;
+	/** Keep AgentSession's legacy assistant-error retry as the single owner unless explicitly enabled. */
+	retryAssistantErrorCompletions?: boolean;
 	toolExecution?: ToolExecutionMode;
 }
 
@@ -192,6 +194,8 @@ export class Agent {
 
 	/** Optional cap for provider-requested retry delays. */
 	maxRetryDelayMs?: number;
+	/** Whether reactor should retry assistant messages that complete with stopReason=error. */
+	retryAssistantErrorCompletions: boolean;
 
 	/** Tool execution strategy for assistant messages that contain multiple tool calls. */
 	toolExecution: ToolExecutionMode;
@@ -210,6 +214,7 @@ export class Agent {
 		this.thinkingBudgets = options.thinkingBudgets;
 		this.transport = options.transport ?? "sse";
 		this.maxRetryDelayMs = options.maxRetryDelayMs;
+		this.retryAssistantErrorCompletions = options.retryAssistantErrorCompletions ?? false;
 		this.toolExecution = options.toolExecution ?? "parallel";
 	}
 
@@ -619,6 +624,7 @@ export class Agent {
 			model: toModelConfig(this._state.model as any, this._state.thinkingLevel),
 			tools: toolDefs,
 			classifierConfig: { approve_unknown: false },
+			retryAssistantErrorCompletions: this.retryAssistantErrorCompletions,
 			retryPolicy: new (await import("../runtime/policies.js")).DefaultRetryPolicy({
 				capDelayMs: this.maxRetryDelayMs,
 			}),

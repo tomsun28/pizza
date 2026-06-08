@@ -14,6 +14,8 @@ import type {
 	BashExecutionEvent,
 	CustomMessageEvent,
 	BranchSummaryEvent,
+	CompactionEndEvent,
+	FileMutationAppliedEvent,
 } from "../event-store/events.js";
 
 // ============================================================================
@@ -28,6 +30,7 @@ import type {
  * - AGENT_MESSAGE_END → assistant message
  * - TOOL_EXECUTION_END → tool result message
  * - COMPACTION_END → system summary message
+ * - FILE_MUTATION_APPLIED → custom notification message
  */
 export function eventsToMessages(events: EventBase[]): AgentMessage[] {
 	const messages: AgentMessage[] = [];
@@ -142,7 +145,29 @@ export function eventToMessage(event: EventBase): AgentMessage | null {
 			};
 		}
 
+		case "COMPACTION_END": {
+			const payload = event.payload as CompactionEndEvent["payload"];
+			return {
+				role: "compactionSummary",
+				summary: payload.summary,
+				tokensBefore: payload.tokens_before,
+				timestamp: event.timestamp,
+			} as AgentMessage;
+		}
 
+		case "FILE_MUTATION_APPLIED": {
+			const mutation = normalizeFileMutationPayload(event.payload as FileMutationAppliedEvent["payload"]);
+			const operation = mutation.operation ?? "modify";
+			const path = mutation.path ?? "file";
+			return {
+				role: "custom",
+				customType: "runtime:file_mutation",
+				content: `File ${operation}: ${path}`,
+				display: true,
+				details: mutation,
+				timestamp: event.timestamp,
+			} as AgentMessage;
+		}
 
 		case "BASH_EXECUTION": {
 			const payload = event.payload as BashExecutionEvent["payload"];
@@ -197,6 +222,23 @@ export function eventToMessage(event: EventBase): AgentMessage | null {
 		default:
 			return null;
 	}
+}
+
+function normalizeFileMutationPayload(payload: FileMutationAppliedEvent["payload"]): {
+	path?: string;
+	operation?: string;
+	diff?: string;
+	toolCallId?: string;
+	toolName?: string;
+} {
+	const nested = payload.mutation;
+	return {
+		path: payload.path ?? nested?.path,
+		operation: payload.operation ?? nested?.operation,
+		diff: payload.diff ?? nested?.diff,
+		toolCallId: payload.tool_call_id,
+		toolName: payload.tool_name,
+	};
 }
 
 /**

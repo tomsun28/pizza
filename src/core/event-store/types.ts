@@ -70,6 +70,7 @@ export type EventType =
 	| "LLM_CALL_FAILED"
 	| "TOOL_RESULTS_AGGREGATED"
 	| "RETRY_SCHEDULED"
+	| "RETRY_ABORTED"
 	// Agent Events (LLM output)
 	| "AGENT_THINKING_START"
 	| "AGENT_THINKING_END"
@@ -78,6 +79,7 @@ export type EventType =
 	| "AGENT_MESSAGE_END"
 	| "AGENT_TURN_START"
 	| "AGENT_TURN_END"
+	| "AGENT_ERROR"
 	// Intent Events (LLM proposals)
 	| "INTENT_TOOL_CALL"
 	| "INTENT_FILE_EDIT"
@@ -100,6 +102,7 @@ export type EventType =
 	| "COMPACTION_REQUESTED"
 	| "COMPACTION_START"
 	| "COMPACTION_END"
+	| "COMPACTION_ABORTED"
 	// Runtime
 	| "RUNTIME_STARTED"
 	| "RUNTIME_PAUSED"

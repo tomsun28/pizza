@@ -3,14 +3,18 @@
  */
 
 import type { AgentMessage } from "../agent/types.js";
-import type { ImageContent, Model } from "@mariozechner/pi-ai";
+import type { ImageContent, Model, TextContent, ToolResultMessage } from "@mariozechner/pi-ai";
 import type { KeyId } from "@mariozechner/pi-tui";
 import { type Theme, theme } from "../../modes/interactive/theme/theme.js";
 import type { ResourceDiagnostic } from "../diagnostics.js";
+import type { EventBase } from "../event-store/types.js";
+import type { EventStore } from "../event-store/store.js";
 import type { KeybindingsConfig } from "../keybindings.js";
 import type { ModelRegistry } from "../model-registry.js";
+import { eventToMessage } from "../projection/event-to-message.js";
 import type { SessionManager } from "../session-manager.js";
 import type { BuildSystemPromptOptions } from "../system-prompt.js";
+import type { ExtensionSessionManager } from "./session-context.js";
 import type {
 	BeforeAgentStartEvent,
 	BeforeAgentStartEventResult,
@@ -220,7 +224,7 @@ export class ExtensionRunner {
 	private runtime: ExtensionRuntime;
 	private uiContext: ExtensionUIContext;
 	private cwd: string;
-	private sessionManager: SessionManager;
+	private sessionManager: ExtensionSessionManager;
 	private modelRegistry: ModelRegistry;
 	private errorListeners: Set<ExtensionErrorListener> = new Set();
 	private getModel: () => Model<any> | undefined = () => undefined;
@@ -241,12 +245,16 @@ export class ExtensionRunner {
 	private shortcutDiagnostics: ResourceDiagnostic[] = [];
 	private commandDiagnostics: ResourceDiagnostic[] = [];
 	private staleMessage: string | undefined;
+	private eventStoreTurnIndex = 0;
+	private eventStoreLastMessage: AgentMessage | undefined;
+	private eventStoreToolResults: ToolResultMessage[] = [];
+	private eventStoreToolCallsEmitted = new Set<string>();
 
 	constructor(
 		extensions: Extension[],
 		runtime: ExtensionRuntime,
 		cwd: string,
-		sessionManager: SessionManager,
+		sessionManager: ExtensionSessionManager,
 		modelRegistry: ModelRegistry,
 	) {
 		this.extensions = extensions;
@@ -356,8 +364,144 @@ export class ExtensionRunner {
 		return this.uiContext;
 	}
 
+	bindEventStore(store: EventStore): () => void {
+		return store.subscribe((event) => {
+			void this.emitEventStoreEvent(event);
+		});
+	}
+
+	async emitEventStoreEvent(event: EventBase): Promise<void> {
+		switch (event.type) {
+			case "USER_MESSAGE": {
+				const message = eventToMessage(event);
+				if (!message) return;
+				await this.emit({ type: "message_start", message });
+				await this.emit({ type: "message_end", message });
+				break;
+			}
+			case "AGENT_TURN_START": {
+				this.eventStoreTurnIndex++;
+				await this.emit({ type: "turn_start", turnIndex: this.eventStoreTurnIndex, timestamp: event.timestamp });
+				break;
+			}
+			case "AGENT_MESSAGE_START": {
+				const message = { role: "assistant", content: [], timestamp: event.timestamp } as unknown as AgentMessage;
+				this.eventStoreLastMessage = message;
+				await this.emit({ type: "message_start", message });
+				break;
+			}
+			case "AGENT_MESSAGE_END": {
+				const message = eventToMessage(event);
+				if (!message) return;
+				this.eventStoreLastMessage = message;
+				await this.emit({ type: "message_end", message });
+				await this.emitContext(this.sessionManager.buildContext?.().messages ?? [message]);
+				break;
+			}
+			case "INTENT_TOOL_CALL": {
+				const payload = event.payload as { tool_call_id: string; tool_name: string; arguments: Record<string, unknown> };
+				await this.emitEventStoreToolCall(payload.tool_call_id, payload.tool_name, payload.arguments);
+				break;
+			}
+			case "TOOL_EXECUTION_START": {
+				const payload = event.payload as { tool_call_id: string; tool_name: string; arguments: Record<string, unknown> };
+				await this.emit({
+					type: "tool_execution_start",
+					toolCallId: payload.tool_call_id,
+					toolName: payload.tool_name,
+					args: payload.arguments,
+				});
+				await this.emitEventStoreToolCall(payload.tool_call_id, payload.tool_name, payload.arguments);
+				break;
+			}
+			case "TOOL_EXECUTION_END": {
+				const payload = event.payload as {
+					tool_call_id: string;
+					tool_name: string;
+					result: unknown;
+					is_error: boolean;
+				};
+				await this.emit({
+					type: "tool_execution_end",
+					toolCallId: payload.tool_call_id,
+					toolName: payload.tool_name,
+					result: payload.result,
+					isError: payload.is_error,
+				});
+				await this.emitToolResult({
+					type: "tool_result",
+					toolCallId: payload.tool_call_id,
+					toolName: payload.tool_name,
+					input: {},
+					content: this.asToolContent(payload.result),
+					details: undefined,
+					isError: payload.is_error,
+				});
+				const message = eventToMessage(event);
+				if (message?.role === "toolResult") {
+					this.eventStoreToolResults.push(message as ToolResultMessage);
+					this.eventStoreLastMessage = message;
+				}
+				break;
+			}
+			case "AGENT_TURN_END": {
+				if (!this.eventStoreLastMessage) return;
+				await this.emit({
+					type: "turn_end",
+					turnIndex: this.eventStoreTurnIndex,
+					message: this.eventStoreLastMessage,
+					toolResults: this.eventStoreToolResults,
+				});
+				this.eventStoreToolResults = [];
+				break;
+			}
+			case "AGENT_TURN_COMPLETED": {
+				await this.emit({ type: "agent_end", messages: [] });
+				this.eventStoreToolCallsEmitted.clear();
+				break;
+			}
+			case "MODEL_CHANGED": {
+				const payload = event.payload as {
+					provider: string;
+					model_id: string;
+					previous_provider?: string;
+					previous_model_id?: string;
+				};
+				const model = this.modelRegistry.find(payload.provider, payload.model_id);
+				if (!model) return;
+				const previousModel =
+					payload.previous_provider && payload.previous_model_id
+						? this.modelRegistry.find(payload.previous_provider, payload.previous_model_id)
+						: undefined;
+				await this.emit({ type: "model_select", model, previousModel, source: "set" });
+				break;
+			}
+		}
+	}
+
 	hasUI(): boolean {
 		return this.uiContext !== noOpUIContext;
+	}
+
+	private asToolContent(value: unknown): (TextContent | ImageContent)[] {
+		if (Array.isArray(value)) return value as (TextContent | ImageContent)[];
+		if (value === undefined || value === null) return [];
+		return [{ type: "text", text: typeof value === "string" ? value : JSON.stringify(value) }];
+	}
+
+	private async emitEventStoreToolCall(
+		toolCallId: string,
+		toolName: string,
+		input: Record<string, unknown>,
+	): Promise<void> {
+		if (this.eventStoreToolCallsEmitted.has(toolCallId)) return;
+		this.eventStoreToolCallsEmitted.add(toolCallId);
+		await this.emitToolCall({
+			type: "tool_call",
+			toolCallId,
+			toolName,
+			input,
+		});
 	}
 
 	getExtensionPaths(): string[] {

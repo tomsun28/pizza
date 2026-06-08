@@ -68,6 +68,8 @@ export interface ReactorConfig {
 	tools: ToolDefinition[];
 	/** Retry policy (default: DefaultRetryPolicy). */
 	retryPolicy?: RetryPolicy;
+	/** Whether assistant messages that complete with stop_reason=error should be retried by the reactor. */
+	retryAssistantErrorCompletions?: boolean;
 	/** Compaction policy (default: NoopCompactionPolicy). */
 	compactionPolicy?: CompactionPolicy;
 }
@@ -77,6 +79,8 @@ export type EventHandler = (event: EventBase) => void | Promise<void>;
 
 /** Mapping from event type to handler */
 export type EventHandlerMap = Partial<Record<EventType, EventHandler>>;
+
+type RetryScheduleResult = "scheduled" | "not_retryable" | "max_attempts" | "backoff_exhausted";
 
 // ============================================================================
 // Tool Call Tracking (join-pattern for parallel tool execution)
@@ -111,6 +115,12 @@ export class Reactor {
 	private followUpQueue: Array<{ content: string | unknown[]; images?: unknown[] }> = [];
 	/** Aborter for the current compaction run (if any). */
 	private compactionAbort: AbortController | undefined;
+	/** Retry timers waiting to re-enter the turn loop. */
+	private retryTimers = new Map<string, {
+		timeout: ReturnType<typeof setTimeout>;
+		attempt: number;
+		errorMessage: string;
+	}>();
 	/** Set when abort() is called with no new content — next turn completion should discard queued follow-ups. */
 	private _abortedByUser = false;
 	constructor(config: ReactorConfig) {
@@ -179,6 +189,10 @@ export class Reactor {
 	stop(): void {
 		this._isRunning = false;
 		this.abortController?.abort();
+		for (const { timeout } of this.retryTimers.values()) {
+			clearTimeout(timeout);
+		}
+		this.retryTimers.clear();
 		for (const unsub of this.unsubscribers) unsub();
 		this.unsubscribers = [];
 	}
@@ -186,6 +200,11 @@ export class Reactor {
 	/** Check if the reactor is running. */
 	get isRunning(): boolean {
 		return this._isRunning;
+	}
+
+	/** Abort signal for the currently active reactor run. */
+	get signal(): AbortSignal | undefined {
+		return this.abortController?.signal;
 	}
 
 	// =========================================================================
@@ -301,6 +320,11 @@ export class Reactor {
 		return this.followUpQueue.length;
 	}
 
+	/** Number of scheduled retries waiting to re-enter the turn loop. */
+	get pendingRetryCount(): number {
+		return this.retryTimers.size;
+	}
+
 	/** Clear pending follow-ups (e.g. on user-explicit cancel). */
 	clearFollowUpQueue(): void {
 		this.followUpQueue = [];
@@ -351,6 +375,36 @@ export class Reactor {
 		}
 		// Cancel any pending compaction so we don't block turn completion
 		this.compactionAbort?.abort();
+
+		if (this.retryTimers.size > 0) {
+			for (const [scheduledEventId, retry] of this.retryTimers) {
+				clearTimeout(retry.timeout);
+				this._emit({
+					actor_id: "runtime",
+					type: "RETRY_ABORTED",
+					payload: {
+						attempt: retry.attempt,
+						reason: "user_interrupt",
+						error_message: retry.errorMessage,
+						scheduled_event_id: scheduledEventId,
+					},
+					caused_by: event.event_id,
+				});
+			}
+			this.retryTimers.clear();
+			this._emit({
+				actor_id: "coder_agent",
+				type: "AGENT_TURN_END",
+				payload: { tool_calls_count: 0 },
+				caused_by: event.event_id,
+			});
+			this._emit({
+				actor_id: "coder_agent",
+				type: "AGENT_TURN_COMPLETED",
+				payload: { reason: "aborted" },
+				caused_by: event.event_id,
+			});
+		}
 	}
 	// ─── USER_FOLLOWUP_QUEUED ───────────────────────────────────────────────
 
@@ -798,6 +852,10 @@ export class Reactor {
 			return;
 		}
 
+		if (this._scheduleRetryForCompletedError(event)) {
+			return;
+		}
+
 		// If a steer or follow-up message is queued, deliver it as a new USER_MESSAGE
 		// so the turn cycle restarts.
 		if (this.followUpQueue.length > 0) {
@@ -825,72 +883,90 @@ export class Reactor {
 	private async _onLlmCallFailed(event: EventBase): Promise<void> {
 		const payload = event.payload as { error: string; retryable: boolean };
 
+		const retryResult = this._scheduleRetry(event, payload.error, payload.retryable);
+		if (retryResult === "scheduled") return;
+
 		const attempt = this._attemptCount(event.event_id);
 
-		if (!payload.retryable || attempt >= this.retryPolicy.maxAttempts) {
-			// Emit turn end before completion
-			this._emit({
-				actor_id: "coder_agent",
-				type: "AGENT_TURN_END",
-				payload: { tool_calls_count: 0 },
-				caused_by: event.event_id,
-			});
-			this._emit({
-				actor_id: "coder_agent",
-				type: "AGENT_TURN_COMPLETED",
-				payload: {
-					reason: "error",
-					error_message:
-						attempt >= this.retryPolicy.maxAttempts
-							? `Max retries (${this.retryPolicy.maxAttempts}) exceeded: ${payload.error}`
+		// Emit turn end before completion
+		this._emit({
+			actor_id: "coder_agent",
+			type: "AGENT_TURN_END",
+			payload: { tool_calls_count: 0 },
+			caused_by: event.event_id,
+		});
+		this._emit({
+			actor_id: "coder_agent",
+			type: "AGENT_TURN_COMPLETED",
+			payload: {
+				reason: "error",
+				error_message:
+					retryResult === "max_attempts"
+						? `Max retries (${this.retryPolicy.maxAttempts}) exceeded: ${payload.error}`
+						: retryResult === "backoff_exhausted"
+							? `Retry backoff exhausted: ${payload.error}`
 							: payload.error,
-				},
-				caused_by: event.event_id,
-			});
-			return;
-		}
+			},
+			caused_by: event.event_id,
+		});
+	}
 
+	private _scheduleRetryForCompletedError(event: EventBase): boolean {
+		if (this.config.retryAssistantErrorCompletions === false) return false;
+
+		const payload = event.payload as { reason?: string; error_message?: string };
+		if (payload.reason !== "error") return false;
+		if (this._errorAlreadyHandledByLlmFailure(event)) return false;
+
+		const errorMessage = payload.error_message ?? "Agent turn completed with error";
+		return this._scheduleRetry(event, errorMessage, this.retryPolicy.isRetryable({ message: errorMessage })) === "scheduled";
+	}
+
+	private _errorAlreadyHandledByLlmFailure(event: EventBase): boolean {
+		const causedBy = event.caused_by ? this.config.store.get(event.caused_by) : undefined;
+		return causedBy?.type === "LLM_CALL_FAILED";
+	}
+
+	private _scheduleRetry(event: EventBase, error: string, retryable: boolean): RetryScheduleResult {
+		const attempt = this._attemptCount(event.event_id);
+		if (!retryable || attempt >= this.retryPolicy.maxAttempts) {
+			return retryable ? "max_attempts" : "not_retryable";
+		}
 		const nextAttempt = attempt + 1;
 		const delayMs = this.retryPolicy.nextDelayMs(nextAttempt);
 		if (delayMs === null) {
-			// Emit turn end before completion
-			this._emit({
-				actor_id: "coder_agent",
-				type: "AGENT_TURN_END",
-				payload: { tool_calls_count: 0 },
-				caused_by: event.event_id,
-			});
-			this._emit({
-				actor_id: "coder_agent",
-				type: "AGENT_TURN_COMPLETED",
-				payload: { reason: "error", error_message: `Retry backoff exhausted: ${payload.error}` },
-				caused_by: event.event_id,
-			});
-			return;
+			return "backoff_exhausted";
 		}
 
-		this._emit({
+		const retryScheduled = this._emit({
 			actor_id: "runtime",
 			type: "RETRY_SCHEDULED",
 			payload: {
 				attempt: nextAttempt,
 				max_attempts: this.retryPolicy.maxAttempts,
 				delay_ms: delayMs,
-				error_message: payload.error,
+				error_message: error,
 			},
 			caused_by: event.event_id,
 		});
 
-		setTimeout(() => {
+		const timeout = setTimeout(() => {
+			this.retryTimers.delete(retryScheduled.event_id);
 			if (!this._shouldInterrupt()) {
 				this._emit({
 					actor_id: "coder_agent",
 					type: "AGENT_TURN_REQUESTED",
 					payload: { reason: "retry", retry_attempt: nextAttempt },
-					caused_by: event.event_id,
+					caused_by: retryScheduled.event_id,
 				});
 			}
 		}, delayMs);
+		this.retryTimers.set(retryScheduled.event_id, {
+			timeout,
+			attempt: nextAttempt,
+			errorMessage: error,
+		});
+		return "scheduled";
 	}
 
 	/** Walk causal chain back to find the highest retry_attempt seen. */
@@ -936,7 +1012,8 @@ export class Reactor {
 		if (this.compactionAbort) return; // Already running
 
 		const payload = event.payload as { reason: "manual" | "threshold" | "overflow"; token_count: number };
-		this.compactionAbort = new AbortController();
+		const abortController = new AbortController();
+		this.compactionAbort = abortController;
 
 		this._emit({
 			actor_id: "compactor",
@@ -946,7 +1023,7 @@ export class Reactor {
 		});
 
 		try {
-			const outcome = await this.compactionPolicy.compact(payload.reason, this.compactionAbort.signal);
+			const outcome = await this.compactionPolicy.compact(payload.reason, abortController.signal);
 			this._emit({
 				actor_id: "compactor",
 				type: "COMPACTION_END",
@@ -960,6 +1037,19 @@ export class Reactor {
 			});
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
+			if (abortController.signal.aborted) {
+				this._emit({
+					actor_id: "compactor",
+					type: "COMPACTION_ABORTED",
+					payload: {
+						reason: "user_cancelled",
+						message: msg,
+						token_count: payload.token_count,
+					},
+					caused_by: event.event_id,
+				});
+				return;
+			}
 			this._emit({
 				actor_id: "compactor",
 				type: "COMPACTION_END",

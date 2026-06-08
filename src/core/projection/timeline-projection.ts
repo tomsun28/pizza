@@ -91,6 +91,8 @@ const TIMELINE_EVENT_TYPES: EventType[] = [
 	"SESSION_BOUNDARY_INFERRED",
 	"SESSION_FORKED",
 	"COMPACTION_END",
+	"COMPACTION_ABORTED",
+	"AGENT_ERROR",
 	"RUNTIME_ERROR",
 	"CHECKPOINT_CREATED",
 ];
@@ -189,7 +191,9 @@ export class TimelineProjection {
 			case "SESSION_FORKED":
 				return this._sessionEvent(event);
 			case "COMPACTION_END":
+			case "COMPACTION_ABORTED":
 				return this._compactionEvent(event);
+			case "AGENT_ERROR":
 			case "RUNTIME_ERROR":
 				return this._errorEvent(event);
 			case "CHECKPOINT_CREATED":
@@ -255,15 +259,21 @@ export class TimelineProjection {
 	}
 
 	private _fileMutation(event: EventBase): TimelineEntry {
-		const payload = event.payload as { path?: string; operation?: string };
+		const payload = event.payload as {
+			path?: string;
+			operation?: string;
+			mutation?: { path?: string; operation?: string; diff?: string };
+		};
+		const path = payload.path ?? payload.mutation?.path ?? "file";
+		const operation = payload.operation ?? payload.mutation?.operation ?? "modify";
 		return {
 			event_id: event.event_id,
 			timestamp: event.timestamp,
 			kind: "file_mutation",
-			summary: `${payload.operation ?? "modify"} ${payload.path ?? "file"}`,
+			summary: `${operation} ${path}`,
 			actor_id: event.actor_id,
 			caused_by: event.caused_by,
-			metadata: payload,
+			metadata: { ...payload.mutation, ...payload, path, operation },
 		};
 	}
 
@@ -310,12 +320,15 @@ export class TimelineProjection {
 	}
 
 	private _compactionEvent(event: EventBase): TimelineEntry {
-		const payload = event.payload as { summary?: string; tokens_before?: number };
+		const payload = event.payload as { summary?: string; tokens_before?: number; message?: string };
+		const aborted = event.type === "COMPACTION_ABORTED";
 		return {
 			event_id: event.event_id,
 			timestamp: event.timestamp,
 			kind: "compaction",
-			summary: `Context compacted${payload.tokens_before ? ` (${payload.tokens_before} tokens)` : ""}`,
+			summary: aborted
+				? `Context compaction aborted${payload.message ? `: ${payload.message}` : ""}`
+				: `Context compacted${payload.tokens_before ? ` (${payload.tokens_before} tokens)` : ""}`,
 			actor_id: event.actor_id,
 			caused_by: event.caused_by,
 			metadata: payload,
@@ -323,12 +336,12 @@ export class TimelineProjection {
 	}
 
 	private _errorEvent(event: EventBase): TimelineEntry {
-		const payload = event.payload as { error_message?: string };
+		const payload = event.payload as { error?: string; error_message?: string };
 		return {
 			event_id: event.event_id,
 			timestamp: event.timestamp,
 			kind: "error",
-			summary: payload.error_message ?? "Runtime error",
+			summary: payload.error_message ?? payload.error ?? "Runtime error",
 			actor_id: event.actor_id,
 			caused_by: event.caused_by,
 			metadata: payload,

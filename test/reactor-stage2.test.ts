@@ -10,7 +10,7 @@ import { EventSourcedRuntime } from "../src/core/runtime/runtime.js";
 import type { LLMClient, LLMResponse } from "../src/core/runtime/llm-types.js";
 import type { CompactionOutcome, CompactionPolicy, RetryPolicy } from "../src/core/runtime/policies.js";
 import type { ToolExecutor, ToolRegistry } from "../src/core/intent/types.js";
-import type { ContentBlock, EventBase } from "../src/core/event-store/types.js";
+import type { ContentBlock, EventBase, EventType } from "../src/core/event-store/types.js";
 
 describe("Reactor stage-2: policies + queues", () => {
 	const tempDirs: string[] = [];
@@ -32,6 +32,126 @@ describe("Reactor stage-2: policies + queues", () => {
 		get: () => undefined,
 		list: () => [],
 	};
+
+	function makeEchoRegistry(): ToolRegistry {
+		return {
+			get(name: string): ToolExecutor | undefined {
+				if (name !== "echo") return undefined;
+				return {
+					async execute(args) {
+						return { content: [{ type: "text", text: String(args.text ?? "") }], is_error: false };
+					},
+					getMetadata() {
+						return { name: "echo", category: "file_read", defaultRisk: "safe" };
+					},
+				};
+			},
+			list() {
+				return ["echo"];
+			},
+		};
+	}
+
+	function waitForEvent(runtime: EventSourcedRuntime, type: EventType, timeoutMs = 1000): Promise<EventBase> {
+		const existing = runtime.store.query({ types: [type], reverse: true, limit: 1 })[0];
+		if (existing) return Promise.resolve(existing);
+
+		return new Promise((resolve, reject) => {
+			const timeout = setTimeout(() => {
+				unsubscribe();
+				reject(new Error(`Timed out waiting for ${type}`));
+			}, timeoutMs);
+			const unsubscribe = runtime.subscribe((event) => {
+				if (event.type !== type) return;
+				clearTimeout(timeout);
+				unsubscribe();
+				resolve(event);
+			}, { types: [type] });
+		});
+	}
+
+	// ────────────────────────────────────────────────────────────────────────
+	// Runtime public API
+	// ────────────────────────────────────────────────────────────────────────
+
+	it("rejects a second prompt while a turn is active and waitForIdle resolves after abort", async () => {
+		const cwd = makeTempDir();
+
+		const client: LLMClient = {
+			async complete(req): Promise<LLMResponse> {
+				await new Promise<void>((resolve) => req.signal?.addEventListener("abort", () => resolve(), { once: true }));
+				throw new Error("aborted");
+			},
+		};
+
+		const runtime = new EventSourcedRuntime({
+			cwd,
+			agentDir: cwd,
+			toolRegistry: emptyRegistry,
+			llmClient: client,
+			systemPrompt: "",
+			model: { provider: "test", model_id: "test" },
+			tools: [],
+		});
+
+		const firstPrompt = runtime.prompt("first");
+		await waitForEvent(runtime, "LLM_CALL_REQUESTED");
+
+		await expect(runtime.prompt("second")).rejects.toThrow("already processing");
+
+		const idle = runtime.waitForIdle();
+		runtime.abort();
+		await firstPrompt;
+		await expect(idle).resolves.toBeUndefined();
+
+		runtime.dispose();
+	});
+
+	it("records public API changes as events", () => {
+		const cwd = makeTempDir();
+		const runtime = new EventSourcedRuntime({
+			cwd,
+			agentDir: cwd,
+			toolRegistry: emptyRegistry,
+			llmClient: {
+				async complete(): Promise<LLMResponse> {
+					throw new Error("not used");
+				},
+			},
+			systemPrompt: "old prompt",
+			model: { provider: "old-provider", model_id: "old-model", thinking_level: "low" },
+			tools: [],
+		});
+
+		runtime.setModel("new-provider", "new-model");
+		runtime.setThinkingLevel("high");
+		runtime.setSystemPrompt("new prompt");
+		runtime.setTools([{ name: "read", description: "Read files", input_schema: { type: "object" } }]);
+		runtime.compact({ token_count: 1234 });
+
+		expect(runtime.getSystemPrompt()).toBe("new prompt");
+		expect(runtime.getTools()).toEqual([{ name: "read", description: "Read files", input_schema: { type: "object" } }]);
+		expect(runtime.getProjection().buildContext().messages).toHaveLength(0);
+
+		const modelChanged = runtime.store.query({ types: ["MODEL_CHANGED"] })[0];
+		expect(modelChanged.payload).toMatchObject({
+			provider: "new-provider",
+			model_id: "new-model",
+			previous_provider: "old-provider",
+			previous_model_id: "old-model",
+		});
+		expect(runtime.store.query({ types: ["THINKING_LEVEL_CHANGED"] })[0].payload).toMatchObject({
+			level: "high",
+			previous_level: "low",
+		});
+		expect(runtime.store.query({ types: ["USER_CONFIG_CHANGE"] })).toHaveLength(2);
+		expect(runtime.store.query({ types: ["COMPACTION_REQUESTED"] })[0].payload).toMatchObject({
+			reason: "manual",
+			token_count: 1234,
+		});
+
+		runtime.dispose();
+	});
 
 	// ────────────────────────────────────────────────────────────────────────
 	// Retry policy
@@ -127,6 +247,142 @@ describe("Reactor stage-2: policies + queues", () => {
 		runtime.dispose();
 	});
 
+	it("retries assistant error completions and waits for the retry to settle", async () => {
+		const cwd = makeTempDir();
+		let calls = 0;
+
+		const client: LLMClient = {
+			async complete(): Promise<LLMResponse> {
+				calls++;
+				if (calls === 1) {
+					return {
+						content: [{ type: "text", text: "provider overloaded" } as ContentBlock],
+						provider: "test",
+						model: "test",
+						usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, cost: 0 },
+						stopReason: "error",
+						errorMessage: "overloaded_error: retry later",
+					};
+				}
+				return {
+					content: [{ type: "text", text: "ok" } as ContentBlock],
+					provider: "test",
+					model: "test",
+					usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, cost: 0 },
+					stopReason: "stop",
+				};
+			},
+		};
+
+		const retryPolicy: RetryPolicy = {
+			maxAttempts: 3,
+			isRetryable: (error) => /overloaded/.test(error.message),
+			nextDelayMs: () => 1,
+		};
+
+		const runtime = new EventSourcedRuntime({
+			cwd,
+			agentDir: cwd,
+			toolRegistry: emptyRegistry,
+			llmClient: client,
+			systemPrompt: "",
+			model: { provider: "test", model_id: "test" },
+			tools: [],
+			retryPolicy,
+		});
+
+		await runtime.prompt("hi");
+
+		expect(calls).toBe(2);
+		const scheduled = runtime.store.query({ types: ["RETRY_SCHEDULED"] });
+		expect(scheduled).toHaveLength(1);
+		expect((scheduled[0].payload as { error_message: string }).error_message).toContain("overloaded_error");
+		const completed = runtime.store.query({ types: ["AGENT_TURN_COMPLETED"] });
+		expect(completed.map((event) => (event.payload as { reason: string }).reason)).toEqual(["error", "stop"]);
+
+		runtime.dispose();
+	});
+
+	it("completes with error when retry backoff is exhausted", async () => {
+		const cwd = makeTempDir();
+
+		const client: LLMClient = {
+			async complete(): Promise<LLMResponse> {
+				throw new Error("overloaded_error");
+			},
+		};
+
+		const retryPolicy: RetryPolicy = {
+			maxAttempts: 5,
+			isRetryable: () => true,
+			nextDelayMs: () => null,
+		};
+
+		const runtime = new EventSourcedRuntime({
+			cwd,
+			agentDir: cwd,
+			toolRegistry: emptyRegistry,
+			llmClient: client,
+			systemPrompt: "",
+			model: { provider: "test", model_id: "test" },
+			tools: [],
+			retryPolicy,
+		});
+
+		await runtime.prompt("hi");
+
+		expect(runtime.store.query({ types: ["RETRY_SCHEDULED"] })).toHaveLength(0);
+		const completed = runtime.store.query({ types: ["AGENT_TURN_COMPLETED"] });
+		expect(completed).toHaveLength(1);
+		expect((completed[0].payload as { error_message?: string }).error_message).toMatch(/Retry backoff exhausted/);
+
+		runtime.dispose();
+	});
+
+	it("aborts a scheduled retry without hanging the active prompt", async () => {
+		const cwd = makeTempDir();
+
+		const client: LLMClient = {
+			async complete(): Promise<LLMResponse> {
+				throw new Error("retryable outage");
+			},
+		};
+
+		const retryPolicy: RetryPolicy = {
+			maxAttempts: 5,
+			isRetryable: () => true,
+			nextDelayMs: () => 1000,
+		};
+
+		const runtime = new EventSourcedRuntime({
+			cwd,
+			agentDir: cwd,
+			toolRegistry: emptyRegistry,
+			llmClient: client,
+			systemPrompt: "",
+			model: { provider: "test", model_id: "test" },
+			tools: [],
+			retryPolicy,
+		});
+
+		const prompt = runtime.prompt("hi");
+		const scheduled = await waitForEvent(runtime, "RETRY_SCHEDULED");
+		runtime.abort();
+		await prompt;
+
+		const aborted = runtime.store.query({ types: ["RETRY_ABORTED"] });
+		expect(aborted).toHaveLength(1);
+		expect(aborted[0].payload).toMatchObject({
+			attempt: 1,
+			reason: "user_interrupt",
+			scheduled_event_id: scheduled.event_id,
+		});
+		const completed = runtime.store.query({ types: ["AGENT_TURN_COMPLETED"], reverse: true, limit: 1 })[0];
+		expect(completed.payload).toMatchObject({ reason: "aborted" });
+
+		runtime.dispose();
+	});
+
 	// ────────────────────────────────────────────────────────────────────────
 	// Follow-up queue
 	// ────────────────────────────────────────────────────────────────────────
@@ -162,20 +418,158 @@ describe("Reactor stage-2: policies + queues", () => {
 			tools: [],
 		});
 
-		// Queue follow-up BEFORE the prompt — both should run in sequence
-		// Note: the followUp event needs to be emitted via store.append since the
-		// runtime API doesn't expose followUp() yet (that's reactor-level).
-		runtime.store.append({
-			actor_id: "user",
-			type: "USER_FOLLOWUP_QUEUED",
-			payload: { content: "second message" },
-		});
+		// Queue follow-up BEFORE the prompt — both should run in sequence.
+		runtime.followUp("second message");
 
 		await runtime.prompt("first message");
 
 		// Both turns should have completed
 		expect(seen).toEqual(["first message", "second message"]);
 		expect(runtime.store.query({ types: ["AGENT_TURN_COMPLETED"] })).toHaveLength(2);
+
+		runtime.dispose();
+	});
+
+	it("processes steer messages after interrupting the current turn", async () => {
+		const cwd = makeTempDir();
+		const seen: string[] = [];
+		let calls = 0;
+
+		const client: LLMClient = {
+			async complete(req): Promise<LLMResponse> {
+				calls++;
+				if (calls === 1) {
+					await new Promise<void>((resolve) => req.signal?.addEventListener("abort", () => resolve(), { once: true }));
+					throw new Error("aborted");
+				}
+				const last = req.messages[req.messages.length - 1];
+				if (last.role === "user") {
+					seen.push(typeof last.content === "string" ? last.content : "?");
+				}
+				return {
+					content: [{ type: "text", text: "ok" } as ContentBlock],
+					provider: "test",
+					model: "test",
+					usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, cost: 0 },
+					stopReason: "stop",
+				};
+			},
+		};
+
+		const runtime = new EventSourcedRuntime({
+			cwd,
+			agentDir: cwd,
+			toolRegistry: emptyRegistry,
+			llmClient: client,
+			systemPrompt: "",
+			model: { provider: "test", model_id: "test" },
+			tools: [],
+		});
+
+		const prompt = runtime.prompt("first message");
+		await waitForEvent(runtime, "LLM_CALL_REQUESTED");
+		runtime.steer("redirected message");
+		await prompt;
+
+		expect(seen).toEqual(["redirected message"]);
+		expect(runtime.store.query({ types: ["USER_INTERRUPT"] })).toHaveLength(1);
+		expect(runtime.store.query({ types: ["AGENT_TURN_COMPLETED"] })).toHaveLength(2);
+		const completed = runtime.store.query({ types: ["AGENT_TURN_COMPLETED"], reverse: true, limit: 1 })[0];
+		expect(completed.payload).toMatchObject({ reason: "stop" });
+
+		runtime.dispose();
+	});
+
+	it("runs prompt, tool, follow-up, and manual compaction in one event-driven cycle", async () => {
+		const cwd = makeTempDir();
+		let calls = 0;
+		let runtime: EventSourcedRuntime;
+
+		const client: LLMClient = {
+			async complete(): Promise<LLMResponse> {
+				calls++;
+				if (calls === 1) {
+					return {
+						content: [
+							{ type: "tool_call", id: "call_echo", name: "echo", arguments: { text: "hello" } } as ContentBlock,
+						],
+						provider: "test",
+						model: "test",
+						usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, cost: 0 },
+						stopReason: "tool_use",
+					};
+				}
+				if (calls === 2) {
+					return {
+						content: [{ type: "text", text: "tool handled" } as ContentBlock],
+						provider: "test",
+						model: "test",
+						usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, cost: 0 },
+						stopReason: "stop",
+					};
+				}
+				return {
+					content: [{ type: "text", text: "follow-up handled" } as ContentBlock],
+					provider: "test",
+					model: "test",
+					usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, cost: 0 },
+					stopReason: "stop",
+				};
+			},
+		};
+
+		runtime = new EventSourcedRuntime({
+			cwd,
+			agentDir: cwd,
+			toolRegistry: makeEchoRegistry(),
+			llmClient: client,
+			classifierConfig: { approve_unknown: false },
+			systemPrompt: "",
+			model: { provider: "test", model_id: "test" },
+			tools: [],
+			compactionPolicy: {
+				estimateContextTokens: () => 100,
+				contextWindow: () => 1000,
+				threshold: () => 1,
+				isOverflow: () => false,
+				async compact() {
+					const lastUser = runtime.store.query({ types: ["USER_MESSAGE"], reverse: true, limit: 1 })[0];
+					return {
+						first_kept_event_id: lastUser.event_id,
+						summary: "Integrated summary",
+						tokens_before: 100,
+						tokens_after: 20,
+					};
+				},
+			},
+		});
+
+		let stopTurns = 0;
+		runtime.subscribe((event) => {
+			if (event.type !== "AGENT_TURN_COMPLETED") return;
+			const payload = event.payload as { reason: string };
+			if (payload.reason !== "stop") return;
+			stopTurns++;
+			if (stopTurns === 2) {
+				runtime.compact({ token_count: 100 });
+			}
+		}, { types: ["AGENT_TURN_COMPLETED"] });
+
+		runtime.followUp("second message");
+		await runtime.prompt("first message");
+		await waitForEvent(runtime, "COMPACTION_END");
+
+		expect(calls).toBe(3);
+		expect(runtime.store.query({ types: ["TOOL_EXECUTION_END"] })).toHaveLength(1);
+		expect(runtime.store.query({ types: ["USER_MESSAGE"] })).toHaveLength(2);
+		expect(runtime.store.query({ types: ["AGENT_TURN_COMPLETED"] })).toHaveLength(2);
+		const compaction = runtime.store.query({ types: ["COMPACTION_END"] })[0];
+		expect(compaction.payload).toMatchObject({ summary: "Integrated summary" });
+
+		const context = runtime.getProjection().buildContext();
+		expect(context.messages[0].role).toBe("compactionSummary");
+		expect(JSON.stringify(context.messages)).toContain("second message");
+		expect(JSON.stringify(context.messages)).not.toContain("first message");
 
 		runtime.dispose();
 	});
@@ -238,6 +632,89 @@ describe("Reactor stage-2: policies + queues", () => {
 		runtime.dispose();
 	});
 
+	it("uses the default CompactionEngine when no custom compaction policy is supplied", async () => {
+		const cwd = makeTempDir();
+		let calls = 0;
+
+		const client: LLMClient = {
+			async complete(req): Promise<LLMResponse> {
+				calls++;
+				if (calls === 1) {
+					return {
+						content: [{ type: "text", text: "current answer ".repeat(30) } as ContentBlock],
+						provider: "test",
+						model: "test",
+						usage: { input: 80, output: 60, cache_read: 0, cache_write: 0, total: 140, cost: 0 },
+						stopReason: "stop",
+					};
+				}
+				const promptMessage = req.messages[0];
+				const promptText =
+					typeof promptMessage.content === "string"
+						? promptMessage.content
+						: promptMessage.content.map((block) => "text" in block ? block.text : "").join("\n");
+				expect(promptText).toContain("old request");
+				return {
+					content: [{ type: "text", text: "Generated event-sourced summary" } as ContentBlock],
+					provider: "test",
+					model: "test",
+					usage: { input: 1, output: 1, cache_read: 0, cache_write: 0, total: 2, cost: 0 },
+					stopReason: "stop",
+				};
+			},
+		};
+
+		const runtime = new EventSourcedRuntime({
+			cwd,
+			agentDir: cwd,
+			toolRegistry: emptyRegistry,
+			llmClient: client,
+			systemPrompt: "",
+			model: { provider: "test", model_id: "test" },
+			tools: [],
+			contextBudget: 100,
+			compactionEngineSettings: {
+				contextWindow: 100,
+				reserveTokens: 10,
+				keepRecentTokens: 5,
+			},
+		});
+
+		runtime.store.append({
+			actor_id: "user",
+			type: "USER_MESSAGE",
+			payload: { content: "old request ".repeat(50) },
+		});
+		runtime.store.append({
+			actor_id: "coder_agent",
+			type: "AGENT_MESSAGE_END",
+			payload: {
+				content: [{ type: "text", text: "old answer ".repeat(50) }],
+				model: { provider: "test", model_id: "test" },
+				usage: { input: 100, output: 50, cache_read: 0, cache_write: 0, total: 150, cost: 0 },
+				stop_reason: "stop",
+			},
+		});
+
+		await runtime.prompt("current request");
+		await waitForEvent(runtime, "COMPACTION_END");
+
+		const ended = runtime.store.query({ types: ["COMPACTION_END"] });
+		expect(ended).toHaveLength(1);
+		expect(ended[0].payload).toMatchObject({
+			summary: "Generated event-sourced summary",
+			tokens_before: expect.any(Number),
+			first_kept_event_id: expect.any(String),
+		});
+		expect(calls).toBe(2);
+
+		const context = runtime.getProjection().buildContext();
+		expect(context.messages[0].role).toBe("compactionSummary");
+		expect(context.messages.some((message) => JSON.stringify(message).includes("old request"))).toBe(false);
+
+		runtime.dispose();
+	});
+
 	it("emits COMPACTION_REQUESTED with reason=overflow when policy.isOverflow returns true", async () => {
 		const cwd = makeTempDir();
 
@@ -284,6 +761,57 @@ describe("Reactor stage-2: policies + queues", () => {
 		const requested = runtime.store.query({ types: ["COMPACTION_REQUESTED"] });
 		expect(requested).toHaveLength(1);
 		expect((requested[0].payload as { reason: string }).reason).toBe("overflow");
+
+		runtime.dispose();
+	});
+
+	it("emits COMPACTION_ABORTED when user interrupt cancels active compaction", async () => {
+		const cwd = makeTempDir();
+
+		const client: LLMClient = {
+			async complete(req): Promise<LLMResponse> {
+				await new Promise<void>((resolve) => req.signal?.addEventListener("abort", () => resolve(), { once: true }));
+				throw new Error("aborted");
+			},
+		};
+
+		const compactionPolicy: CompactionPolicy = {
+			estimateContextTokens: () => 0,
+			contextWindow: () => Number.MAX_SAFE_INTEGER,
+			threshold: () => 1,
+			isOverflow: () => false,
+			async compact(_reason, signal): Promise<CompactionOutcome> {
+				await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+				throw new Error("cancelled");
+			},
+		};
+
+		const runtime = new EventSourcedRuntime({
+			cwd,
+			agentDir: cwd,
+			toolRegistry: emptyRegistry,
+			llmClient: client,
+			systemPrompt: "",
+			model: { provider: "test", model_id: "test" },
+			tools: [],
+			compactionPolicy,
+		});
+
+		const prompt = runtime.prompt("hi");
+		await waitForEvent(runtime, "LLM_CALL_REQUESTED");
+		runtime.compact({ token_count: 4321 });
+		await waitForEvent(runtime, "COMPACTION_START");
+		runtime.abort();
+		await prompt;
+		await waitForEvent(runtime, "COMPACTION_ABORTED");
+
+		const aborted = runtime.store.query({ types: ["COMPACTION_ABORTED"] });
+		expect(aborted).toHaveLength(1);
+		expect(aborted[0].payload).toMatchObject({
+			reason: "user_cancelled",
+			message: "cancelled",
+			token_count: 4321,
+		});
 
 		runtime.dispose();
 	});

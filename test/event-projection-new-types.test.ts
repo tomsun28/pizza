@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { eventToMessage, extractToolCalls } from "../src/core/projection/event-to-message.js";
 import type { EventBase } from "../src/core/event-store/types.js";
+import type { TypedEvent } from "../src/core/event-store/events.js";
 
 function mkEvent(
 	type: string,
@@ -174,5 +175,93 @@ describe("eventToMessage — BASH_EXECUTION / CUSTOM_MESSAGE / BRANCH_SUMMARY", 
 		expect(msg!.role).toBe("branchSummary");
 		expect((msg as any).summary).toBe("Previously fixed bug X");
 		expect((msg as any).fromId).toBe("evt-123");
+	});
+
+	it("projects COMPACTION_END into a CompactionSummaryMessage", () => {
+		const msg = eventToMessage(
+			mkEvent("COMPACTION_END", {
+				summary: "Earlier work was compacted",
+				first_kept_event_id: "evt-keep",
+				tokens_before: 12000,
+				tokens_after: 900,
+			}),
+		);
+
+		expect(msg).not.toBeNull();
+		expect(msg!.role).toBe("compactionSummary");
+		expect((msg as any).summary).toBe("Earlier work was compacted");
+		expect((msg as any).tokensBefore).toBe(12000);
+	});
+
+	it("projects FILE_MUTATION_APPLIED into a custom notification message", () => {
+		const msg = eventToMessage(
+			mkEvent("FILE_MUTATION_APPLIED", {
+				path: "src/main.ts",
+				operation: "modify",
+				diff: "@@ ...",
+				tool_call_id: "call-edit",
+				tool_name: "edit",
+			}),
+		);
+
+		expect(msg).not.toBeNull();
+		expect(msg!.role).toBe("custom");
+		expect((msg as any).customType).toBe("runtime:file_mutation");
+		expect((msg as any).content).toBe("File modify: src/main.ts");
+		expect((msg as any).display).toBe(true);
+		expect((msg as any).details).toEqual({
+			path: "src/main.ts",
+			operation: "modify",
+			diff: "@@ ...",
+			toolCallId: "call-edit",
+			toolName: "edit",
+		});
+	});
+
+	it("projects legacy nested FILE_MUTATION_APPLIED payloads", () => {
+		const msg = eventToMessage(
+			mkEvent("FILE_MUTATION_APPLIED", {
+				mutation: { path: "README.md", operation: "create" },
+				tool_call_id: "call-write",
+			}),
+		);
+
+		expect(msg!.role).toBe("custom");
+		expect((msg as any).content).toBe("File create: README.md");
+		expect((msg as any).details).toMatchObject({
+			path: "README.md",
+			operation: "create",
+			toolCallId: "call-write",
+		});
+	});
+});
+
+describe("new event-driven control event payloads", () => {
+	it("types compaction, retry, and agent abort/error events as TypedEvent", () => {
+		const events: TypedEvent[] = [
+			mkEvent("COMPACTION_ABORTED", {
+				reason: "user_cancelled",
+				message: "User cancelled compaction",
+				started_event_id: "evt-start",
+				token_count: 10000,
+			}) as TypedEvent,
+			mkEvent("RETRY_ABORTED", {
+				attempt: 2,
+				reason: "user_interrupt",
+				error_message: "cancelled",
+				scheduled_event_id: "evt-retry",
+			}) as TypedEvent,
+			mkEvent("AGENT_ERROR", {
+				error: "Provider returned malformed content",
+				retryable: false,
+				causing_event_id: "evt-llm",
+			}) as TypedEvent,
+		];
+
+		expect(events.map((event) => event.type)).toEqual([
+			"COMPACTION_ABORTED",
+			"RETRY_ABORTED",
+			"AGENT_ERROR",
+		]);
 	});
 });

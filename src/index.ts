@@ -13,6 +13,7 @@ export {
 	parseSkillBlock,
 	type SessionStats,
 } from "./core/agent-session.js";
+export { SessionFacade, type SessionFacadeConfig, type SessionFacadeEventListener } from "./core/session-facade.js";
 // Auth and model registry
 export {
 	type ApiKeyCredential,
@@ -131,6 +132,7 @@ export {
 	createExtensionRuntime,
 	defineTool,
 	discoverAndLoadExtensions,
+	EventStoreExtensionSessionManager,
 	ExtensionRunner,
 	isBashToolResult,
 	isEditToolResult,
@@ -142,6 +144,8 @@ export {
 	isWriteToolResult,
 	wrapRegisteredTool,
 	wrapRegisteredTools,
+	type EventStoreExtensionSessionManagerOptions,
+	type ExtensionSessionManager,
 } from "./core/extensions/index.js";
 // Footer data provider (git branch + extension statuses - data not otherwise available to extensions)
 export type { ReadonlyFooterDataProvider } from "./core/footer-data-provider.js";
@@ -279,7 +283,9 @@ export { type MainOptions, main } from "./main.js";
 // Run modes for programmatic SDK usage
 export {
 	InteractiveMode,
+	mapTypedEventToModeEvents,
 	type InteractiveModeOptions,
+	type ModeEvent,
 	type ModelInfo,
 	type PrintModeOptions,
 	RpcClient,

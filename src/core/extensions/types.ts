@@ -51,10 +51,10 @@ import type { ModelRegistry } from "../model-registry.js";
 import type {
 	BranchSummaryEntry,
 	CompactionEntry,
-	ReadonlySessionManager,
 	SessionEntry,
 	SessionManager,
 } from "../session-manager.js";
+import type { ExtensionSessionManager } from "./session-context.js";
 import type { SlashCommandInfo } from "../slash-commands.js";
 import type { SourceInfo } from "../source-info.js";
 import type { BuildSystemPromptOptions } from "../system-prompt.js";
@@ -291,7 +291,7 @@ export interface ExtensionContext {
 	/** Current working directory */
 	cwd: string;
 	/** Session manager (read-only) */
-	sessionManager: ReadonlySessionManager;
+	sessionManager: ExtensionSessionManager;
 	/** Model registry for API key resolution */
 	modelRegistry: ModelRegistry;
 	/** Current model (may be undefined) */

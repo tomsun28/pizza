@@ -56,18 +56,20 @@ export class SessionProjection {
 	buildContext(options?: BuildContextOptions): BuiltContext {
 		const { start, end } = this._getEventRange();
 
-		const events = this.store.query({
+		const rawEvents = this.store.query({
 			after: start,
 			before: end,
 			types: CONTEXT_RELEVANT_EVENT_TYPES,
 		});
+		const events = this._applyCompactionBoundary(rawEvents);
 
 		let messages = eventsToMessages(events);
 
 		// Inject compaction summary if present
 		if (this.descriptor.summary_event_id) {
+			const summaryAlreadyInRange = events.some((event) => event.event_id === this.descriptor.summary_event_id);
 			const summaryEvent = this.store.get(this.descriptor.summary_event_id);
-			if (summaryEvent && summaryEvent.type === "COMPACTION_END") {
+			if (!summaryAlreadyInRange && summaryEvent && summaryEvent.type === "COMPACTION_END") {
 				const summaryPayload = summaryEvent.payload as {
 					summary: string;
 					tokens_before: number;
@@ -160,6 +162,25 @@ export class SessionProjection {
 		const start = this.descriptor.event_range.start_event_id === "ORIGIN" ? undefined : this.descriptor.event_range.start_event_id;
 		const end = this.descriptor.event_range.end_event_id === "HEAD" ? undefined : this.descriptor.event_range.end_event_id;
 		return { start, end };
+	}
+
+	private _applyCompactionBoundary(events: EventBase[]): EventBase[] {
+		let latestCompaction: EventBase | undefined;
+		for (const event of events) {
+			if (event.type === "COMPACTION_END") {
+				latestCompaction = event;
+			}
+		}
+		if (!latestCompaction) return events;
+
+		const payload = latestCompaction.payload as { first_kept_event_id?: string };
+		const firstKept = payload.first_kept_event_id ? this.store.get(payload.first_kept_event_id) : undefined;
+		const firstKeptSequence = firstKept?.sequence ?? latestCompaction.sequence + 1;
+
+		return [
+			latestCompaction,
+			...events.filter((event) => event.type !== "COMPACTION_END" && event.sequence >= firstKeptSequence),
+		];
 	}
 
 	private _summarizeEvent(event: EventBase): string {
@@ -259,7 +280,9 @@ export class SessionProjection {
 			case "COMPACTION_REQUESTED":
 			case "COMPACTION_START":
 			case "COMPACTION_END":
+			case "COMPACTION_ABORTED":
 				return "compaction";
+			case "AGENT_ERROR":
 			case "RUNTIME_ERROR":
 				return "error";
 			case "CHECKPOINT_CREATED":

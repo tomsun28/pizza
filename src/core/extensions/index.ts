@@ -19,6 +19,11 @@ export type {
 	SwitchSessionHandler,
 } from "./runner.js";
 export { ExtensionRunner } from "./runner.js";
+export {
+	EventStoreExtensionSessionManager,
+	type EventStoreExtensionSessionManagerOptions,
+	type ExtensionSessionManager,
+} from "./session-context.js";
 export type {
 	AfterProviderResponseEvent,
 	AgentEndEvent,
