@@ -13,6 +13,12 @@ describe("InteractiveMode.maybeWarnAboutAnthropicSubscriptionAuth", () => {
 					getApiKeyForProvider: vi.fn().mockResolvedValue("sk-ant-oat01-test"),
 				},
 			},
+			modelRegistryValue: {
+				authStorage: {
+					get: vi.fn().mockReturnValue(undefined),
+				},
+				getApiKeyForProvider: vi.fn().mockResolvedValue("sk-ant-oat01-test"),
+			},
 			showWarning: vi.fn(),
 		};
 
@@ -24,7 +30,7 @@ describe("InteractiveMode.maybeWarnAboutAnthropicSubscriptionAuth", () => {
 		});
 
 		expect(fakeThis.showWarning).toHaveBeenCalledTimes(1);
-		expect(fakeThis.session.modelRegistry.getApiKeyForProvider).toHaveBeenCalledTimes(1);
+		expect(fakeThis.modelRegistryValue.getApiKeyForProvider).toHaveBeenCalledTimes(1);
 	});
 
 	test("warns when Anthropic OAuth is stored even if token refresh lookup would fail", async () => {
@@ -38,6 +44,12 @@ describe("InteractiveMode.maybeWarnAboutAnthropicSubscriptionAuth", () => {
 					getApiKeyForProvider: vi.fn().mockResolvedValue(undefined),
 				},
 			},
+			modelRegistryValue: {
+				authStorage: {
+					get: vi.fn().mockReturnValue({ type: "oauth" }),
+				},
+				getApiKeyForProvider: vi.fn().mockResolvedValue(undefined),
+			},
 			showWarning: vi.fn(),
 		};
 
@@ -46,7 +58,7 @@ describe("InteractiveMode.maybeWarnAboutAnthropicSubscriptionAuth", () => {
 		});
 
 		expect(fakeThis.showWarning).toHaveBeenCalledTimes(1);
-		expect(fakeThis.session.modelRegistry.getApiKeyForProvider).not.toHaveBeenCalled();
+		expect(fakeThis.modelRegistryValue.getApiKeyForProvider).not.toHaveBeenCalled();
 	});
 
 	test("does not warn for non-Anthropic models", async () => {
@@ -60,6 +72,12 @@ describe("InteractiveMode.maybeWarnAboutAnthropicSubscriptionAuth", () => {
 					getApiKeyForProvider: vi.fn(),
 				},
 			},
+			modelRegistryValue: {
+				authStorage: {
+					get: vi.fn(),
+				},
+				getApiKeyForProvider: vi.fn(),
+			},
 			showWarning: vi.fn(),
 		};
 
@@ -68,6 +86,6 @@ describe("InteractiveMode.maybeWarnAboutAnthropicSubscriptionAuth", () => {
 		});
 
 		expect(fakeThis.showWarning).not.toHaveBeenCalled();
-		expect(fakeThis.session.modelRegistry.getApiKeyForProvider).not.toHaveBeenCalled();
+		expect(fakeThis.modelRegistryValue.getApiKeyForProvider).not.toHaveBeenCalled();
 	});
 });

@@ -1,7 +1,7 @@
 import { visibleWidth } from "@mariozechner/pi-tui";
 import { beforeAll, describe, expect, it } from "vitest";
-import type { AgentSession } from "../src/core/agent-session.js";
 import type { ReadonlyFooterDataProvider } from "../src/core/footer-data-provider.js";
+import type { FooterSessionInfo } from "../src/modes/interactive/components/footer.js";
 import { FooterComponent } from "../src/modes/interactive/components/footer.js";
 import { initTheme } from "../src/modes/interactive/theme/theme.js";
 
@@ -20,43 +20,28 @@ function createSession(options: {
 	reasoning?: boolean;
 	thinkingLevel?: string;
 	usage?: AssistantUsage;
-}): AgentSession {
+}): FooterSessionInfo {
 	const usage = options.usage;
-	const entries =
-		usage === undefined
-			? []
-			: [
-					{
-						type: "message",
-						message: {
-							role: "assistant",
-							usage,
-						},
-					},
-				];
-
-	const session = {
-		state: {
-			model: {
-				id: options.modelId ?? "test-model",
-				provider: options.provider ?? "test",
-				contextWindow: 200_000,
-				reasoning: options.reasoning ?? false,
-			},
-			thinkingLevel: options.thinkingLevel ?? "off",
-		},
-		sessionManager: {
-			getEntries: () => entries,
-			getSessionName: () => options.sessionName,
-			getCwd: () => "/tmp/project",
-		},
+	return {
+		getModel: () => ({
+			id: options.modelId ?? "test-model",
+			provider: options.provider ?? "test",
+			contextWindow: 200_000,
+			reasoning: options.reasoning ?? false,
+		}),
+		getThinkingLevel: () => options.thinkingLevel ?? "off",
+		getTokenUsage: () => ({
+			totalInput: usage?.input ?? 0,
+			totalOutput: usage?.output ?? 0,
+			totalCacheRead: usage?.cacheRead ?? 0,
+			totalCacheWrite: usage?.cacheWrite ?? 0,
+			totalCost: usage?.cost.total ?? 0,
+		}),
 		getContextUsage: () => ({ contextWindow: 200_000, percent: 12.3 }),
-		modelRegistry: {
-			isUsingOAuth: () => false,
-		},
+		getCwd: () => "/tmp/project",
+		getSessionName: () => options.sessionName,
+		isUsingOAuthSubscription: () => false,
 	};
-
-	return session as unknown as AgentSession;
 }
 
 function createFooterData(providerCount: number): ReadonlyFooterDataProvider {

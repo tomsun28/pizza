@@ -2,10 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.js";
 
 type CloneCommandContext = {
-	sessionManager: { getLeafId: () => string | null };
-	runtimeHost: {
-		fork: (entryId: string, options?: { position?: "before" | "at" }) => Promise<{ cancelled: boolean }>;
+	facade: {
+		runtime: {
+			fork: (entryId: string) => Promise<{ cancelled: boolean }>;
+			sessionManager: { getLeafId: () => string | null };
+		};
 	};
+	sessionManager: { getLeafId: () => string | null };
 	handleRuntimeSessionChange: () => Promise<void>;
 	renderCurrentSessionState: () => void;
 	editor: { setText: (text: string) => void };
@@ -30,9 +33,15 @@ describe("InteractiveMode /clone", () => {
 		const showError = vi.fn();
 		const requestRender = vi.fn();
 
+		const sessionManager = { getLeafId: () => "leaf-123" };
 		const context: CloneCommandContext = {
-			sessionManager: { getLeafId: () => "leaf-123" },
-			runtimeHost: { fork },
+			facade: {
+				runtime: {
+					fork,
+					sessionManager,
+				},
+			},
+			sessionManager,
 			handleRuntimeSessionChange,
 			renderCurrentSessionState,
 			editor: { setText },
@@ -43,7 +52,7 @@ describe("InteractiveMode /clone", () => {
 
 		await interactiveModePrototype.handleCloneCommand.call(context);
 
-		expect(fork).toHaveBeenCalledWith("leaf-123", { position: "at" });
+		expect(fork).toHaveBeenCalledWith("leaf-123");
 		expect(renderCurrentSessionState).toHaveBeenCalled();
 		expect(setText).toHaveBeenCalledWith("");
 		expect(showStatus).toHaveBeenCalledWith("Cloned to new session");
@@ -56,9 +65,15 @@ describe("InteractiveMode /clone", () => {
 		const showStatus = vi.fn();
 		const showError = vi.fn();
 
+		const sessionManager = { getLeafId: () => null };
 		const context: CloneCommandContext = {
-			sessionManager: { getLeafId: () => null },
-			runtimeHost: { fork },
+			facade: {
+				runtime: {
+					fork,
+					sessionManager,
+				},
+			},
+			sessionManager,
 			handleRuntimeSessionChange: vi.fn(async () => {}),
 			renderCurrentSessionState: vi.fn(),
 			editor: { setText: vi.fn() },

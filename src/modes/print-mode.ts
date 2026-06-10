@@ -7,8 +7,10 @@
  */
 
 import type { AssistantMessage, ImageContent } from "@mariozechner/pi-ai";
-import type { AgentSessionRuntime } from "../core/agent-session-runtime.js";
+import type { AgentMessage } from "../core/agent/types.js";
+import type { ImageContent as EventImageContent } from "../core/event-store/types.js";
 import { flushRawStdout, writeRawStdout } from "../core/output-guard.js";
+import type { SessionFacade } from "../core/session-facade.js";
 import { killTrackedDetachedChildren } from "../utils/shell.js";
 
 /**
@@ -25,123 +27,96 @@ export interface PrintModeOptions {
 	initialImages?: ImageContent[];
 }
 
+function registerPrintModeSignalHandlers(disposeRuntime: () => Promise<void>): Array<() => void> {
+	const cleanupHandlers: Array<() => void> = [];
+	const signals: NodeJS.Signals[] = ["SIGTERM"];
+	if (process.platform !== "win32") {
+		signals.push("SIGHUP");
+	}
+
+	for (const signal of signals) {
+		const handler = () => {
+			killTrackedDetachedChildren();
+			void disposeRuntime().finally(() => {
+				process.exit(signal === "SIGHUP" ? 129 : 143);
+			});
+		};
+		process.on(signal, handler);
+		cleanupHandlers.push(() => process.off(signal, handler));
+	}
+
+	return cleanupHandlers;
+}
+
+function writeFinalAssistantText(messages: AgentMessage[]): number {
+	const lastMessage = messages[messages.length - 1];
+	if (lastMessage?.role !== "assistant") {
+		return 0;
+	}
+
+	const assistantMsg = lastMessage as AssistantMessage;
+	if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
+		console.error(assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`);
+		return 1;
+	}
+
+	for (const content of assistantMsg.content) {
+		if (content.type === "text") {
+			writeRawStdout(`${content.text}\n`);
+		}
+	}
+
+	return 0;
+}
+
+function toEventImages(images?: ImageContent[]): EventImageContent[] | undefined {
+	if (!images) return undefined;
+	return images.map((image) => {
+		const eventImage = image as ImageContent & { mime_type?: string };
+		return {
+			type: "image",
+			data: image.data,
+			mime_type: eventImage.mime_type ?? image.mimeType,
+		};
+	});
+}
+
 /**
- * Run in print (single-shot) mode.
- * Sends prompts to the agent and outputs the result.
+ * Run print mode against the event-sourced facade.
+ * JSON mode emits raw TypedEvent JSON lines; text mode prints the final assistant text.
  */
-export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: PrintModeOptions): Promise<number> {
+export async function runPrintModeWithFacade(facade: SessionFacade, options: PrintModeOptions): Promise<number> {
 	const { mode, messages = [], initialMessage, initialImages } = options;
 	let exitCode = 0;
-	let session = runtimeHost.session;
 	let unsubscribe: (() => void) | undefined;
 	let disposed = false;
-	const signalCleanupHandlers: Array<() => void> = [];
 
 	const disposeRuntime = async (): Promise<void> => {
 		if (disposed) return;
 		disposed = true;
 		unsubscribe?.();
-		await runtimeHost.dispose();
+		await Promise.resolve(facade.dispose());
 	};
 
-	const registerSignalHandlers = (): void => {
-		const signals: NodeJS.Signals[] = ["SIGTERM"];
-		if (process.platform !== "win32") {
-			signals.push("SIGHUP");
-		}
+	const signalCleanupHandlers = registerPrintModeSignalHandlers(disposeRuntime);
 
-		for (const signal of signals) {
-			const handler = () => {
-				killTrackedDetachedChildren();
-				void disposeRuntime().finally(() => {
-					process.exit(signal === "SIGHUP" ? 129 : 143);
-				});
-			};
-			process.on(signal, handler);
-			signalCleanupHandlers.push(() => process.off(signal, handler));
-		}
-	};
-
-	registerSignalHandlers();
-
-	runtimeHost.setRebindSession(async () => {
-		await rebindSession();
-	});
-
-	const rebindSession = async (): Promise<void> => {
-		session = runtimeHost.session;
-		await session.bindExtensions({
-			commandContextActions: {
-				waitForIdle: () => session.agent.waitForIdle(),
-				newSession: async (newSessionOptions) => runtimeHost.newSession(newSessionOptions),
-				fork: async (entryId, forkOptions) => {
-					const result = await runtimeHost.fork(entryId, forkOptions);
-					return { cancelled: result.cancelled };
-				},
-				navigateTree: async (targetId, navigateOptions) => {
-					const result = await session.navigateTree(targetId, {
-						summarize: navigateOptions?.summarize,
-						customInstructions: navigateOptions?.customInstructions,
-						replaceInstructions: navigateOptions?.replaceInstructions,
-						label: navigateOptions?.label,
-					});
-					return { cancelled: result.cancelled };
-				},
-				switchSession: async (sessionPath, switchOptions) => {
-					return runtimeHost.switchSession(sessionPath, switchOptions);
-				},
-				reload: async () => {
-					await session.reload();
-				},
-			},
-			onError: (err) => {
-				console.error(`Extension error (${err.extensionPath}): ${err.error}`);
-			},
-		});
-
-		unsubscribe?.();
-		unsubscribe = session.subscribe((event) => {
+	try {
+		unsubscribe = facade.subscribe((event) => {
 			if (mode === "json") {
 				writeRawStdout(`${JSON.stringify(event)}\n`);
 			}
 		});
-	};
-
-	try {
-		if (mode === "json") {
-			const header = session.sessionManager.getHeader();
-			if (header) {
-				writeRawStdout(`${JSON.stringify(header)}\n`);
-			}
-		}
-
-		await rebindSession();
 
 		if (initialMessage) {
-			await session.prompt(initialMessage, { images: initialImages });
+			await facade.prompt(initialMessage, toEventImages(initialImages));
 		}
 
 		for (const message of messages) {
-			await session.prompt(message);
+			await facade.prompt(message);
 		}
 
 		if (mode === "text") {
-			const state = session.state;
-			const lastMessage = state.messages[state.messages.length - 1];
-
-			if (lastMessage?.role === "assistant") {
-				const assistantMsg = lastMessage as AssistantMessage;
-				if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
-					console.error(assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`);
-					exitCode = 1;
-				} else {
-					for (const content of assistantMsg.content) {
-						if (content.type === "text") {
-							writeRawStdout(`${content.text}\n`);
-						}
-					}
-				}
-			}
+			exitCode = writeFinalAssistantText(facade.getProjection().buildContext().messages);
 		}
 
 		return exitCode;

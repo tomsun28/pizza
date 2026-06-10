@@ -13,6 +13,13 @@ import { SessionProjection } from "./session-projection.js";
 import { SessionBoundaryInferrer } from "./boundary-inferrer.js";
 import { getSessionIndexPath, deriveWorkspaceId } from "../event-store/workspace.js";
 
+export interface CreateProjectionSessionOptions {
+	parentSessionId?: string;
+	startEventId?: string;
+	summaryEventId?: string;
+	closeActive?: boolean;
+}
+
 // ============================================================================
 // Session Manager
 // ============================================================================
@@ -29,16 +36,18 @@ export class SessionManager {
 	private activeSessionId: string | undefined;
 	private inferrer: SessionBoundaryInferrer;
 	private unsubscribe: (() => void) | undefined;
-	private filePath: string;
+	private filePath: string | undefined;
 
 	constructor(
 		private store: EventStore,
 		storagePath?: string,
 	) {
 		this.inferrer = new SessionBoundaryInferrer();
-		this.filePath = storagePath ?? getSessionIndexPath(store.workspace_id);
-		this._ensureStorageDir();
-		this._loadIndex();
+		this.filePath = storagePath === ":memory:" ? undefined : (storagePath ?? getSessionIndexPath(store.workspace_id));
+		if (this.filePath) {
+			this._ensureStorageDir();
+			this._loadIndex();
+		}
 		this._subscribeToEvents();
 	}
 
@@ -63,29 +72,38 @@ export class SessionManager {
 	createSession(
 		created_by: SessionDescriptor["created_by"],
 		name?: string,
+		options: CreateProjectionSessionOptions = {},
 	): SessionDescriptor {
+		const previousActiveId = options.closeActive !== false ? this.activeSessionId : undefined;
 		const desc: SessionDescriptor = {
 			session_id: this._generateSessionId(),
 			workspace_id: this.store.workspace_id,
 			event_range: {
-				start_event_id: this.store.head ?? "ORIGIN",
+				start_event_id: options.startEventId ?? this.store.head ?? "ORIGIN",
 				end_event_id: "HEAD",
 			},
+			summary_event_id: options.summaryEventId,
 			name,
 			created_by,
+			parent_session_id: options.parentSessionId,
 			created_at: Date.now(),
 		};
 
 		this.sessions.set(desc.session_id, desc);
 		this.activeSessionId = desc.session_id;
-		this._persistIndex();
 
 		// Emit session created event
-		this.store.append({
+		const createdEvent = this.store.append({
 			actor_id: "runtime",
 			type: "SESSION_CREATED",
 			payload: { session_id: desc.session_id, name, created_by },
 		});
+
+		const previousActive = previousActiveId ? this.sessions.get(previousActiveId) : undefined;
+		if (previousActive && previousActive.event_range.end_event_id === "HEAD") {
+			previousActive.event_range.end_event_id = createdEvent.event_id;
+		}
+		this._persistIndex();
 
 		return desc;
 	}
@@ -107,6 +125,46 @@ export class SessionManager {
 				new_session_id: forked.session_id,
 				parent_session_id: forked.parent_session_id,
 				fork_at_event_id: event_id,
+			},
+		});
+
+		return forked;
+	}
+
+	/**
+	 * Fork an existing session while preserving its projected history.
+	 *
+	 * The source session is frozen at the current head if it was tracking HEAD,
+	 * and the forked descriptor reuses the source start boundary so context still
+	 * includes the source conversation.
+	 */
+	forkFromSession(session_id: string): SessionDescriptor {
+		const source = this.sessions.get(session_id);
+		if (!source) {
+			throw new Error(`Session not found: ${session_id}`);
+		}
+
+		const forkAtEventId =
+			source.event_range.end_event_id === "HEAD"
+				? this.store.head ?? source.event_range.start_event_id
+				: source.event_range.end_event_id;
+		if (source.event_range.end_event_id === "HEAD") {
+			this.activeSessionId = source.session_id;
+		}
+
+		const forked = this.createSession("fork", source.name, {
+			parentSessionId: source.session_id,
+			startEventId: source.event_range.start_event_id,
+			summaryEventId: source.summary_event_id,
+		});
+
+		this.store.append({
+			actor_id: "runtime",
+			type: "SESSION_FORKED",
+			payload: {
+				new_session_id: forked.session_id,
+				parent_session_id: source.session_id,
+				fork_at_event_id: forkAtEventId,
 			},
 		});
 
@@ -218,6 +276,7 @@ export class SessionManager {
 	}
 
 	private _ensureStorageDir(): void {
+		if (!this.filePath) return;
 		const dir = this.filePath.substring(0, this.filePath.lastIndexOf("/"));
 		if (!existsSync(dir)) {
 			mkdirSync(dir, { recursive: true });
@@ -225,6 +284,7 @@ export class SessionManager {
 	}
 
 	private _loadIndex(): void {
+		if (!this.filePath) return;
 		if (!existsSync(this.filePath)) return;
 
 		try {
@@ -242,6 +302,7 @@ export class SessionManager {
 	}
 
 	private _persistIndex(): void {
+		if (!this.filePath) return;
 		const index: SessionIndex = {
 			sessions: Array.from(this.sessions.values()),
 		};

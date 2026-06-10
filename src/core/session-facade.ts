@@ -11,6 +11,7 @@ import type { EventBase, ImageContent } from "./event-store/types.js";
 import type { SubscribeOptions } from "./event-store/store.js";
 import type { ExtensionRunner } from "./extensions/runner.js";
 import type { ModelRegistry } from "./model-registry.js";
+import type { ResourceLoader } from "./resource-loader.js";
 import type { SessionProjection } from "./projection/session-projection.js";
 import type { SettingsManager } from "./settings-manager.js";
 import type { ModelConfig, ToolDefinition } from "./runtime/llm-types.js";
@@ -22,6 +23,8 @@ export interface SessionFacadeConfig {
 	settingsManager: SettingsManager;
 	extensionRunner?: ExtensionRunner;
 	modelRegistry?: ModelRegistry;
+	resourceLoader?: ResourceLoader;
+	disposers?: Array<() => void>;
 }
 
 export type SessionFacadeEventListener = (event: EventBase) => void;
@@ -31,12 +34,17 @@ export class SessionFacade {
 	readonly settingsManager: SettingsManager;
 	readonly extensionRunner: ExtensionRunner | undefined;
 	readonly modelRegistry: ModelRegistry | undefined;
+	readonly resourceLoader: ResourceLoader | undefined;
+	private disposers: Array<() => void>;
+	private disposed = false;
 
 	constructor(config: SessionFacadeConfig) {
 		this.runtime = config.runtime;
 		this.settingsManager = config.settingsManager;
 		this.extensionRunner = config.extensionRunner;
 		this.modelRegistry = config.modelRegistry;
+		this.resourceLoader = config.resourceLoader;
+		this.disposers = config.disposers ?? [];
 	}
 
 	subscribe(listener: SessionFacadeEventListener, options?: SubscribeOptions): () => void {
@@ -124,6 +132,11 @@ export class SessionFacade {
 	}
 
 	dispose(): void {
+		if (this.disposed) return;
+		this.disposed = true;
+		for (const dispose of this.disposers.splice(0)) {
+			dispose();
+		}
 		this.runtime.dispose();
 	}
 }

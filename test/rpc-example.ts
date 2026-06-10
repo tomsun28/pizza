@@ -20,19 +20,19 @@ async function main() {
 
 	// Stream events to console
 	client.onEvent((event) => {
-		if (event.type === "message_update") {
-			const { assistantMessageEvent } = event;
-			if (assistantMessageEvent.type === "text_delta" || assistantMessageEvent.type === "thinking_delta") {
-				process.stdout.write(assistantMessageEvent.delta);
-			}
+		if (event.type === "AGENT_MESSAGE_CHUNK") {
+			const payload = event.payload as { chunk?: { delta?: string; content?: string } };
+			process.stdout.write(payload.chunk?.delta ?? payload.chunk?.content ?? "");
 		}
 
-		if (event.type === "tool_execution_start") {
-			console.log(`\n[Tool: ${event.toolName}]`);
+		if (event.type === "TOOL_EXECUTION_START") {
+			const payload = event.payload as { tool_name?: string };
+			console.log(`\n[Tool: ${payload.tool_name ?? "tool"}]`);
 		}
 
-		if (event.type === "tool_execution_end") {
-			console.log(`[Result: ${JSON.stringify(event.result).slice(0, 200)}...]\n`);
+		if (event.type === "TOOL_EXECUTION_END") {
+			const payload = event.payload as { result?: unknown };
+			console.log(`[Result: ${JSON.stringify(payload.result).slice(0, 200)}...]\n`);
 		}
 	});
 

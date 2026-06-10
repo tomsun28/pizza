@@ -5,12 +5,11 @@
  */
 
 import {
-	createAgentSession,
+	createSessionFacade,
 	createSyntheticSourceInfo,
 	DefaultResourceLoader,
 	getAgentDir,
 	type PromptTemplate,
-	SessionManager,
 } from "@mariozechner/pi-coding-agent";
 
 // Define custom templates
@@ -43,9 +42,10 @@ for (const template of discovered) {
 	console.log(`  /${template.name}: ${template.description}`);
 }
 
-await createAgentSession({
+const { facade } = await createSessionFacade({
 	resourceLoader: loader,
-	sessionManager: SessionManager.inMemory(),
+	storagePath: ":memory:",
 });
 
 console.log(`Session created with ${discovered.length + 1} prompt templates`);
+facade.dispose();

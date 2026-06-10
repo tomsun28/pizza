@@ -1,48 +1,57 @@
 /**
  * Session Management
  *
- * Control session persistence: in-memory, new file, continue, or open specific.
+ * Session persistence via EventStore: in-memory, persistent, continue, or open specific.
  */
 
-import { createAgentSession, SessionManager } from "@mariozechner/pi-coding-agent";
+import { createSessionFacade } from "@mariozechner/pi-coding-agent";
+
+const cwd = process.cwd();
 
 // In-memory (no persistence)
-const { session: inMemory } = await createAgentSession({
-	sessionManager: SessionManager.inMemory(),
-});
-console.log("In-memory session:", inMemory.sessionFile ?? "(none)");
+{
+	const { facade } = await createSessionFacade({
+		storagePath: ":memory:",
+	});
+	console.log("In-memory session created");
+	facade.dispose();
+}
 
-// New persistent session
-const { session: newSession } = await createAgentSession({
-	sessionManager: SessionManager.create(process.cwd()),
-});
-console.log("New session file:", newSession.sessionFile);
+// New persistent session (default storage in .pizza/events/ under cwd)
+{
+	const { facade } = await createSessionFacade({
+		cwd,
+	});
+	console.log("Persistent session created");
+	// The workspace database is at .pizza/events/<workspace-id>/events.db
+	facade.dispose();
+}
 
 // Continue most recent session (or create new if none)
-const { session: continued, modelFallbackMessage } = await createAgentSession({
-	sessionManager: SessionManager.continueRecent(process.cwd()),
-});
-if (modelFallbackMessage) console.log("Note:", modelFallbackMessage);
-console.log("Continued session:", continued.sessionFile);
-
-// List and open specific session
-const sessions = await SessionManager.list(process.cwd());
-console.log(`\nFound ${sessions.length} sessions:`);
-for (const info of sessions.slice(0, 3)) {
-	console.log(`  ${info.id.slice(0, 8)}... - "${info.firstMessage.slice(0, 30)}..."`);
-}
-
-if (sessions.length > 0) {
-	const { session: opened } = await createAgentSession({
-		sessionManager: SessionManager.open(sessions[0].path),
+{
+	const { facade, modelFallbackMessage } = await createSessionFacade({
+		cwd,
 	});
-	console.log(`\nOpened: ${opened.sessionId}`);
+	if (modelFallbackMessage) console.log("Note:", modelFallbackMessage);
+	console.log("Session resumed or created");
+	facade.dispose();
 }
 
-// Custom session directory (no cwd encoding)
-// const customDir = "/path/to/my-sessions";
-// const { session } = await createAgentSession({
-//   sessionManager: SessionManager.create(process.cwd(), customDir),
+// Open a specific session by ID
+{
+	const { facade } = await createSessionFacade({
+		cwd,
+		sessionId: "existing-session-id",
+	});
+	console.log("Opened specific session");
+	facade.dispose();
+}
+
+// Fork a session from another workspace
+// const { facade } = await createSessionFacade({
+//   cwd,
+//   forkFrom: {
+//     workspaceId: "source-workspace-id",
+//     sessionId: "source-session-id",
+//   },
 // });
-// SessionManager.list(process.cwd(), customDir);
-// SessionManager.continueRecent(process.cwd(), customDir);

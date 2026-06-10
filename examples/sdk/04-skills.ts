@@ -6,11 +6,10 @@
  */
 
 import {
-	createAgentSession,
+	createSessionFacade,
 	createSyntheticSourceInfo,
 	DefaultResourceLoader,
 	getAgentDir,
-	SessionManager,
 	type Skill,
 } from "@mariozechner/pi-coding-agent";
 
@@ -47,9 +46,9 @@ if (diagnostics.length > 0) {
 	console.log("Warnings:", diagnostics);
 }
 
-await createAgentSession({
+await createSessionFacade({
 	resourceLoader: loader,
-	sessionManager: SessionManager.inMemory(),
+	storagePath: ":memory:",
 });
 
-console.log("Session created with filtered skills");
+console.log("Session facade created with filtered skills");

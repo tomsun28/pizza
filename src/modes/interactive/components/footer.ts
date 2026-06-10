@@ -1,5 +1,5 @@
 import { type Component, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
-import type { AgentSession } from "../../../core/agent-session.js";
+import type { ContextUsage } from "../../../core/extensions/index.js";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.js";
 import { theme } from "../theme/theme.js";
 
@@ -27,18 +27,44 @@ function formatTokens(count: number): string {
 }
 
 /**
+ * Minimal interface for footer data access.
+ * Supported by SessionFacade-based adapters.
+ */
+export interface FooterSessionInfo {
+	/** Model info: id, provider, reasoning, contextWindow */
+	getModel(): { id: string; provider: string; reasoning?: boolean; contextWindow?: number } | undefined;
+	/** Current thinking level */
+	getThinkingLevel(): string | undefined;
+	/** Cumulative token usage from all assistant messages */
+	getTokenUsage(): {
+		totalInput: number;
+		totalOutput: number;
+		totalCacheRead: number;
+		totalCacheWrite: number;
+		totalCost: number;
+	};
+	/** Context window usage */
+	getContextUsage(): ContextUsage | undefined;
+	/** Working directory */
+	getCwd(): string;
+	/** Session name (if set) */
+	getSessionName(): string | undefined;
+	/** Whether the current model uses OAuth subscription */
+	isUsingOAuthSubscription(): boolean;
+}
+
+/**
  * Footer component that shows pwd, token stats, and context usage.
  * Computes token/context stats from session, gets git branch and extension statuses from provider.
  */
 export class FooterComponent implements Component {
 	private autoCompactEnabled = true;
-
 	constructor(
-		private session: AgentSession,
+		private session: FooterSessionInfo,
 		private footerData: ReadonlyFooterDataProvider,
 	) {}
 
-	setSession(session: AgentSession): void {
+	setSession(session: FooterSessionInfo): void {
 		this.session = session;
 	}
 
@@ -63,62 +89,47 @@ export class FooterComponent implements Component {
 	}
 
 	render(width: number): string[] {
-		const state = this.session.state;
+		// Extract session info via unified interface
+		const modelInfo = this.getFromSession("model");
+		const thinkingLevel = this.getFromSession("thinkingLevel");
+		const tokenUsage = this.getFromSession("tokenUsage");
+		const contextUsage = this.getFromSession("contextUsage");
+		const pwd = this.getFromSession("cwd");
+		const sessionName = this.getFromSession("sessionName");
+		const usingSubscription = this.getFromSession("usingOAuth");
 
-		// Calculate cumulative usage from ALL session entries (not just post-compaction messages)
-		let totalInput = 0;
-		let totalOutput = 0;
-		let totalCacheRead = 0;
-		let totalCacheWrite = 0;
-		let totalCost = 0;
-
-		for (const entry of this.session.sessionManager.getEntries()) {
-			if (entry.type === "message" && entry.message.role === "assistant") {
-				totalInput += entry.message.usage.input;
-				totalOutput += entry.message.usage.output;
-				totalCacheRead += entry.message.usage.cacheRead;
-				totalCacheWrite += entry.message.usage.cacheWrite;
-				totalCost += entry.message.usage.cost.total;
-			}
-		}
-
-		// Calculate context usage from session (handles compaction correctly).
-		// After compaction, tokens are unknown until the next LLM response.
-		const contextUsage = this.session.getContextUsage();
-		const contextWindow = contextUsage?.contextWindow ?? state.model?.contextWindow ?? 0;
+		const contextWindow = contextUsage?.contextWindow ?? modelInfo?.contextWindow ?? 0;
 		const contextPercentValue = contextUsage?.percent ?? 0;
 		const contextPercent = contextUsage?.percent !== null ? contextPercentValue.toFixed(1) : "?";
 
 		// Replace home directory with ~
-		let pwd = this.session.sessionManager.getCwd();
+		let displayPwd = pwd;
 		const home = process.env.HOME || process.env.USERPROFILE;
-		if (home && pwd.startsWith(home)) {
-			pwd = `~${pwd.slice(home.length)}`;
+		if (home && displayPwd.startsWith(home)) {
+			displayPwd = `~${displayPwd.slice(home.length)}`;
 		}
 
 		// Add git branch if available
 		const branch = this.footerData.getGitBranch();
 		if (branch) {
-			pwd = `${pwd} (${branch})`;
+			displayPwd = `${displayPwd} (${branch})`;
 		}
 
 		// Add session name if set
-		const sessionName = this.session.sessionManager.getSessionName();
 		if (sessionName) {
-			pwd = `${pwd} • ${sessionName}`;
+			displayPwd = `${displayPwd} • ${sessionName}`;
 		}
 
 		// Build stats line
 		const statsParts = [];
-		if (totalInput) statsParts.push(`↑${formatTokens(totalInput)}`);
-		if (totalOutput) statsParts.push(`↓${formatTokens(totalOutput)}`);
-		if (totalCacheRead) statsParts.push(`R${formatTokens(totalCacheRead)}`);
-		if (totalCacheWrite) statsParts.push(`W${formatTokens(totalCacheWrite)}`);
+		if (tokenUsage.totalInput) statsParts.push(`↑${formatTokens(tokenUsage.totalInput)}`);
+		if (tokenUsage.totalOutput) statsParts.push(`↓${formatTokens(tokenUsage.totalOutput)}`);
+		if (tokenUsage.totalCacheRead) statsParts.push(`R${formatTokens(tokenUsage.totalCacheRead)}`);
+		if (tokenUsage.totalCacheWrite) statsParts.push(`W${formatTokens(tokenUsage.totalCacheWrite)}`);
 
 		// Show cost with "(sub)" indicator if using OAuth subscription
-		const usingSubscription = state.model ? this.session.modelRegistry.isUsingOAuth(state.model) : false;
-		if (totalCost || usingSubscription) {
-			const costStr = `$${totalCost.toFixed(3)}${usingSubscription ? " (sub)" : ""}`;
+		if (tokenUsage.totalCost || usingSubscription) {
+			const costStr = `$${tokenUsage.totalCost.toFixed(3)}${usingSubscription ? " (sub)" : ""}`;
 			statsParts.push(costStr);
 		}
 
@@ -141,7 +152,7 @@ export class FooterComponent implements Component {
 		let statsLeft = statsParts.join(" ");
 
 		// Add model name on the right side, plus thinking level if model supports it
-		const modelName = state.model?.id || "no-model";
+		const modelName = modelInfo?.id || "no-model";
 
 		let statsLeftWidth = visibleWidth(statsLeft);
 
@@ -156,16 +167,16 @@ export class FooterComponent implements Component {
 
 		// Add thinking level indicator if model supports reasoning
 		let rightSideWithoutProvider = modelName;
-		if (state.model?.reasoning) {
-			const thinkingLevel = state.thinkingLevel || "off";
+		if (modelInfo?.reasoning) {
+			const level = thinkingLevel || "off";
 			rightSideWithoutProvider =
-				thinkingLevel === "off" ? `${modelName} • thinking off` : `${modelName} • ${thinkingLevel}`;
+				level === "off" ? `${modelName} • thinking off` : `${modelName} • ${level}`;
 		}
 
 		// Prepend the provider in parentheses if there are multiple providers and there's enough room
 		let rightSide = rightSideWithoutProvider;
-		if (this.footerData.getAvailableProviderCount() > 1 && state.model) {
-			rightSide = `(${state.model!.provider}) ${rightSideWithoutProvider}`;
+		if (this.footerData.getAvailableProviderCount() > 1 && modelInfo) {
+			rightSide = `(${modelInfo.provider}) ${rightSideWithoutProvider}`;
 			if (statsLeftWidth + minPadding + visibleWidth(rightSide) > width) {
 				// Too wide, fall back
 				rightSide = rightSideWithoutProvider;
@@ -201,7 +212,7 @@ export class FooterComponent implements Component {
 		const remainder = statsLine.slice(statsLeft.length); // padding + rightSide
 		const dimRemainder = theme.fg("dim", remainder);
 
-		const pwdLine = truncateToWidth(theme.fg("dim", pwd), width, theme.fg("dim", "..."));
+		const pwdLine = truncateToWidth(theme.fg("dim", displayPwd), width, theme.fg("dim", "..."));
 		const lines = [pwdLine, dimStatsLeft + dimRemainder];
 
 		// Add extension statuses on a single line, sorted by key alphabetically
@@ -216,5 +227,20 @@ export class FooterComponent implements Component {
 		}
 
 		return lines;
+	}
+
+	/**
+	 * Accessor that reads from FooterSessionInfo.
+	 */
+	private getFromSession(field: "model" | "thinkingLevel" | "tokenUsage" | "contextUsage" | "cwd" | "sessionName" | "usingOAuth"): any {
+		switch (field) {
+			case "model": return this.session.getModel();
+			case "thinkingLevel": return this.session.getThinkingLevel();
+			case "tokenUsage": return this.session.getTokenUsage();
+			case "contextUsage": return this.session.getContextUsage();
+			case "cwd": return this.session.getCwd();
+			case "sessionName": return this.session.getSessionName();
+			case "usingOAuth": return this.session.isUsingOAuthSubscription();
+		}
 	}
 }

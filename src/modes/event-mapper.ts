@@ -2,7 +2,7 @@
  * ModeEventMapper
  *
  * Converts EventStore TypedEvents into mode-facing UI actions. Modes can render
- * these actions directly without translating back to legacy AgentEvent.
+ * these actions directly from the EventStore event stream.
  */
 
 import type { AgentMessage } from "../core/agent/types.js";

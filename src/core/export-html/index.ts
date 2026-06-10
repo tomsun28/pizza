@@ -9,7 +9,7 @@ import { SessionManager } from "../session-manager.js";
 
 /**
  * Interface for rendering custom tools to HTML.
- * Used by agent-session to pre-render extension tool output.
+ * Used by the session facade to pre-render extension tool output.
  */
 export interface ToolHtmlRenderer {
 	/** Render a tool call to HTML. Returns undefined if tool has no custom renderer. */

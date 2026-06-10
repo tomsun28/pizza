@@ -7,19 +7,26 @@
  * Protocol:
  * - Commands: JSON objects with `type` field, optional `id` for correlation
  * - Responses: JSON objects with `type: "response"`, `command`, `success`, and optional `data`/`error`
- * - Events: AgentSessionEvent objects streamed as they occur
+ * - Events: TypedEvent objects streamed as they occur
  * - Extension UI: Extension UI requests are emitted, client responds with extension_ui_response
  */
 
 import * as crypto from "node:crypto";
-import type { AgentSessionRuntime } from "../../core/agent-session-runtime.js";
+import type { AgentMessage } from "../../core/agent/types.js";
+import type { SessionStats } from "../../core/session-stats.js";
 import type {
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
 	ExtensionWidgetOptions,
 	WorkingIndicatorOptions,
 } from "../../core/extensions/index.js";
+import type { EventBase, EventType, ImageContent as EventImageContent } from "../../core/event-store/types.js";
 import { takeOverStdout, writeRawStdout } from "../../core/output-guard.js";
+import type { SessionFacade } from "../../core/session-facade.js";
+import { makeSessionRef, parseSessionRef } from "../../core/session-ref.js";
+import { executeBashWithOperations } from "../../core/bash-executor.js";
+import { createLocalBashOperations } from "../../core/tools/bash.js";
+import { exportFromFile } from "../../core/export-html/index.js";
 import { killTrackedDetachedChildren } from "../../utils/shell.js";
 import { type Theme, theme } from "../interactive/theme/theme.js";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
@@ -31,6 +38,7 @@ import type {
 	RpcSessionState,
 	RpcSlashCommand,
 } from "./rpc-types.js";
+import type { ImageContent } from "@mariozechner/pi-ai";
 
 // Re-export types for consumers
 export type {
@@ -41,14 +49,144 @@ export type {
 	RpcSessionState,
 } from "./rpc-types.js";
 
+function toEventImages(images?: ImageContent[]): EventImageContent[] | undefined {
+	if (!images) return undefined;
+	return images.map((image) => {
+		const eventImage = image as ImageContent & { mime_type?: string };
+		return {
+			type: "image",
+			data: image.data,
+			mime_type: eventImage.mime_type ?? image.mimeType,
+		};
+	});
+}
+
+function getLastAssistantText(messages: AgentMessage[]): string | null {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const message = messages[i];
+		if (message?.role !== "assistant") continue;
+		return message.content
+			.filter((block) => block.type === "text")
+			.map((block) => block.text)
+			.join("");
+	}
+	return null;
+}
+
+function extractMessageText(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.filter((block): block is { type: string; text?: string } => {
+			return typeof block === "object" && block !== null && "type" in block;
+		})
+		.filter((block) => block.type === "text" && typeof block.text === "string")
+		.map((block) => block.text)
+		.join("");
+}
+
+function getFacadeSessionEvents(facade: SessionFacade, types?: EventType[]): EventBase[] {
+	const descriptor = facade.getProjection().getDescriptor();
+	return facade.runtime.store.query({
+		after: descriptor.event_range.start_event_id === "ORIGIN" ? undefined : descriptor.event_range.start_event_id,
+		before: descriptor.event_range.end_event_id === "HEAD" ? undefined : descriptor.event_range.end_event_id,
+		types,
+	});
+}
+
+function getFacadeForkMessages(facade: SessionFacade): Array<{ entryId: string; text: string }> {
+	return getFacadeSessionEvents(facade, ["USER_MESSAGE"])
+		.map((event) => {
+			const payload = event.payload as { content?: unknown };
+			return { entryId: event.event_id, text: extractMessageText(payload.content) };
+		})
+		.filter((message) => message.text.length > 0);
+}
+
+function getFacadeLeafEventId(facade: SessionFacade): string | undefined {
+	const context = facade.getProjection().buildContext();
+	return context.events.at(-1)?.event_id;
+}
+
+function getFacadeSessionStats(facade: SessionFacade): SessionStats {
+	const projection = facade.getProjection();
+	const descriptor = projection.getDescriptor();
+	const messages = projection.buildContext().messages;
+	const userMessages = messages.filter((message) => message.role === "user").length;
+	const assistantMessages = messages.filter((message) => message.role === "assistant").length;
+	const toolResults = messages.filter((message) => message.role === "toolResult").length;
+
+	let toolCalls = 0;
+	let totalInput = 0;
+	let totalOutput = 0;
+	let totalCacheRead = 0;
+	let totalCacheWrite = 0;
+	let totalCost = 0;
+
+	for (const message of messages) {
+		if (message.role !== "assistant") continue;
+		toolCalls += message.content.filter((block) => block.type === "toolCall").length;
+		totalInput += message.usage?.input ?? 0;
+		totalOutput += message.usage?.output ?? 0;
+		totalCacheRead += message.usage?.cacheRead ?? 0;
+		totalCacheWrite += message.usage?.cacheWrite ?? 0;
+		totalCost += message.usage?.cost?.total ?? 0;
+	}
+
+	return {
+		sessionFile: makeSessionRef(descriptor.workspace_id, descriptor.session_id),
+		sessionId: descriptor.session_id,
+		userMessages,
+		assistantMessages,
+		toolCalls,
+		toolResults,
+		totalMessages: messages.length,
+		tokens: {
+			input: totalInput,
+			output: totalOutput,
+			cacheRead: totalCacheRead,
+			cacheWrite: totalCacheWrite,
+			total: totalInput + totalOutput + totalCacheRead + totalCacheWrite,
+		},
+		cost: totalCost,
+	};
+}
+
+function resolveSessionId(facade: SessionFacade, ref: string): string {
+	const parsed = parseSessionRef(ref);
+	if (parsed.workspaceId && parsed.workspaceId !== facade.runtime.store.workspace_id) {
+		throw new Error(`Session belongs to a different workspace: ${parsed.workspaceId}`);
+	}
+	return parsed.sessionId;
+}
+
+function getFacadeSessionState(facade: SessionFacade): RpcSessionState {
+	const projection = facade.getProjection();
+	const descriptor = projection.getDescriptor();
+	const messages = projection.buildContext().messages;
+	return {
+		model: facade.modelRegistry?.find(facade.model.provider, facade.model.model_id),
+		thinkingLevel: (facade.thinkingLevel ?? "off") as RpcSessionState["thinkingLevel"],
+		isStreaming: facade.isRunning,
+		isCompacting: false,
+		sessionFile: makeSessionRef(descriptor.workspace_id, descriptor.session_id),
+		sessionId: descriptor.session_id,
+		sessionName: descriptor.name,
+		autoCompactionEnabled: facade.settingsManager.getCompactionEnabled(),
+		messageCount: messages.length,
+		pendingMessageCount: 0,
+	};
+}
+
 /**
- * Run in RPC mode.
- * Listens for JSON commands on stdin, outputs events and responses on stdout.
+ * Run RPC mode against the event-sourced facade.
+ * Events are emitted as raw EventStore TypedEvent JSON lines.
  */
-export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<never> {
+export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never> {
 	takeOverStdout();
-	let session = runtimeHost.session;
 	let unsubscribe: (() => void) | undefined;
+	let shuttingDown = false;
+	const signalCleanupHandlers: Array<() => void> = [];
 
 	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
 		writeRawStdout(serializeJsonLine(obj));
@@ -68,270 +206,20 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 	const error = (id: string | undefined, command: string, message: string): RpcResponse => {
 		return { id, type: "response", command, success: false, error: message };
 	};
-
-	// Pending extension UI requests waiting for response
-	const pendingExtensionRequests = new Map<
-		string,
-		{ resolve: (value: any) => void; reject: (error: Error) => void }
-	>();
-
-	// Shutdown request flag
-	let shutdownRequested = false;
-	let shuttingDown = false;
-	const signalCleanupHandlers: Array<() => void> = [];
-
-	/** Helper for dialog methods with signal/timeout support */
-	function createDialogPromise<T>(
-		opts: ExtensionUIDialogOptions | undefined,
-		defaultValue: T,
-		request: Record<string, unknown>,
-		parseResponse: (response: RpcExtensionUIResponse) => T,
-	): Promise<T> {
-		if (opts?.signal?.aborted) return Promise.resolve(defaultValue);
-
-		const id = crypto.randomUUID();
+	const waitForCompactionEnd = (): Promise<{ summary: string; first_kept_event_id: string; tokens_before: number }> => {
 		return new Promise((resolve, reject) => {
-			let timeoutId: ReturnType<typeof setTimeout> | undefined;
-
-			const cleanup = () => {
-				if (timeoutId) clearTimeout(timeoutId);
-				opts?.signal?.removeEventListener("abort", onAbort);
-				pendingExtensionRequests.delete(id);
-			};
-
-			const onAbort = () => {
-				cleanup();
-				resolve(defaultValue);
-			};
-			opts?.signal?.addEventListener("abort", onAbort, { once: true });
-
-			if (opts?.timeout) {
-				timeoutId = setTimeout(() => {
-					cleanup();
-					resolve(defaultValue);
-				}, opts.timeout);
-			}
-
-			pendingExtensionRequests.set(id, {
-				resolve: (response: RpcExtensionUIResponse) => {
-					cleanup();
-					resolve(parseResponse(response));
-				},
-				reject,
+			const timer = setTimeout(() => {
+				unsub();
+				reject(new Error("Compaction timed out"));
+			}, 30000);
+			const unsub = facade.subscribe((event) => {
+				if (event.type === "COMPACTION_END") {
+					clearTimeout(timer);
+					unsub();
+					resolve(event.payload as { summary: string; first_kept_event_id: string; tokens_before: number });
+				}
 			});
-			output({ type: "extension_ui_request", id, ...request } as RpcExtensionUIRequest);
-		});
-	}
-
-	/**
-	 * Create an extension UI context that uses the RPC protocol.
-	 */
-	const createExtensionUIContext = (): ExtensionUIContext => ({
-		select: (title, options, opts) =>
-			createDialogPromise(opts, undefined, { method: "select", title, options, timeout: opts?.timeout }, (r) =>
-				"cancelled" in r && r.cancelled ? undefined : "value" in r ? r.value : undefined,
-			),
-
-		confirm: (title, message, opts) =>
-			createDialogPromise(opts, false, { method: "confirm", title, message, timeout: opts?.timeout }, (r) =>
-				"cancelled" in r && r.cancelled ? false : "confirmed" in r ? r.confirmed : false,
-			),
-
-		input: (title, placeholder, opts) =>
-			createDialogPromise(opts, undefined, { method: "input", title, placeholder, timeout: opts?.timeout }, (r) =>
-				"cancelled" in r && r.cancelled ? undefined : "value" in r ? r.value : undefined,
-			),
-
-		notify(message: string, type?: "info" | "warning" | "error"): void {
-			// Fire and forget - no response needed
-			output({
-				type: "extension_ui_request",
-				id: crypto.randomUUID(),
-				method: "notify",
-				message,
-				notifyType: type,
-			} as RpcExtensionUIRequest);
-		},
-
-		onTerminalInput(): () => void {
-			// Raw terminal input not supported in RPC mode
-			return () => {};
-		},
-
-		setStatus(key: string, text: string | undefined): void {
-			// Fire and forget - no response needed
-			output({
-				type: "extension_ui_request",
-				id: crypto.randomUUID(),
-				method: "setStatus",
-				statusKey: key,
-				statusText: text,
-			} as RpcExtensionUIRequest);
-		},
-
-		setWorkingMessage(_message?: string): void {
-			// Working message not supported in RPC mode - requires TUI loader access
-		},
-
-		setWorkingIndicator(_options?: WorkingIndicatorOptions): void {
-			// Working indicator customization not supported in RPC mode - requires TUI loader access
-		},
-
-		setHiddenThinkingLabel(_label?: string): void {
-			// Hidden thinking label not supported in RPC mode - requires TUI message rendering access
-		},
-
-		setWidget(key: string, content: unknown, options?: ExtensionWidgetOptions): void {
-			// Only support string arrays in RPC mode - factory functions are ignored
-			if (content === undefined || Array.isArray(content)) {
-				output({
-					type: "extension_ui_request",
-					id: crypto.randomUUID(),
-					method: "setWidget",
-					widgetKey: key,
-					widgetLines: content as string[] | undefined,
-					widgetPlacement: options?.placement,
-				} as RpcExtensionUIRequest);
-			}
-			// Component factories are not supported in RPC mode - would need TUI access
-		},
-
-		setFooter(_factory: unknown): void {
-			// Custom footer not supported in RPC mode - requires TUI access
-		},
-
-		setHeader(_factory: unknown): void {
-			// Custom header not supported in RPC mode - requires TUI access
-		},
-
-		setTitle(title: string): void {
-			// Fire and forget - host can implement terminal title control
-			output({
-				type: "extension_ui_request",
-				id: crypto.randomUUID(),
-				method: "setTitle",
-				title,
-			} as RpcExtensionUIRequest);
-		},
-
-		async custom() {
-			// Custom UI not supported in RPC mode
-			return undefined as never;
-		},
-
-		pasteToEditor(text: string): void {
-			// Paste handling not supported in RPC mode - falls back to setEditorText
-			this.setEditorText(text);
-		},
-
-		setEditorText(text: string): void {
-			// Fire and forget - host can implement editor control
-			output({
-				type: "extension_ui_request",
-				id: crypto.randomUUID(),
-				method: "set_editor_text",
-				text,
-			} as RpcExtensionUIRequest);
-		},
-
-		getEditorText(): string {
-			// Synchronous method can't wait for RPC response
-			// Host should track editor state locally if needed
-			return "";
-		},
-
-		async editor(title: string, prefill?: string): Promise<string | undefined> {
-			const id = crypto.randomUUID();
-			return new Promise((resolve, reject) => {
-				pendingExtensionRequests.set(id, {
-					resolve: (response: RpcExtensionUIResponse) => {
-						if ("cancelled" in response && response.cancelled) {
-							resolve(undefined);
-						} else if ("value" in response) {
-							resolve(response.value);
-						} else {
-							resolve(undefined);
-						}
-					},
-					reject,
-				});
-				output({ type: "extension_ui_request", id, method: "editor", title, prefill } as RpcExtensionUIRequest);
-			});
-		},
-
-		setEditorComponent(): void {
-			// Custom editor components not supported in RPC mode
-		},
-
-		get theme() {
-			return theme;
-		},
-
-		getAllThemes() {
-			return [];
-		},
-
-		getTheme(_name: string) {
-			return undefined;
-		},
-
-		setTheme(_theme: string | Theme) {
-			// Theme switching not supported in RPC mode
-			return { success: false, error: "Theme switching not supported in RPC mode" };
-		},
-
-		getToolsExpanded() {
-			// Tool expansion not supported in RPC mode - no TUI
-			return false;
-		},
-
-		setToolsExpanded(_expanded: boolean) {
-			// Tool expansion not supported in RPC mode - no TUI
-		},
-	});
-
-	runtimeHost.setRebindSession(async () => {
-		await rebindSession();
-	});
-
-	const rebindSession = async (): Promise<void> => {
-		session = runtimeHost.session;
-		await session.bindExtensions({
-			uiContext: createExtensionUIContext(),
-			commandContextActions: {
-				waitForIdle: () => session.agent.waitForIdle(),
-				newSession: async (options) => runtimeHost.newSession(options),
-				fork: async (entryId, forkOptions) => {
-					const result = await runtimeHost.fork(entryId, forkOptions);
-					return { cancelled: result.cancelled };
-				},
-				navigateTree: async (targetId, options) => {
-					const result = await session.navigateTree(targetId, {
-						summarize: options?.summarize,
-						customInstructions: options?.customInstructions,
-						replaceInstructions: options?.replaceInstructions,
-						label: options?.label,
-					});
-					return { cancelled: result.cancelled };
-				},
-				switchSession: async (sessionPath, options) => {
-					return runtimeHost.switchSession(sessionPath, options);
-				},
-				reload: async () => {
-					await session.reload();
-				},
-			},
-			shutdownHandler: () => {
-				shutdownRequested = true;
-			},
-			onError: (err) => {
-				output({ type: "extension_error", extensionPath: err.extensionPath, event: err.event, error: err.error });
-			},
-		});
-
-		unsubscribe?.();
-		unsubscribe = session.subscribe((event) => {
-			output(event);
+			facade.compact({ reason: "manual" });
 		});
 	};
 
@@ -351,289 +239,6 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		}
 	};
 
-	await rebindSession();
-	registerSignalHandlers();
-
-	// Handle a single command
-	const handleCommand = async (command: RpcCommand): Promise<RpcResponse | undefined> => {
-		const id = command.id;
-
-		switch (command.type) {
-			// =================================================================
-			// Prompting
-			// =================================================================
-
-			case "prompt": {
-				// Start prompt handling immediately, but emit the authoritative response only after
-				// prompt preflight succeeds. Queued and immediately handled prompts also count as success.
-				let preflightSucceeded = false;
-				void session
-					.prompt(command.message, {
-						images: command.images,
-						streamingBehavior: command.streamingBehavior,
-						source: "rpc",
-						preflightResult: (didSucceed) => {
-							if (didSucceed) {
-								preflightSucceeded = true;
-								output(success(id, "prompt"));
-							}
-						},
-					})
-					.catch((e) => {
-						if (!preflightSucceeded) {
-							output(error(id, "prompt", e.message));
-						}
-					});
-				return undefined;
-			}
-
-			case "steer": {
-				await session.steer(command.message, command.images);
-				return success(id, "steer");
-			}
-
-			case "follow_up": {
-				await session.followUp(command.message, command.images);
-				return success(id, "follow_up");
-			}
-
-			case "abort": {
-				await session.abort();
-				return success(id, "abort");
-			}
-
-			case "new_session": {
-				const options = command.parentSession ? { parentSession: command.parentSession } : undefined;
-				const result = await runtimeHost.newSession(options);
-				if (!result.cancelled) {
-					await rebindSession();
-				}
-				return success(id, "new_session", result);
-			}
-
-			// =================================================================
-			// State
-			// =================================================================
-
-			case "get_state": {
-				const state: RpcSessionState = {
-					model: session.model,
-					thinkingLevel: session.thinkingLevel,
-					isStreaming: session.isStreaming,
-					isCompacting: session.isCompacting,
-					sessionFile: session.sessionFile,
-					sessionId: session.sessionId,
-					sessionName: session.sessionName,
-					autoCompactionEnabled: session.autoCompactionEnabled,
-					messageCount: session.messages.length,
-					pendingMessageCount: session.pendingMessageCount,
-				};
-				return success(id, "get_state", state);
-			}
-
-			// =================================================================
-			// Model
-			// =================================================================
-
-			case "set_model": {
-				const models = await session.modelRegistry.getAvailable();
-				const model = models.find((m) => m.provider === command.provider && m.id === command.modelId);
-				if (!model) {
-					return error(id, "set_model", `Model not found: ${command.provider}/${command.modelId}`);
-				}
-				await session.setModel(model);
-				return success(id, "set_model", model);
-			}
-
-			case "cycle_model": {
-				const result = await session.cycleModel();
-				if (!result) {
-					return success(id, "cycle_model", null);
-				}
-				return success(id, "cycle_model", result);
-			}
-
-			case "get_available_models": {
-				const models = await session.modelRegistry.getAvailable();
-				return success(id, "get_available_models", { models });
-			}
-
-			// =================================================================
-			// Thinking
-			// =================================================================
-
-			case "set_thinking_level": {
-				session.setThinkingLevel(command.level);
-				return success(id, "set_thinking_level");
-			}
-
-			case "cycle_thinking_level": {
-				const level = session.cycleThinkingLevel();
-				if (!level) {
-					return success(id, "cycle_thinking_level", null);
-				}
-				return success(id, "cycle_thinking_level", { level });
-			}
-
-			// =================================================================
-			// Compaction
-			// =================================================================
-
-			case "compact": {
-				const result = await session.compact(command.customInstructions);
-				return success(id, "compact", result);
-			}
-
-			case "set_auto_compaction": {
-				session.setAutoCompactionEnabled(command.enabled);
-				return success(id, "set_auto_compaction");
-			}
-
-			// =================================================================
-			// Retry
-			// =================================================================
-
-			case "set_auto_retry": {
-				session.setAutoRetryEnabled(command.enabled);
-				return success(id, "set_auto_retry");
-			}
-
-			case "abort_retry": {
-				session.abortRetry();
-				return success(id, "abort_retry");
-			}
-
-			// =================================================================
-			// Bash
-			// =================================================================
-
-			case "bash": {
-				const result = await session.executeBash(command.command);
-				return success(id, "bash", result);
-			}
-
-			case "abort_bash": {
-				session.abortBash();
-				return success(id, "abort_bash");
-			}
-
-			// =================================================================
-			// Session
-			// =================================================================
-
-			case "get_session_stats": {
-				const stats = session.getSessionStats();
-				return success(id, "get_session_stats", stats);
-			}
-
-			case "export_html": {
-				const path = await session.exportToHtml(command.outputPath);
-				return success(id, "export_html", { path });
-			}
-
-			case "switch_session": {
-				const result = await runtimeHost.switchSession(command.sessionPath);
-				if (!result.cancelled) {
-					await rebindSession();
-				}
-				return success(id, "switch_session", result);
-			}
-
-			case "fork": {
-				const result = await runtimeHost.fork(command.entryId);
-				if (!result.cancelled) {
-					await rebindSession();
-				}
-				return success(id, "fork", { text: result.selectedText, cancelled: result.cancelled });
-			}
-
-			case "clone": {
-				const leafId = session.sessionManager.getLeafId();
-				if (!leafId) {
-					return error(id, "clone", "Cannot clone session: no current entry selected");
-				}
-				const result = await runtimeHost.fork(leafId, { position: "at" });
-				if (!result.cancelled) {
-					await rebindSession();
-				}
-				return success(id, "clone", { cancelled: result.cancelled });
-			}
-
-			case "get_fork_messages": {
-				const messages = session.getUserMessagesForForking();
-				return success(id, "get_fork_messages", { messages });
-			}
-
-			case "get_last_assistant_text": {
-				const text = session.getLastAssistantText();
-				return success(id, "get_last_assistant_text", { text });
-			}
-
-			case "set_session_name": {
-				const name = command.name.trim();
-				if (!name) {
-					return error(id, "set_session_name", "Session name cannot be empty");
-				}
-				session.setSessionName(name);
-				return success(id, "set_session_name");
-			}
-
-			// =================================================================
-			// Messages
-			// =================================================================
-
-			case "get_messages": {
-				return success(id, "get_messages", { messages: session.messages });
-			}
-
-			// =================================================================
-			// Commands (available for invocation via prompt)
-			// =================================================================
-
-			case "get_commands": {
-				const commands: RpcSlashCommand[] = [];
-
-				for (const command of session.extensionRunner.getRegisteredCommands()) {
-					commands.push({
-						name: command.invocationName,
-						description: command.description,
-						source: "extension",
-						sourceInfo: command.sourceInfo,
-					});
-				}
-
-				for (const template of session.promptTemplates) {
-					commands.push({
-						name: template.name,
-						description: template.description,
-						source: "prompt",
-						sourceInfo: template.sourceInfo,
-					});
-				}
-
-				for (const skill of session.resourceLoader.getSkills().skills) {
-					commands.push({
-						name: `skill:${skill.name}`,
-						description: skill.description,
-						source: "skill",
-						sourceInfo: skill.sourceInfo,
-					});
-				}
-
-				return success(id, "get_commands", { commands });
-			}
-
-			default: {
-				const unknownCommand = command as { type: string };
-				return error(undefined, unknownCommand.type, `Unknown command: ${unknownCommand.type}`);
-			}
-		}
-	};
-
-	/**
-	 * Check if shutdown was requested and perform shutdown if so.
-	 * Called after handling each command when waiting for the next command.
-	 */
 	let detachInput = () => {};
 
 	async function shutdown(exitCode = 0): Promise<never> {
@@ -645,16 +250,212 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			cleanup();
 		}
 		unsubscribe?.();
-		await runtimeHost.dispose();
+		await Promise.resolve(facade.dispose());
 		detachInput();
 		process.stdin.pause();
 		process.exit(exitCode);
 	}
 
-	async function checkShutdownRequested(): Promise<void> {
-		if (!shutdownRequested) return;
-		await shutdown();
-	}
+	const handleCommand = async (command: RpcCommand): Promise<RpcResponse | undefined> => {
+		const id = command.id;
+
+		switch (command.type) {
+			case "prompt":
+				void facade.prompt(command.message, toEventImages(command.images)).catch((e: unknown) => {
+					output(error(id, "prompt", e instanceof Error ? e.message : String(e)));
+				});
+				return success(id, "prompt");
+
+			case "steer":
+				facade.steer(command.message, toEventImages(command.images));
+				return success(id, "steer");
+
+			case "follow_up":
+				facade.followUp(command.message, toEventImages(command.images));
+				return success(id, "follow_up");
+
+			case "abort":
+				facade.abort();
+				return success(id, "abort");
+
+			case "get_state":
+				return success(id, "get_state", getFacadeSessionState(facade));
+
+			case "set_model": {
+				const models = facade.modelRegistry?.getAvailable() ?? [];
+				const model = models.find((m) => m.provider === command.provider && m.id === command.modelId);
+				if (!model) {
+					return error(id, "set_model", `Model not found: ${command.provider}/${command.modelId}`);
+				}
+				facade.setModel(model);
+				return success(id, "set_model", model);
+			}
+
+			case "get_available_models": {
+				const models = facade.modelRegistry?.getAvailable() ?? [];
+				return success(id, "get_available_models", { models });
+			}
+
+			case "cycle_model": {
+				const models = facade.modelRegistry?.getAvailable() ?? [];
+				if (models.length === 0) {
+					return success(id, "cycle_model", null);
+				}
+				const current = facade.model;
+				const currentIndex = models.findIndex(
+					(model) => model.provider === current.provider && model.id === current.model_id,
+				);
+				if (models.length === 1 && currentIndex === 0) {
+					return success(id, "cycle_model", null);
+				}
+				const model = models[(currentIndex + 1) % models.length] ?? models[0]!;
+				facade.setModel(model);
+				return success(id, "cycle_model", {
+					model,
+					thinkingLevel: (facade.thinkingLevel ?? "off") as RpcSessionState["thinkingLevel"],
+					isScoped: false,
+				});
+			}
+
+			case "set_thinking_level":
+				facade.thinkingLevel = command.level;
+				return success(id, "set_thinking_level");
+
+			case "cycle_thinking_level": {
+				const levels = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+				const current = facade.thinkingLevel ?? "off";
+				const index = levels.findIndex((level) => level === current);
+				const level = levels[(index + 1) % levels.length] ?? "off";
+				facade.thinkingLevel = level;
+				return success(id, "cycle_thinking_level", { level });
+			}
+
+			case "compact": {
+				const result = await waitForCompactionEnd();
+				return success(id, "compact", {
+					summary: result.summary,
+					firstKeptEntryId: result.first_kept_event_id,
+					tokensBefore: result.tokens_before,
+				});
+			}
+
+			case "get_messages":
+				return success(id, "get_messages", { messages: facade.getProjection().buildContext().messages });
+
+			case "get_last_assistant_text":
+				return success(id, "get_last_assistant_text", {
+					text: getLastAssistantText(facade.getProjection().buildContext().messages),
+				});
+
+			case "set_session_name": {
+				const name = command.name.trim();
+				if (!name) {
+					return error(id, "set_session_name", "Session name cannot be empty");
+				}
+				const descriptor = facade.getProjection().getDescriptor();
+				facade.runtime.sessionManager?.renameSession(descriptor.session_id, name);
+				return success(id, "set_session_name");
+			}
+
+			case "new_session": {
+				const sessionManager = facade.runtime.sessionManager;
+				if (!sessionManager) {
+					return error(id, "new_session", "Projection session manager is not available");
+				}
+				if (command.parentSession) {
+					sessionManager.forkFromSession(resolveSessionId(facade, command.parentSession));
+				} else {
+					sessionManager.createSession("user_explicit");
+				}
+				return success(id, "new_session", { cancelled: false });
+			}
+
+			case "switch_session": {
+				const sessionManager = facade.runtime.sessionManager;
+				if (!sessionManager) {
+					return error(id, "switch_session", "Projection session manager is not available");
+				}
+				sessionManager.switchTo(resolveSessionId(facade, command.sessionPath));
+				return success(id, "switch_session", { cancelled: false });
+			}
+
+			case "fork": {
+				const event = facade.runtime.store.get(command.entryId);
+				if (!event) {
+					return error(id, "fork", `Event not found: ${command.entryId}`);
+				}
+				facade.runtime.fork(command.entryId);
+				return success(id, "fork", {
+					text: event.type === "USER_MESSAGE" ? extractMessageText((event.payload as { content?: unknown }).content) : "",
+					cancelled: false,
+				});
+			}
+
+			case "clone": {
+				const leafId = getFacadeLeafEventId(facade);
+				if (!leafId) {
+					return error(id, "clone", "Cannot clone session: no current entry selected");
+				}
+				facade.runtime.fork(leafId);
+				return success(id, "clone", { cancelled: false });
+			}
+
+			case "get_fork_messages":
+				return success(id, "get_fork_messages", { messages: getFacadeForkMessages(facade) });
+
+			case "get_session_stats":
+				return success(id, "get_session_stats", getFacadeSessionStats(facade));
+
+			case "set_auto_compaction":
+				facade.settingsManager.setCompactionEnabled(command.enabled);
+				return success(id, "set_auto_compaction");
+
+			case "get_commands": {
+				const commands: RpcSlashCommand[] =
+					facade.extensionRunner?.getRegisteredCommands().map((command) => ({
+						name: command.invocationName,
+						description: command.description,
+						source: "extension" as const,
+						sourceInfo: command.sourceInfo,
+					})) ?? [];
+				return success(id, "get_commands", { commands });
+			}
+
+			case "set_auto_retry":
+				return success(id, "set_auto_retry");
+
+			case "abort_retry":
+				facade.abort();
+				return success(id, "abort_retry");
+
+			case "bash": {
+				const operations = createLocalBashOperations();
+				const result = await executeBashWithOperations(command.command, process.cwd(), operations);
+				return success(id, "bash", result);
+			}
+
+			case "abort_bash":
+				return success(id, "abort_bash");
+
+			case "export_html": {
+				const descriptor = facade.getProjection().getDescriptor();
+				const sessionRef = makeSessionRef(descriptor.workspace_id, descriptor.session_id);
+				const path = await exportFromFile(sessionRef, command.outputPath);
+				return success(id, "export_html", { path });
+			}
+
+			case "set_steering_mode":
+				return success(id, "set_steering_mode");
+
+			case "set_follow_up_mode":
+				return success(id, "set_follow_up_mode");
+
+			default: {
+				const unknownCommand = command as { type: string };
+				return error(undefined, unknownCommand.type, `Unknown command: ${unknownCommand.type}`);
+			}
+		}
+	};
 
 	const handleInputLine = async (line: string) => {
 		let parsed: unknown;
@@ -671,19 +472,12 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			return;
 		}
 
-		// Handle extension UI responses
 		if (
 			typeof parsed === "object" &&
 			parsed !== null &&
 			"type" in parsed &&
 			parsed.type === "extension_ui_response"
 		) {
-			const response = parsed as RpcExtensionUIResponse;
-			const pending = pendingExtensionRequests.get(response.id);
-			if (pending) {
-				pendingExtensionRequests.delete(response.id);
-				pending.resolve(response);
-			}
 			return;
 		}
 
@@ -693,7 +487,6 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			if (response) {
 				output(response);
 			}
-			await checkShutdownRequested();
 		} catch (commandError: unknown) {
 			output(
 				error(
@@ -705,11 +498,13 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		}
 	};
 
+	unsubscribe = facade.subscribe((event) => output(event));
+	registerSignalHandlers();
+
 	const onInputEnd = () => {
 		void shutdown();
 	};
 	process.stdin.on("end", onInputEnd);
-
 	detachInput = (() => {
 		const detachJsonl = attachJsonlLineReader(process.stdin, (line) => {
 			void handleInputLine(line);
@@ -720,6 +515,5 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		};
 	})();
 
-	// Keep process alive forever
 	return new Promise(() => {});
 }

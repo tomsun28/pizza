@@ -1,11 +1,12 @@
 /**
  * Custom Model Selection
  *
- * Shows how to select a specific model and thinking level.
+ * Shows how to select a specific model and thinking level
+ * using createSessionFacade().
  */
 
 import { getModel } from "@mariozechner/pi-ai";
-import { AuthStorage, createAgentSession, ModelRegistry } from "@mariozechner/pi-coding-agent";
+import { AuthStorage, createSessionFacade, ModelRegistry } from "@mariozechner/pi-coding-agent";
 
 // Set up auth storage and model registry
 const authStorage = AuthStorage.create();
@@ -31,19 +32,22 @@ console.log(
 );
 
 if (available.length > 0) {
-	const { session } = await createAgentSession({
+	const { facade } = await createSessionFacade({
 		model: available[0],
 		thinkingLevel: "medium", // off, low, medium, high
 		authStorage,
 		modelRegistry,
 	});
 
-	session.subscribe((event) => {
-		if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-			process.stdout.write(event.assistantMessageEvent.delta);
+	facade.subscribe((event) => {
+		if (event.type === "AGENT_MESSAGE_CHUNK") {
+			const chunk = (event.payload as { chunk: { kind: string; delta?: string } }).chunk;
+			if (chunk.kind === "text_delta" && chunk.delta) {
+				process.stdout.write(chunk.delta);
+			}
 		}
 	});
 
-	await session.prompt("Say hello in one sentence.");
+	await facade.prompt("Say hello in one sentence.");
 	console.log();
 }

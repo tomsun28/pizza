@@ -28,7 +28,7 @@ export function wrapToolDefinitions(
 /**
  * Synthesize a minimal ToolDefinition from an AgentTool.
  *
- * This keeps AgentSession's internal registry definition-first even when a caller
+ * This keeps the internal registry definition-first even when a caller
  * provides plain AgentTool overrides that do not include prompt metadata or renderers.
  */
 export function createToolDefinitionFromAgentTool(tool: AgentTool<any>): ToolDefinition<any, unknown> {

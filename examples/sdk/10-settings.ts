@@ -4,7 +4,7 @@
  * Override settings using SettingsManager.
  */
 
-import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
+import { createSessionFacade, SettingsManager } from "@mariozechner/pi-coding-agent";
 
 const cwd = process.cwd();
 
@@ -19,12 +19,14 @@ settingsManager.applyOverrides({
 	retry: { enabled: true, maxRetries: 5, baseDelayMs: 1000 },
 });
 
-await createAgentSession({
-	settingsManager,
-	sessionManager: SessionManager.inMemory(),
-});
-
-console.log("Session created with custom settings");
+{
+	const { facade } = await createSessionFacade({
+		settingsManager,
+		storagePath: ":memory:",
+	});
+	console.log("Session created with custom settings");
+	facade.dispose();
+}
 
 // Setters update memory immediately and queue persistence writes.
 // Call flush() when you need a durability boundary.
@@ -45,9 +47,11 @@ const inMemorySettings = SettingsManager.inMemory({
 	retry: { enabled: false },
 });
 
-await createAgentSession({
-	settingsManager: inMemorySettings,
-	sessionManager: SessionManager.inMemory(),
-});
-
-console.log("Test session created with in-memory settings");
+{
+	const { facade } = await createSessionFacade({
+		settingsManager: inMemorySettings,
+		storagePath: ":memory:",
+	});
+	console.log("Test session created with in-memory settings");
+	facade.dispose();
+}

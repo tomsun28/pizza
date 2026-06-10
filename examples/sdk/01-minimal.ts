@@ -5,18 +5,20 @@
  * from cwd and ~/.pizza/agent. Model chosen from settings or first available.
  */
 
-import { createAgentSession } from "@mariozechner/pi-coding-agent";
+import { createSessionFacade } from "@mariozechner/pi-coding-agent";
 
-const { session } = await createAgentSession();
+const { facade } = await createSessionFacade();
 
-session.subscribe((event) => {
-	if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-		process.stdout.write(event.assistantMessageEvent.delta);
+facade.subscribe((event) => {
+	if (event.type === "AGENT_MESSAGE_CHUNK" && event.payload.content_block.type === "text_delta") {
+		process.stdout.write(event.payload.content_block.text);
 	}
 });
 
-await session.prompt("What files are in the current directory?");
-session.state.messages.forEach((msg) => {
+await facade.prompt("What files are in the current directory?");
+await facade.waitForIdle();
+const messages = facade.getProjection().buildContext();
+messages.forEach((msg) => {
 	console.log(msg);
 });
 console.log();

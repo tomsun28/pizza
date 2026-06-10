@@ -7,11 +7,10 @@
 import { getModel } from "@mariozechner/pi-ai";
 import {
 	AuthStorage,
-	createAgentSession,
 	createExtensionRuntime,
+	createSessionFacade,
 	ModelRegistry,
 	type ResourceLoader,
-	SessionManager,
 	SettingsManager,
 } from "@mariozechner/pi-coding-agent";
 
@@ -50,7 +49,7 @@ Available: read, bash. Be concise.`,
 	reload: async () => {},
 };
 
-const { session } = await createAgentSession({
+const { facade } = await createSessionFacade({
 	cwd,
 	agentDir: "/tmp/my-agent",
 	model,
@@ -59,15 +58,19 @@ const { session } = await createAgentSession({
 	modelRegistry,
 	resourceLoader,
 	tools: ["read", "bash"],
-	sessionManager: SessionManager.inMemory(cwd),
+	storagePath: ":memory:",
 	settingsManager,
 });
 
-session.subscribe((event) => {
-	if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-		process.stdout.write(event.assistantMessageEvent.delta);
+facade.subscribe((event) => {
+	if (event.type === "AGENT_MESSAGE_CHUNK") {
+		const cb = event.payload?.content_block;
+		if (cb?.type === "text_delta") process.stdout.write(cb.text);
 	}
 });
 
-await session.prompt("List files in the current directory.");
+await facade.prompt("List files in the current directory.");
+await facade.waitForIdle();
 console.log();
+
+facade.dispose();

@@ -1,9 +1,7 @@
 /**
- * Pizza's own agent runtime.
+ * Pizza's own agent runtime types.
  *
- * Everything previously imported from `@mariozechner/pi-agent-core` now lives here.
+ * Domain model types used across the event-sourced architecture.
  */
 
 export * from "./types.js";
-export { Agent } from "./agent.js";
-export type { AgentOptions } from "./agent.js";

@@ -1,142 +1,140 @@
-import type { AssistantMessage, ImageContent } from "@mariozechner/pi-ai";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { ImageContent } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SessionShutdownEvent } from "../src/index.js";
-import { runPrintMode } from "../src/modes/print-mode.js";
+import type { AgentMessage } from "../src/core/agent/types.js";
+import type { ContentBlock, EventBase } from "../src/core/event-store/types.js";
+import type { ToolRegistry } from "../src/core/intent/types.js";
+import type { LLMClient, LLMResponse } from "../src/core/runtime/llm-types.js";
+import { EventSourcedRuntime } from "../src/core/runtime/runtime.js";
+import { SessionFacade } from "../src/core/session-facade.js";
+import { SettingsManager } from "../src/core/settings-manager.js";
+import { runPrintModeWithFacade } from "../src/modes/print-mode.js";
 
-type EmitEvent = SessionShutdownEvent;
+const tempDirs: string[] = [];
 
-type FakeExtensionRunner = {
-	hasHandlers: (eventType: string) => boolean;
-	emit: ReturnType<typeof vi.fn<(event: EmitEvent) => Promise<void>>>;
+const emptyRegistry: ToolRegistry = {
+	get: () => undefined,
+	list: () => [],
 };
 
-type FakeSession = {
-	sessionManager: { getHeader: () => object | undefined };
-	agent: { waitForIdle: () => Promise<void> };
-	state: { messages: AssistantMessage[] };
-	extensionRunner: FakeExtensionRunner;
-	bindExtensions: ReturnType<typeof vi.fn>;
-	subscribe: ReturnType<typeof vi.fn>;
-	prompt: ReturnType<typeof vi.fn>;
-	reload: ReturnType<typeof vi.fn>;
-};
+function makeTempDir(): string {
+	const dir = join(tmpdir(), `pizza-print-mode-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+	mkdirSync(dir, { recursive: true });
+	tempDirs.push(dir);
+	return dir;
+}
 
-type FakeRuntimeHost = {
-	session: FakeSession;
-	newSession: ReturnType<typeof vi.fn>;
-	fork: ReturnType<typeof vi.fn>;
-	switchSession: ReturnType<typeof vi.fn>;
-	dispose: ReturnType<typeof vi.fn>;
-	setRebindSession: ReturnType<typeof vi.fn>;
-};
-
-function createAssistantMessage(options?: {
-	text?: string;
-	stopReason?: AssistantMessage["stopReason"];
-	errorMessage?: string;
-}): AssistantMessage {
+function makeTextResponse(text: string): LLMResponse {
 	return {
-		role: "assistant",
-		content: options?.text ? [{ type: "text", text: options.text }] : [],
-		api: "openai-responses",
-		provider: "openai",
-		model: "gpt-4o-mini",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		content: [{ type: "text", text } as ContentBlock],
+		provider: "test",
+		model: "test-model",
+		usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, cost: 0 },
+		stopReason: "stop",
+	};
+}
+
+function captureStdout(): string[] {
+	const chunks: string[] = [];
+	vi.spyOn(process.stdout, "write").mockImplementation(((chunk, encodingOrCallback, callback) => {
+		chunks.push(String(chunk));
+		const done = typeof encodingOrCallback === "function" ? encodingOrCallback : callback;
+		done?.();
+		return true;
+	}) as typeof process.stdout.write);
+	return chunks;
+}
+
+function createFacade(client?: LLMClient): { facade: SessionFacade; runtime: EventSourcedRuntime; disposer: ReturnType<typeof vi.fn> } {
+	const cwd = makeTempDir();
+	const runtime = new EventSourcedRuntime({
+		cwd,
+		agentDir: cwd,
+		toolRegistry: emptyRegistry,
+		llmClient: client ?? {
+			async complete(): Promise<LLMResponse> {
+				return makeTextResponse("facade done");
+			},
 		},
-		stopReason: options?.stopReason ?? "stop",
-		errorMessage: options?.errorMessage,
-		timestamp: Date.now(),
-	};
+		systemPrompt: "print test",
+		model: { provider: "test", model_id: "test-model" },
+		tools: [],
+	});
+	const disposer = vi.fn();
+	const facade = new SessionFacade({
+		runtime,
+		settingsManager: SettingsManager.inMemory({ defaultProvider: "test", defaultModel: "test-model" }),
+		disposers: [disposer],
+	});
+	return { facade, runtime, disposer };
 }
 
-function createRuntimeHost(assistantMessage: AssistantMessage): FakeRuntimeHost {
-	const extensionRunner: FakeExtensionRunner = {
-		hasHandlers: (eventType: string) => eventType === "session_shutdown",
-		emit: vi.fn(async () => {}),
-	};
-
-	const state = { messages: [assistantMessage] };
-
-	const session: FakeSession = {
-		sessionManager: { getHeader: () => undefined },
-		agent: { waitForIdle: async () => {} },
-		state,
-		extensionRunner,
-		bindExtensions: vi.fn(async () => {}),
-		subscribe: vi.fn(() => () => {}),
-		prompt: vi.fn(async () => {}),
-		reload: vi.fn(async () => {}),
-	};
-
-	return {
-		session,
-		newSession: vi.fn(async () => undefined),
-		fork: vi.fn(async () => ({ selectedText: "" })),
-		switchSession: vi.fn(async () => undefined),
-		dispose: vi.fn(async () => {
-			await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
-		}),
-		setRebindSession: vi.fn(),
-	};
-}
 
 afterEach(() => {
 	vi.restoreAllMocks();
+	for (const dir of tempDirs.splice(0)) {
+		if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+	}
 });
 
-describe("runPrintMode", () => {
-	it("emits session_shutdown in text mode", async () => {
-		const runtimeHost = createRuntimeHost(createAssistantMessage({ text: "done" }));
-		const { session } = runtimeHost;
-		const images: ImageContent[] = [{ type: "image", mimeType: "image/png", data: "abc" }];
+describe("runPrintModeWithFacade", () => {
+	it("prints final assistant text from the event projection", async () => {
+		const stdout = captureStdout();
+		const { facade, disposer } = createFacade();
 
-		const exitCode = await runPrintMode(runtimeHost as unknown as Parameters<typeof runPrintMode>[0], {
+		const exitCode = await runPrintModeWithFacade(facade, {
 			mode: "text",
 			initialMessage: "Say done",
+		});
+
+		expect(exitCode).toBe(0);
+		expect(stdout.join("")).toBe("facade done\n");
+		expect(disposer).toHaveBeenCalledTimes(1);
+	});
+
+	it("emits typed event JSON lines in json mode", async () => {
+		const stdout = captureStdout();
+		const { facade, disposer } = createFacade();
+
+		const exitCode = await runPrintModeWithFacade(facade, {
+			mode: "json",
+			initialMessage: "hello",
+		});
+
+		expect(exitCode).toBe(0);
+		const events = stdout.join("").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as EventBase);
+		expect(events.every((event) => typeof event.sequence === "number" && typeof event.event_id === "string")).toBe(true);
+		expect(events.map((event) => event.type)).toContain("USER_MESSAGE");
+		expect(events.map((event) => event.type)).toContain("AGENT_MESSAGE_END");
+		expect(events.map((event) => event.type)).toContain("AGENT_TURN_COMPLETED");
+		expect(disposer).toHaveBeenCalledTimes(1);
+	});
+
+	it("converts legacy print image content to event-store image content", async () => {
+		const stdout = captureStdout();
+		let requestMessages: AgentMessage[] = [];
+		const images: ImageContent[] = [{ type: "image", mimeType: "image/png", data: "abc" }];
+		const { facade } = createFacade({
+			async complete(request): Promise<LLMResponse> {
+				requestMessages = request.messages;
+				return makeTextResponse("saw image");
+			},
+		});
+
+		const exitCode = await runPrintModeWithFacade(facade, {
+			mode: "text",
+			initialMessage: "Describe",
 			initialImages: images,
 		});
 
 		expect(exitCode).toBe(0);
-		expect(session.prompt).toHaveBeenCalledWith("Say done", { images });
-		expect(session.extensionRunner.emit).toHaveBeenCalledTimes(1);
-		expect(session.extensionRunner.emit).toHaveBeenCalledWith({ type: "session_shutdown", reason: "quit" });
-	});
-
-	it("emits session_shutdown in json mode", async () => {
-		const runtimeHost = createRuntimeHost(createAssistantMessage({ text: "done" }));
-		const { session } = runtimeHost;
-
-		const exitCode = await runPrintMode(runtimeHost as unknown as Parameters<typeof runPrintMode>[0], {
-			mode: "json",
-			messages: ["hello"],
-		});
-
-		expect(exitCode).toBe(0);
-		expect(session.prompt).toHaveBeenCalledWith("hello");
-		expect(session.extensionRunner.emit).toHaveBeenCalledTimes(1);
-		expect(session.extensionRunner.emit).toHaveBeenCalledWith({ type: "session_shutdown", reason: "quit" });
-	});
-
-	it("emits session_shutdown and returns non-zero on assistant error", async () => {
-		const runtimeHost = createRuntimeHost(
-			createAssistantMessage({ stopReason: "error", errorMessage: "provider failure" }),
-		);
-		const { session } = runtimeHost;
-		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-		const exitCode = await runPrintMode(runtimeHost as unknown as Parameters<typeof runPrintMode>[0], {
-			mode: "text",
-		});
-
-		expect(exitCode).toBe(1);
-		expect(errorSpy).toHaveBeenCalledWith("provider failure");
-		expect(session.extensionRunner.emit).toHaveBeenCalledTimes(1);
-		expect(session.extensionRunner.emit).toHaveBeenCalledWith({ type: "session_shutdown", reason: "quit" });
+		expect(stdout.join("")).toBe("saw image\n");
+		const userMessage = requestMessages.find((message) => message.role === "user");
+		expect(userMessage?.content).toEqual([
+			{ type: "text", text: "Describe" },
+			{ type: "image", data: "abc", mime_type: "image/png" },
+		]);
 	});
 });

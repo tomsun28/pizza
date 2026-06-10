@@ -191,6 +191,22 @@ describe("InteractiveMode.showLoadedResources", () => {
 					getThemes: () => ({ themes: [], diagnostics: [] }),
 				},
 			},
+			resourceLoaderValue: {
+				getPathMetadata: () => new Map(),
+				getAgentsFiles: () => ({ agentsFiles: options.contextFiles ?? [] }),
+				getSkills: () => ({
+					skills: options.skills ?? [],
+					diagnostics: options.skillDiagnostics ?? [],
+				}),
+				getPrompts: () => ({ prompts: [], diagnostics: [] }),
+				getExtensions: () => ({ extensions: options.extensions ?? [], errors: [], runtime: {} }),
+				getThemes: () => ({ themes: [], diagnostics: [] }),
+			},
+			promptTemplatesValue: [],
+			extensionRunnerValue: {
+				getCommandDiagnostics: () => [],
+				getShortcutDiagnostics: () => [],
+			},
 			formatDisplayPath: (p: string) => (InteractiveMode as any).prototype.formatDisplayPath.call(fakeThis, p),
 			formatContextPath: (p: string) => (InteractiveMode as any).prototype.formatContextPath.call(fakeThis, p),
 			getStartupExpansionState: () => (InteractiveMode as any).prototype.getStartupExpansionState.call(fakeThis),

@@ -83,7 +83,7 @@ export interface RuntimeCompactOptions {
 // ============================================================================
 
 /**
- * EventSourcedRuntime - replaces the original AgentSessionRuntime.
+ * EventSourcedRuntime - the primary LLM execution engine.
  *
  * Assembles EventStore + SessionManager + IntentExecutor + AgentLoop.
  * Provides unified interface for UI layers.

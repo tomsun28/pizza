@@ -19,27 +19,24 @@ describe("InteractiveMode compaction events", () => {
 			ui: { requestRender: vi.fn() },
 		};
 
-		const handleEvent = Reflect.get(InteractiveMode.prototype, "handleEvent") as (
+		const handleModeEvent = Reflect.get(InteractiveMode.prototype, "handleModeEvent") as (
 			this: typeof fakeThis,
 			event: {
-				type: "compaction_end";
-				reason: "manual" | "threshold" | "overflow";
-				result: { tokensBefore: number; summary: string } | undefined;
-				aborted: boolean;
-				willRetry: boolean;
-				errorMessage?: string;
+				type: "compaction_finished";
+				eventId: string;
+				summary: string;
+				firstKeptEventId: string;
+				tokensBefore: number;
+				tokensAfter?: number;
 			},
 		) => Promise<void>;
 
-		await handleEvent.call(fakeThis, {
-			type: "compaction_end",
-			reason: "manual",
-			result: {
-				tokensBefore: 123,
-				summary: "summary",
-			},
-			aborted: false,
-			willRetry: false,
+		await handleModeEvent.call(fakeThis, {
+			type: "compaction_finished",
+			eventId: "evt-1",
+			summary: "summary",
+			firstKeptEventId: "kept-1",
+			tokensBefore: 123,
 		});
 
 		expect(fakeThis.chatContainer.clear).toHaveBeenCalledTimes(1);

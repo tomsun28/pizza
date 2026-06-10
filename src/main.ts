@@ -2,13 +2,12 @@
  * Main entry point for the coding agent CLI.
  *
  * This file handles CLI argument parsing and translates them into
- * createAgentSession() options. The SDK does the heavy lifting.
+ * createSessionFacade() options. The SDK does the heavy lifting.
  */
 
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { type ImageContent, modelsAreEqual, supportsXhigh } from "@mariozechner/pi-ai";
-import { ProcessTerminal, setKeybindings, TUI } from "@mariozechner/pi-tui";
 import chalk from "chalk";
 import { type Args, type Mode, parseArgs, printHelp } from "./cli/args.js";
 import { processFileArguments } from "./cli/file-processor.js";
@@ -16,33 +15,25 @@ import { buildInitialMessage } from "./cli/initial-message.js";
 import { listModels } from "./cli/list-models.js";
 import { selectSession } from "./cli/session-picker.js";
 import { getAgentDir, getModelsPath, VERSION } from "./config.js";
-import { type CreateAgentSessionRuntimeFactory, createAgentSessionRuntime } from "./core/agent-session-runtime.js";
 import {
-	type AgentSessionRuntimeDiagnostic,
-	createAgentSessionFromServices,
-	createAgentSessionServices,
-} from "./core/agent-session-services.js";
+	type SessionServices,
+	type SessionDiagnostic,
+	createSessionServices,
+} from "./core/session-services.js";
 import { AuthStorage } from "./core/auth-storage.js";
 import { exportFromFile } from "./core/export-html/index.js";
 import type { ExtensionFactory } from "./core/extensions/types.js";
-import { KeybindingsManager } from "./core/keybindings.js";
 import type { ModelRegistry } from "./core/model-registry.js";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.js";
-import { createEventSourcedRuntimeHost } from "./core/runtime/runtime-adapter.js";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.js";
-import type { CreateAgentSessionOptions } from "./core/sdk.js";
-import {
-	formatMissingSessionCwdPrompt,
-	getMissingSessionCwdIssue,
-	MissingSessionCwdError,
-	type SessionCwdIssue,
-} from "./core/session-cwd.js";
-import { SessionManager } from "./core/session-manager.js";
+import type { CreateSessionFacadeOptions } from "./core/session-facade-factory.js";
+import { createSessionFacade, type CreateSessionFacadeResult } from "./core/session-facade-factory.js";
+import { getAgentDirFromSessionDir, parseSessionRef } from "./core/session-ref.js";
+import { SessionManager, type SessionInfo } from "./core/session-manager.js";
 import { SettingsManager } from "./core/settings-manager.js";
 import { printTimings, resetTimings, time } from "./core/timings.js";
 
-import { InteractiveMode, runPrintMode, runRpcMode } from "./modes/index.js";
-import { ExtensionSelectorComponent } from "./modes/interactive/components/extension-selector.js";
+import { InteractiveMode, runPrintModeWithFacade, runRpcModeWithFacade } from "./modes/index.js";
 import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.js";
 import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.js";
 import { isLocalPath } from "./utils/paths.js";
@@ -73,14 +64,14 @@ async function readPipedStdin(): Promise<string | undefined> {
 function collectSettingsDiagnostics(
 	settingsManager: SettingsManager,
 	context: string,
-): AgentSessionRuntimeDiagnostic[] {
+): SessionDiagnostic[] {
 	return settingsManager.drainErrors().map(({ scope, error }) => ({
 		type: "warning",
 		message: `(${context}, ${scope} settings) ${error.message}`,
 	}));
 }
 
-function reportDiagnostics(diagnostics: readonly AgentSessionRuntimeDiagnostic[]): void {
+function reportDiagnostics(diagnostics: readonly SessionDiagnostic[]): void {
 	for (const diagnostic of diagnostics) {
 		const color = diagnostic.type === "error" ? chalk.red : diagnostic.type === "warning" ? chalk.yellow : chalk.dim;
 		const prefix = diagnostic.type === "error" ? "Error: " : diagnostic.type === "warning" ? "Warning: " : "";
@@ -199,87 +190,6 @@ function validateForkFlags(parsed: Args): void {
 	}
 }
 
-function forkSessionOrExit(sourcePath: string, cwd: string, sessionDir?: string): SessionManager {
-	try {
-		return SessionManager.forkFrom(sourcePath, cwd, sessionDir);
-	} catch (error: unknown) {
-		const message = error instanceof Error ? error.message : String(error);
-		console.error(chalk.red(`Error: ${message}`));
-		process.exit(1);
-	}
-}
-
-async function createSessionManager(
-	parsed: Args,
-	cwd: string,
-	sessionDir: string | undefined,
-	settingsManager: SettingsManager,
-): Promise<SessionManager> {
-	if (parsed.noSession) {
-		return SessionManager.inMemory();
-	}
-
-	if (parsed.fork) {
-		const resolved = await resolveSessionPath(parsed.fork, cwd, sessionDir);
-
-		switch (resolved.type) {
-			case "local":
-			case "global":
-				return forkSessionOrExit(resolved.path, cwd, sessionDir);
-
-			case "not_found":
-				console.error(chalk.red(`No session found matching '${resolved.arg}'`));
-				process.exit(1);
-		}
-	}
-
-	if (parsed.session) {
-		const resolved = await resolveSessionPath(parsed.session, cwd, sessionDir);
-
-		switch (resolved.type) {
-			case "local":
-				return SessionManager.open(resolved.path, sessionDir);
-
-			case "global": {
-				console.log(chalk.yellow(`Session found in different project: ${resolved.cwd}`));
-				const shouldFork = await promptConfirm("Fork this session into current directory?");
-				if (!shouldFork) {
-					console.log(chalk.dim("Aborted."));
-					process.exit(0);
-				}
-				return forkSessionOrExit(resolved.path, cwd, sessionDir);
-			}
-
-			case "not_found":
-				console.error(chalk.red(`No session found matching '${resolved.arg}'`));
-				process.exit(1);
-		}
-	}
-
-	if (parsed.resume) {
-		initTheme(settingsManager.getTheme(), true);
-		try {
-			const selectedPath = await selectSession(
-					(onProgress) => SessionManager.list(cwd, sessionDir, onProgress),
-					(onProgress) => SessionManager.listAll(onProgress, sessionDir),
-				);
-			if (!selectedPath) {
-				console.log(chalk.dim("No session selected"));
-				process.exit(0);
-			}
-			return SessionManager.open(selectedPath, sessionDir);
-		} finally {
-			stopThemeWatcher();
-		}
-	}
-
-	if (parsed.continue) {
-		return SessionManager.continueRecent(cwd, sessionDir);
-	}
-
-	return SessionManager.create(cwd, sessionDir);
-}
-
 function buildSessionOptions(
 	parsed: Args,
 	scopedModels: ScopedModel[],
@@ -287,12 +197,12 @@ function buildSessionOptions(
 	modelRegistry: ModelRegistry,
 	settingsManager: SettingsManager,
 ): {
-	options: CreateAgentSessionOptions;
+	options: CreateSessionFacadeOptions;
 	cliThinkingFromModel: boolean;
-	diagnostics: AgentSessionRuntimeDiagnostic[];
+	diagnostics: SessionDiagnostic[];
 } {
-	const options: CreateAgentSessionOptions = {};
-	const diagnostics: AgentSessionRuntimeDiagnostic[] = [];
+	const options: CreateSessionFacadeOptions = {};
+	const diagnostics: SessionDiagnostic[] = [];
 	let cliThinkingFromModel = false;
 
 	// Model from CLI
@@ -348,18 +258,8 @@ function buildSessionOptions(
 		options.thinkingLevel = parsed.thinking;
 	}
 
-	// Scoped models for Ctrl+P cycling
-	// Keep thinking level undefined when not explicitly set in the model pattern.
-	// Undefined means "inherit current session thinking level" during cycling.
-	if (scopedModels.length > 0) {
-		options.scopedModels = scopedModels.map((sm) => ({
-			model: sm.model,
-			thinkingLevel: sm.thinkingLevel,
-		}));
-	}
 
 	// API key from CLI - set in authStorage
-	// (handled by caller before createAgentSession)
 
 	// Tools
 	if (parsed.noTools) {
@@ -377,38 +277,224 @@ function resolveCliPaths(cwd: string, paths: string[] | undefined): string[] | u
 	return paths?.map((value) => (isLocalPath(value) ? resolve(cwd, value) : value));
 }
 
-async function promptForMissingSessionCwd(
-	issue: SessionCwdIssue,
+interface ResolvedCliResourcePaths {
+	extensions?: string[];
+	skills?: string[];
+	promptTemplates?: string[];
+	themes?: string[];
+}
+
+interface CliSessionSetup {
+	services: SessionServices;
+	diagnostics: SessionDiagnostic[];
+	sessionOptions: CreateSessionFacadeOptions;
+	scopedModels: ScopedModel[];
+	cliThinkingFromModel: boolean;
+}
+
+interface FacadePrintSessionTarget {
+	cwd: string;
+	workspaceId?: string;
+	sessionId?: string;
+	forkFrom?: {
+		workspaceId: string;
+		sessionId: string;
+	};
+	hasExistingSession: boolean;
+}
+
+async function createCliSessionSetup(options: {
+	cwd: string;
+	agentDir: string;
+	authStorage: AuthStorage;
+	parsed: Args;
+	resolvedPaths: ResolvedCliResourcePaths;
+	extensionFactories?: ExtensionFactory[];
+	hasExistingSession: boolean;
+}): Promise<CliSessionSetup> {
+	const { cwd, agentDir, authStorage, parsed, resolvedPaths, extensionFactories, hasExistingSession } = options;
+	const services = await createSessionServices({
+		cwd,
+		agentDir,
+		authStorage,
+		extensionFlagValues: parsed.unknownFlags,
+		resourceLoaderOptions: {
+			additionalExtensionPaths: resolvedPaths.extensions,
+			additionalSkillPaths: resolvedPaths.skills,
+			additionalPromptTemplatePaths: resolvedPaths.promptTemplates,
+			additionalThemePaths: resolvedPaths.themes,
+			noExtensions: parsed.noExtensions,
+			noSkills: parsed.noSkills,
+			noPromptTemplates: parsed.noPromptTemplates,
+			noThemes: parsed.noThemes,
+			noContextFiles: parsed.noContextFiles,
+			systemPrompt: parsed.systemPrompt,
+			appendSystemPrompt: parsed.appendSystemPrompt,
+			extensionFactories,
+		},
+	});
+	const { settingsManager, modelRegistry, resourceLoader } = services;
+	const diagnostics: SessionDiagnostic[] = [
+		...services.diagnostics,
+		...collectSettingsDiagnostics(settingsManager, "runtime creation"),
+		...resourceLoader.getExtensions().errors.map(({ path, error }) => ({
+			type: "error" as const,
+			message: `Failed to load extension "${path}": ${error}`,
+		})),
+	];
+
+	const modelPatterns = parsed.models ?? settingsManager.getEnabledModels();
+	const scopedModels =
+		modelPatterns && modelPatterns.length > 0 ? await resolveModelScope(modelPatterns, modelRegistry) : [];
+	const {
+		options: sessionOptions,
+		cliThinkingFromModel,
+		diagnostics: sessionOptionDiagnostics,
+	} = buildSessionOptions(
+		parsed,
+		scopedModels,
+		hasExistingSession,
+		modelRegistry,
+		settingsManager,
+	);
+	diagnostics.push(...sessionOptionDiagnostics);
+
+	if (parsed.apiKey) {
+		if (!sessionOptions.model) {
+			diagnostics.push({
+				type: "error",
+				message: "--api-key requires a model to be specified via --model, --provider/--model, or --models",
+			});
+		} else {
+			authStorage.setRuntimeApiKey(sessionOptions.model.provider, parsed.apiKey);
+		}
+	}
+
+	return { services, diagnostics, sessionOptions, scopedModels, cliThinkingFromModel };
+}
+
+function applyCliThinkingClampToFacade(created: CreateSessionFacadeResult, cliThinkingOverride: boolean): void {
+	if (!created.model || !cliThinkingOverride) return;
+	let effectiveThinking = created.thinkingLevel;
+	if (!created.model.reasoning) {
+		effectiveThinking = "off";
+	} else if (effectiveThinking === "xhigh" && !supportsXhigh(created.model)) {
+		effectiveThinking = "high";
+	}
+	if (effectiveThinking !== created.thinkingLevel) {
+		created.facade.thinkingLevel = effectiveThinking;
+	}
+}
+
+async function resolveFacadePrintSessionTarget(
+	parsed: Args,
+	cwd: string,
+	sessionDir: string | undefined,
 	settingsManager: SettingsManager,
-): Promise<string | undefined> {
-	initTheme(settingsManager.getTheme());
-	setKeybindings(KeybindingsManager.create());
-
-	return new Promise((resolve) => {
-		const ui = new TUI(new ProcessTerminal(), settingsManager.getShowHardwareCursor());
-		ui.setClearOnShrink(settingsManager.getClearOnShrink());
-
-		let settled = false;
-		const finish = (result: string | undefined) => {
-			if (settled) {
-				return;
+): Promise<FacadePrintSessionTarget> {
+	if (parsed.fork) {
+		const resolved = await resolveSessionPath(parsed.fork, cwd, sessionDir);
+		switch (resolved.type) {
+			case "local":
+			case "global": {
+				const parsedRef = parseSessionRef(resolved.path);
+				if (!parsedRef.workspaceId) {
+					throw new Error(`Invalid session reference: ${resolved.path}`);
+				}
+				return {
+					cwd,
+					forkFrom: {
+						workspaceId: parsedRef.workspaceId,
+						sessionId: parsedRef.sessionId,
+					},
+					hasExistingSession: true,
+				};
 			}
-			settled = true;
-			ui.stop();
-			resolve(result);
+			case "not_found":
+				console.error(chalk.red(`No session found matching '${resolved.arg}'`));
+				process.exit(1);
+		}
+	}
+
+	if (parsed.noSession) {
+		return {
+			cwd,
+			hasExistingSession: false,
+		};
+	}
+
+	if (parsed.resume) {
+		const sessionsByPath = new Map<string, SessionInfo>();
+		const trackSessions = async (loader: () => Promise<SessionInfo[]>): Promise<SessionInfo[]> => {
+			const sessions = await loader();
+			for (const session of sessions) {
+				sessionsByPath.set(session.path, session);
+			}
+			return sessions;
 		};
 
-		const selector = new ExtensionSelectorComponent(
-			formatMissingSessionCwdPrompt(issue),
-			["Continue", "Cancel"],
-			(option) => finish(option === "Continue" ? issue.fallbackCwd : undefined),
-			() => finish(undefined),
-			{ tui: ui },
-		);
-		ui.addChild(selector);
-		ui.setFocus(selector);
-		ui.start();
-	});
+		initTheme(settingsManager.getTheme(), true);
+		try {
+			const selectedPath = await selectSession(
+				(onProgress) => trackSessions(() => SessionManager.list(cwd, sessionDir, onProgress)),
+				(onProgress) => trackSessions(() => SessionManager.listAll(onProgress, sessionDir)),
+			);
+			if (!selectedPath) {
+				console.log(chalk.dim("No session selected"));
+				process.exit(0);
+			}
+
+			const parsedRef = parseSessionRef(selectedPath);
+			let selectedCwd = sessionsByPath.get(selectedPath)?.cwd;
+			if (!selectedCwd) {
+				const resolved = await resolveSessionPath(selectedPath, cwd, sessionDir);
+				if (resolved.type === "global") {
+					selectedCwd = resolved.cwd;
+				}
+			}
+
+			return {
+				cwd: selectedCwd ?? cwd,
+				workspaceId: parsedRef.workspaceId,
+				sessionId: parsedRef.sessionId,
+				hasExistingSession: true,
+			};
+		} finally {
+			stopThemeWatcher();
+		}
+	}
+
+	if (parsed.session) {
+		const resolved = await resolveSessionPath(parsed.session, cwd, sessionDir);
+		switch (resolved.type) {
+			case "local": {
+				const parsedRef = parseSessionRef(resolved.path);
+				return {
+					cwd,
+					workspaceId: parsedRef.workspaceId,
+					sessionId: parsedRef.sessionId,
+					hasExistingSession: true,
+				};
+			}
+			case "global": {
+				const parsedRef = parseSessionRef(resolved.path);
+				return {
+					cwd: resolved.cwd,
+					workspaceId: parsedRef.workspaceId,
+					sessionId: parsedRef.sessionId,
+					hasExistingSession: true,
+				};
+			}
+			case "not_found":
+				console.error(chalk.red(`No session found matching '${resolved.arg}'`));
+				process.exit(1);
+		}
+	}
+
+	return {
+		cwd,
+		hasExistingSession: !!parsed.continue,
+	};
 }
 
 export interface MainOptions {
@@ -474,151 +560,32 @@ export async function main(args: string[], options?: MainOptions) {
 
 	validateForkFlags(parsed);
 
-
-
 	const cwd = process.cwd();
 	const agentDir = getAgentDir();
 	const startupSettingsManager = SettingsManager.create(cwd, agentDir);
 	reportDiagnostics(collectSettingsDiagnostics(startupSettingsManager, "startup session lookup"));
-
-	// Decide the final runtime cwd before creating cwd-bound runtime services.
-	// --session and --resume may select a session from another project, so project-local
-	// settings, resources, provider registrations, and models must be resolved only after
-	// the target session cwd is known. The startup-cwd settings manager is used only for
-	// sessionDir lookup during session selection.
 	const sessionDir = parsed.sessionDir ?? startupSettingsManager.getSessionDir();
-	let sessionManager = await createSessionManager(parsed, cwd, sessionDir, startupSettingsManager);
-	const missingSessionCwdIssue = getMissingSessionCwdIssue(sessionManager, cwd);
-	if (missingSessionCwdIssue) {
-		if (appMode === "interactive") {
-			const selectedCwd = await promptForMissingSessionCwd(missingSessionCwdIssue, startupSettingsManager);
-			if (!selectedCwd) {
-				process.exit(0);
-			}
-			sessionManager = SessionManager.open(missingSessionCwdIssue.sessionFile!, sessionDir, selectedCwd);
-		} else {
-			console.error(chalk.red(new MissingSessionCwdError(missingSessionCwdIssue).message));
-			process.exit(1);
-		}
-	}
-	time("createSessionManager");
-
-	const resolvedExtensionPaths = resolveCliPaths(cwd, parsed.extensions);
-	const resolvedSkillPaths = resolveCliPaths(cwd, parsed.skills);
-	const resolvedPromptTemplatePaths = resolveCliPaths(cwd, parsed.promptTemplates);
-	const resolvedThemePaths = resolveCliPaths(cwd, parsed.themes);
-	const authStorage = AuthStorage.create();
-	const createRuntime: CreateAgentSessionRuntimeFactory = async ({
-		cwd,
-		agentDir,
-		sessionManager,
-		sessionStartEvent,
-	}) => {
-		const services = await createAgentSessionServices({
-			cwd,
-			agentDir,
-			authStorage,
-			extensionFlagValues: parsed.unknownFlags,
-			resourceLoaderOptions: {
-				additionalExtensionPaths: resolvedExtensionPaths,
-				additionalSkillPaths: resolvedSkillPaths,
-				additionalPromptTemplatePaths: resolvedPromptTemplatePaths,
-				additionalThemePaths: resolvedThemePaths,
-				noExtensions: parsed.noExtensions,
-				noSkills: parsed.noSkills,
-				noPromptTemplates: parsed.noPromptTemplates,
-				noThemes: parsed.noThemes,
-				noContextFiles: parsed.noContextFiles,
-				systemPrompt: parsed.systemPrompt,
-				appendSystemPrompt: parsed.appendSystemPrompt,
-				extensionFactories: options?.extensionFactories,
-			},
-		});
-		const { settingsManager, modelRegistry, resourceLoader } = services;
-		const diagnostics: AgentSessionRuntimeDiagnostic[] = [
-			...services.diagnostics,
-			...collectSettingsDiagnostics(settingsManager, "runtime creation"),
-			...resourceLoader.getExtensions().errors.map(({ path, error }) => ({
-				type: "error" as const,
-				message: `Failed to load extension "${path}": ${error}`,
-			})),
-		];
-
-		const modelPatterns = parsed.models ?? settingsManager.getEnabledModels();
-		const scopedModels =
-			modelPatterns && modelPatterns.length > 0 ? await resolveModelScope(modelPatterns, modelRegistry) : [];
-		const {
-			options: sessionOptions,
-			cliThinkingFromModel,
-			diagnostics: sessionOptionDiagnostics,
-		} = buildSessionOptions(
-			parsed,
-			scopedModels,
-			sessionManager.buildSessionContext().messages.length > 0,
-			modelRegistry,
-			settingsManager,
-		);
-		diagnostics.push(...sessionOptionDiagnostics);
-
-		if (parsed.apiKey) {
-			if (!sessionOptions.model) {
-				diagnostics.push({
-					type: "error",
-					message: "--api-key requires a model to be specified via --model, --provider/--model, or --models",
-				});
-			} else {
-				authStorage.setRuntimeApiKey(sessionOptions.model.provider, parsed.apiKey);
-			}
-		}
-
-		const created = await createAgentSessionFromServices({
-			services,
-			sessionManager,
-			sessionStartEvent,
-			model: sessionOptions.model,
-			thinkingLevel: sessionOptions.thinkingLevel,
-			scopedModels: sessionOptions.scopedModels,
-			tools: sessionOptions.tools,
-			customTools: sessionOptions.customTools,
-		});
-		const cliThinkingOverride = parsed.thinking !== undefined || cliThinkingFromModel;
-		if (created.session.model && cliThinkingOverride) {
-			let effectiveThinking = created.session.thinkingLevel;
-			if (!created.session.model.reasoning) {
-				effectiveThinking = "off";
-			} else if (effectiveThinking === "xhigh" && !supportsXhigh(created.session.model)) {
-				effectiveThinking = "high";
-			}
-			if (effectiveThinking !== created.session.thinkingLevel) {
-				created.session.setThinkingLevel(effectiveThinking);
-			}
-		}
-
-		return {
-			...created,
-			services,
-			diagnostics,
-		};
+	const sessionStorageAgentDir = getAgentDirFromSessionDir(sessionDir);
+	const resolvedPaths: ResolvedCliResourcePaths = {
+		extensions: resolveCliPaths(cwd, parsed.extensions),
+		skills: resolveCliPaths(cwd, parsed.skills),
+		promptTemplates: resolveCliPaths(cwd, parsed.promptTemplates),
+		themes: resolveCliPaths(cwd, parsed.themes),
 	};
-	time("createRuntime");
-	const runtime = await createAgentSessionRuntime(createRuntime, {
-		cwd: sessionManager.getCwd(),
-		agentDir,
-		sessionManager,
-	});
-	const { services, session, modelFallbackMessage } = runtime;
-	const { settingsManager, modelRegistry, resourceLoader } = services;
+	const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
 
-	// Add event-sourced runtime as a sidecar for new features (timeline, projections, checkpoints)
-	// This is a gradual migration approach - the legacy runtime remains primary
-	;(runtime as any).eventSourcedRuntime = await createEventSourcedRuntimeHost({
-		legacyRuntime: runtime,
-		llmClient: session.agent.state.model ? undefined as any : undefined, // TODO: extract from session
-		systemPrompt: session.agent.state.systemPrompt,
-		model: { provider: session.agent.state.model?.provider ?? "unknown", model_id: session.agent.state.model?.id ?? "unknown" },
-		tools: session.agent.state.tools,
-		approvalHandler: undefined,
+	const target = await resolveFacadePrintSessionTarget(parsed, cwd, sessionDir, startupSettingsManager);
+	const setup = await createCliSessionSetup({
+		cwd: target.cwd,
+		agentDir,
+		authStorage,
+		parsed,
+		resolvedPaths,
+		extensionFactories: options?.extensionFactories,
+		hasExistingSession: target.hasExistingSession,
 	});
+	const { services, sessionOptions, cliThinkingFromModel, scopedModels: setupScopedModels } = setup;
+	const { settingsManager, modelRegistry, resourceLoader } = services;
 
 	if (parsed.help) {
 		const extensionFlags = resourceLoader
@@ -634,53 +601,117 @@ export async function main(args: string[], options?: MainOptions) {
 		process.exit(0);
 	}
 
-	// Read piped stdin content (if any) - skip for RPC mode which uses stdin for JSON-RPC
-	let stdinContent: string | undefined;
-	if (appMode !== "rpc") {
-		stdinContent = await readPipedStdin();
-		if (stdinContent !== undefined && appMode === "interactive") {
-			appMode = "print";
-		}
-	}
-	time("readPipedStdin");
-
-	const { initialMessage, initialImages } = await prepareInitialMessage(
-		parsed,
-		settingsManager.getImageAutoResize(),
-		stdinContent,
-	);
-	time("prepareInitialMessage");
-	initTheme(settingsManager.getTheme(), appMode === "interactive");
-	time("initTheme");
-
-	const scopedModels = [...session.scopedModels];
-	time("resolveModelScope");
-	reportDiagnostics(runtime.diagnostics);
-	if (runtime.diagnostics.some((diagnostic) => diagnostic.type === "error")) {
-		process.exit(1);
-	}
-	time("createAgentSession");
-
-	if (appMode !== "interactive" && !session.model) {
-		console.error(chalk.red("No models available."));
-		console.error(chalk.yellow("\nSet an API key environment variable:"));
-		console.error("  ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, etc.");
-		console.error(chalk.yellow(`\nOr create ${getModelsPath()}`));
-		process.exit(1);
-	}
-
-	const startupBenchmark = isTruthyEnvFlag(process.env.PI_STARTUP_BENCHMARK);
-	if (startupBenchmark && appMode !== "interactive") {
-		console.error(chalk.red("Error: PI_STARTUP_BENCHMARK only supports interactive mode"));
-		process.exit(1);
-	}
-
 	if (appMode === "rpc") {
+		initTheme(settingsManager.getTheme(), false);
+		time("initTheme");
+
+		reportDiagnostics(setup.diagnostics);
+		if (setup.diagnostics.some((diagnostic) => diagnostic.type === "error")) {
+			process.exit(1);
+		}
+		time("createSessionFacade.setup");
+
+		const created = await createSessionFacade({
+			cwd: target.cwd,
+			agentDir: sessionStorageAgentDir,
+			authStorage,
+			settingsManager,
+			modelRegistry,
+			resourceLoader,
+			model: sessionOptions.model,
+			thinkingLevel: sessionOptions.thinkingLevel,
+			tools: sessionOptions.tools,
+			customTools: sessionOptions.customTools,
+			storagePath: parsed.noSession ? ":memory:" : undefined,
+			sessionIndexPath: parsed.noSession ? ":memory:" : undefined,
+			workspaceId: target.workspaceId,
+			sessionId: target.sessionId,
+			forkFrom: target.forkFrom
+				? {
+						...target.forkFrom,
+						agentDir: sessionStorageAgentDir,
+					}
+				: undefined,
+		});
+		applyCliThinkingClampToFacade(created, parsed.thinking !== undefined || cliThinkingFromModel);
+		time("createSessionFacade");
+
+		if (!created.model) {
+			console.error(chalk.red("No models available."));
+			console.error(chalk.yellow("\nSet an API key environment variable:"));
+			console.error("  ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, etc.");
+			console.error(chalk.yellow(`\nOr create ${getModelsPath()}`));
+			process.exit(1);
+		}
+
+		const startupBenchmark = isTruthyEnvFlag(process.env.PI_STARTUP_BENCHMARK);
+		if (startupBenchmark) {
+			console.error(chalk.red("Error: PI_STARTUP_BENCHMARK only supports interactive mode"));
+			process.exit(1);
+		}
+
 		printTimings();
-		await runRpcMode(runtime);
-	} else if (appMode === "interactive") {
-		if (scopedModels.length > 0 && (parsed.verbose || !settingsManager.getQuietStartup())) {
-			const modelList = scopedModels
+		await runRpcModeWithFacade(created.facade);
+		return;
+	}
+
+	if (appMode === "interactive") {
+		// Interactive mode via SessionFacade
+		initTheme(settingsManager.getTheme(), true);
+		time("initTheme");
+
+		reportDiagnostics(setup.diagnostics);
+		if (setup.diagnostics.some((diagnostic) => diagnostic.type === "error")) {
+			process.exit(1);
+		}
+		time("createSessionFacade.setup");
+
+		const created = await createSessionFacade({
+			cwd: target.cwd,
+			agentDir: sessionStorageAgentDir,
+			authStorage,
+			settingsManager,
+			modelRegistry,
+			resourceLoader,
+			model: sessionOptions.model,
+			thinkingLevel: sessionOptions.thinkingLevel,
+			tools: sessionOptions.tools,
+			customTools: sessionOptions.customTools,
+			storagePath: parsed.noSession ? ":memory:" : undefined,
+			sessionIndexPath: parsed.noSession ? ":memory:" : undefined,
+			workspaceId: target.workspaceId,
+			sessionId: target.sessionId,
+			forkFrom: target.forkFrom
+				? {
+						...target.forkFrom,
+						agentDir: sessionStorageAgentDir,
+					}
+				: undefined,
+		});
+		applyCliThinkingClampToFacade(created, parsed.thinking !== undefined || cliThinkingFromModel);
+		time("createSessionFacade");
+
+		if (!created.model) {
+			console.error(chalk.red("No models available."));
+			console.error(chalk.yellow("\nSet an API key environment variable:"));
+			console.error("  ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, etc.");
+			console.error(chalk.yellow(`\nOr create ${getModelsPath()}`));
+			process.exit(1);
+		}
+
+		// Read piped stdin for initial message
+		const stdinContent = await readPipedStdin();
+		time("readPipedStdin");
+		const { initialMessage, initialImages } = await prepareInitialMessage(
+			parsed,
+			settingsManager.getImageAutoResize(),
+			stdinContent,
+		);
+		time("prepareInitialMessage");
+
+		const scopedModelsList = setupScopedModels ?? [];
+		if (scopedModelsList.length > 0 && (parsed.verbose || !settingsManager.getQuietStartup())) {
+			const modelList = scopedModelsList
 				.map((sm) => {
 					const thinkingStr = sm.thinkingLevel ? `:${sm.thinkingLevel}` : "";
 					return `${sm.model.id}${thinkingStr}`;
@@ -689,8 +720,9 @@ export async function main(args: string[], options?: MainOptions) {
 			console.log(chalk.dim(`Model scope: ${modelList} ${chalk.gray("(Ctrl+P to cycle)")}`));
 		}
 
-		const interactiveMode = new InteractiveMode(runtime, {
-			modelFallbackMessage,
+		const startupBenchmark = isTruthyEnvFlag(process.env.PI_STARTUP_BENCHMARK);
+		const interactiveMode = InteractiveMode.fromFacade(created, scopedModelsList, {
+			modelFallbackMessage: created.modelFallbackMessage,
 			initialMessage,
 			initialImages,
 			initialMessages: parsed.messages,
@@ -713,19 +745,76 @@ export async function main(args: string[], options?: MainOptions) {
 
 		printTimings();
 		await interactiveMode.run();
-	} else {
-		printTimings();
-		const exitCode = await runPrintMode(runtime, {
-			mode: toPrintOutputMode(appMode),
-			messages: parsed.messages,
-			initialMessage,
-			initialImages,
-		});
-		stopThemeWatcher();
-		restoreStdout();
-		if (exitCode !== 0) {
-			process.exitCode = exitCode;
-		}
 		return;
+	}
+
+	const stdinContent = await readPipedStdin();
+	time("readPipedStdin");
+
+	const { initialMessage, initialImages } = await prepareInitialMessage(
+		parsed,
+		settingsManager.getImageAutoResize(),
+		stdinContent,
+	);
+	time("prepareInitialMessage");
+	initTheme(settingsManager.getTheme(), false);
+	time("initTheme");
+
+	reportDiagnostics(setup.diagnostics);
+	if (setup.diagnostics.some((diagnostic) => diagnostic.type === "error")) {
+		process.exit(1);
+	}
+	time("createSessionFacade.setup");
+
+	const created = await createSessionFacade({
+		cwd: target.cwd,
+		agentDir: sessionStorageAgentDir,
+		authStorage,
+		settingsManager,
+		modelRegistry,
+		resourceLoader,
+		model: sessionOptions.model,
+		thinkingLevel: sessionOptions.thinkingLevel,
+		tools: sessionOptions.tools,
+		customTools: sessionOptions.customTools,
+		storagePath: parsed.noSession ? ":memory:" : undefined,
+		sessionIndexPath: parsed.noSession ? ":memory:" : undefined,
+		workspaceId: target.workspaceId,
+		sessionId: target.sessionId,
+		forkFrom: target.forkFrom
+			? {
+					...target.forkFrom,
+					agentDir: sessionStorageAgentDir,
+				}
+			: undefined,
+	});
+	applyCliThinkingClampToFacade(created, parsed.thinking !== undefined || cliThinkingFromModel);
+	time("createSessionFacade");
+
+	if (!created.model) {
+		console.error(chalk.red("No models available."));
+		console.error(chalk.yellow("\nSet an API key environment variable:"));
+		console.error("  ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, etc.");
+		console.error(chalk.yellow(`\nOr create ${getModelsPath()}`));
+		process.exit(1);
+	}
+
+	const startupBenchmark = isTruthyEnvFlag(process.env.PI_STARTUP_BENCHMARK);
+	if (startupBenchmark) {
+		console.error(chalk.red("Error: PI_STARTUP_BENCHMARK only supports interactive mode"));
+		process.exit(1);
+	}
+
+	printTimings();
+	const exitCode = await runPrintModeWithFacade(created.facade, {
+		mode: toPrintOutputMode(appMode),
+		messages: parsed.messages,
+		initialMessage,
+		initialImages,
+	});
+	stopThemeWatcher();
+	restoreStdout();
+	if (exitCode !== 0) {
+		process.exitCode = exitCode;
 	}
 }

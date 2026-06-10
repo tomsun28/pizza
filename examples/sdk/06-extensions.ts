@@ -13,7 +13,7 @@
  *   export default function (pi: ExtensionAPI) { ... }
  */
 
-import { createAgentSession, DefaultResourceLoader, getAgentDir, SessionManager } from "@mariozechner/pi-coding-agent";
+import { createSessionFacade, DefaultResourceLoader, getAgentDir } from "@mariozechner/pi-coding-agent";
 
 // Extensions are discovered automatically from standard locations.
 // You can also add paths via settings.json or DefaultResourceLoader options.
@@ -32,18 +32,19 @@ const resourceLoader = new DefaultResourceLoader({
 });
 await resourceLoader.reload();
 
-const { session } = await createAgentSession({
+const { facade } = await createSessionFacade({
 	resourceLoader,
-	sessionManager: SessionManager.inMemory(),
+	storagePath: ":memory:",
 });
 
-session.subscribe((event) => {
-	if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-		process.stdout.write(event.assistantMessageEvent.delta);
+facade.subscribe((event) => {
+	if (event.type === "AGENT_MESSAGE_CHUNK") {
+		const cb = event.payload?.content_block;
+		if (cb?.type === "text_delta") process.stdout.write(cb.text);
 	}
 });
 
-await session.prompt("List files in the current directory.");
+await facade.prompt("List files in the current directory.");
 console.log();
 
 // Example extension file (./my-logging-extension.ts):

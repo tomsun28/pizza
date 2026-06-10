@@ -310,6 +310,27 @@ describe("SessionManager", () => {
 		expect(mgr.getActiveSessionId()).toBe(forked.session_id);
 	});
 
+	it("should fork a session while preserving history and freezing the source", () => {
+		const mgr = new SessionManager(store, join(testDir, "sessions.json"));
+		const source = mgr.createSession("user_explicit", "Original");
+		store.append({ actor_id: "user", type: "USER_MESSAGE", payload: { content: "source message" } });
+
+		const forked = mgr.forkFromSession(source.session_id);
+		store.append({ actor_id: "user", type: "USER_MESSAGE", payload: { content: "fork message" } });
+
+		const sourceProjection = mgr.getSessionProjection(source.session_id)!;
+		const forkProjection = mgr.getSessionProjection(forked.session_id)!;
+		const textContents = (messages: ReturnType<typeof sourceProjection.buildContext>["messages"]) =>
+			messages.map((message) => ("content" in message ? message.content : undefined));
+		expect(source.event_range.end_event_id).not.toBe("HEAD");
+		expect(forked.event_range.start_event_id).toBe(source.event_range.start_event_id);
+		expect(textContents(sourceProjection.buildContext().messages)).toEqual(["source message"]);
+		expect(textContents(forkProjection.buildContext().messages)).toEqual([
+			"source message",
+			"fork message",
+		]);
+	});
+
 	it("should persist sessions to disk", () => {
 		const sessionPath = join(testDir, "sessions.json");
 		{

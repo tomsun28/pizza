@@ -2,11 +2,10 @@
  * Reactor Policies
  *
  * Pluggable policy objects that customize reactor behavior without coupling
- * the reactor to AgentSession's heavy dependencies (SettingsManager, SessionManager, etc).
+ * the reactor to heavy dependencies (SettingsManager, SessionManager, etc).
  *
  * Each policy is a small, testable strategy interface. Default implementations
- * cover the common cases; AgentSession (when migrated in stage 5) will provide
- * richer implementations that consult settings/session state.
+ * cover the common cases; richer implementations may consult settings/session state.
  */
 
 import type { EventBase } from "../event-store/types.js";
@@ -25,7 +24,7 @@ export interface RetryPolicy {
 	maxAttempts: number;
 }
 
-/** Built-in retry policy: matches the patterns AgentSession used to use. */
+/** Built-in retry policy: matches the patterns historically used by the reactor. */
 export class DefaultRetryPolicy implements RetryPolicy {
 	maxAttempts: number;
 	private baseDelayMs: number;

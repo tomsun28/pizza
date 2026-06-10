@@ -2,18 +2,12 @@
 
 // Config paths
 export { getAgentDir, VERSION } from "./config.js";
-export {
-	AgentSession,
-	type AgentSessionConfig,
-	type AgentSessionEvent,
-	type AgentSessionEventListener,
-	type ModelCycleResult,
-	type ParsedSkillBlock,
-	type PromptOptions,
-	parseSkillBlock,
-	type SessionStats,
-} from "./core/agent-session.js";
 export { SessionFacade, type SessionFacadeConfig, type SessionFacadeEventListener } from "./core/session-facade.js";
+export {
+	createSessionFacade,
+	type CreateSessionFacadeOptions,
+	type CreateSessionFacadeResult,
+} from "./core/session-facade-factory.js";
 // Auth and model registry
 export {
 	type ApiKeyCredential,
@@ -164,20 +158,6 @@ export type { ResourceCollision, ResourceDiagnostic, ResourceLoader } from "./co
 export { DefaultResourceLoader, loadProjectContextFiles } from "./core/resource-loader.js";
 // SDK for programmatic usage
 export {
-	AgentSessionRuntime,
-	type AgentSessionRuntimeDiagnostic,
-	type AgentSessionServices,
-	type CreateAgentSessionFromServicesOptions,
-	type CreateAgentSessionOptions,
-	type CreateAgentSessionResult,
-	type CreateAgentSessionRuntimeFactory,
-	type CreateAgentSessionRuntimeResult,
-	type CreateAgentSessionServicesOptions,
-	// Factory
-	createAgentSession,
-	createAgentSessionFromServices,
-	createAgentSessionRuntime,
-	createAgentSessionServices,
 	createBashTool,
 	// Tool factories (for custom cwd)
 	createCodingTools,
@@ -190,26 +170,6 @@ export {
 	createWriteTool,
 	type PromptTemplate,
 } from "./core/sdk.js";
-export {
-	type BranchSummaryEntry,
-	buildSessionContext,
-	type CompactionEntry,
-	CURRENT_SESSION_VERSION,
-	type CustomEntry,
-	type CustomMessageEntry,
-	getLatestCompactionEntry,
-	type ModelChangeEntry,
-	type NewSessionOptions,
-	type SessionContext,
-	type SessionEntry,
-	type SessionEntryBase,
-	type SessionHeader,
-	type SessionInfo,
-	type SessionInfoEntry,
-	SessionManager,
-	type SessionMessageEntry,
-	type ThinkingLevelChangeEntry,
-} from "./core/session-manager.js";
 export {
 	type CompactionSettings,
 	type ImageSettings,
@@ -294,8 +254,8 @@ export {
 	type RpcEventListener,
 	type RpcResponse,
 	type RpcSessionState,
-	runPrintMode,
-	runRpcMode,
+	runPrintModeWithFacade,
+	runRpcModeWithFacade,
 } from "./modes/index.js";
 // UI components for extensions
 export {

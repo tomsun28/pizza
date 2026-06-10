@@ -93,10 +93,59 @@ describe("ModeEventMapper", () => {
 		expect(actions[1]).toMatchObject({ type: "message_committed", eventId: "evt-6" });
 	});
 
+	it("maps non-stream message-producing events", () => {
+		const user = mapTypedEventToModeEvents(mkEvent("USER_MESSAGE", { content: "hello" }));
+		expect(user[0]).toMatchObject({
+			type: "message_committed",
+			message: { role: "user", content: "hello" },
+		});
+
+		const bash = mapTypedEventToModeEvents(mkEvent("BASH_EXECUTION", {
+			command: "npm test",
+			output: "ok",
+			exit_code: 0,
+			duration_ms: 12,
+			cwd: "/repo",
+		}));
+		expect(bash[0]).toMatchObject({
+			type: "message_committed",
+			message: { role: "bashExecution", command: "npm test", output: "ok", exitCode: 0 },
+		});
+
+		const custom = mapTypedEventToModeEvents(mkEvent("CUSTOM_MESSAGE", {
+			extension_id: "ext",
+			kind: "notice",
+			data: "custom text",
+			display: true,
+		}));
+		expect(custom[0]).toMatchObject({
+			type: "message_committed",
+			message: { role: "custom", customType: "ext:notice", content: "custom text", display: true },
+		});
+
+		const branch = mapTypedEventToModeEvents(mkEvent("BRANCH_SUMMARY", {
+			summary: "branch summary",
+			from_id: "entry-1",
+		}));
+		expect(branch[0]).toMatchObject({
+			type: "message_committed",
+			message: { role: "branchSummary", summary: "branch summary", fromId: "entry-1" },
+		});
+
+		const file = mapTypedEventToModeEvents(mkEvent("FILE_MUTATION_APPLIED", {
+			path: "src/main.ts",
+			operation: "modify",
+		}));
+		expect(file[0]).toMatchObject({
+			type: "message_committed",
+			message: { role: "custom", customType: "runtime:file_mutation" },
+		});
+	});
+
 	it("maps turn, compaction, retry, and model actions", () => {
 		expect(mapTypedEventToModeEvents(mkEvent("AGENT_TURN_START", { message_count: 3 }))).toEqual([{
 			type: "turn_started",
-			eventId: "evt-7",
+			eventId: "evt-12",
 			messageCount: 3,
 		}]);
 
@@ -105,7 +154,7 @@ describe("ModeEventMapper", () => {
 			error_message: "failed",
 		}))).toEqual([{
 			type: "turn_completed",
-			eventId: "evt-8",
+			eventId: "evt-13",
 			reason: "error",
 			errorMessage: "failed",
 		}]);
@@ -115,7 +164,7 @@ describe("ModeEventMapper", () => {
 			target_tokens: 50,
 		}))).toEqual([{
 			type: "compaction_started",
-			eventId: "evt-9",
+			eventId: "evt-14",
 			tokenCount: 100,
 			targetTokens: 50,
 		}]);
@@ -128,10 +177,10 @@ describe("ModeEventMapper", () => {
 		}));
 		expect(compaction[0]).toMatchObject({
 			type: "compaction_finished",
-			eventId: "evt-10",
+			eventId: "evt-15",
 			summary: "summary",
 		});
-		expect(compaction[1]).toMatchObject({ type: "message_committed", eventId: "evt-10" });
+		expect(compaction[1]).toMatchObject({ type: "message_committed", eventId: "evt-15" });
 
 		expect(mapTypedEventToModeEvents(mkEvent("RETRY_SCHEDULED", {
 			attempt: 2,
@@ -140,7 +189,7 @@ describe("ModeEventMapper", () => {
 			error_message: "retry me",
 		}))).toEqual([{
 			type: "retry_scheduled",
-			eventId: "evt-11",
+			eventId: "evt-16",
 			attempt: 2,
 			maxAttempts: 3,
 			delayMs: 25,
@@ -154,11 +203,74 @@ describe("ModeEventMapper", () => {
 			previous_model_id: "old-model",
 		}))).toEqual([{
 			type: "model_changed",
-			eventId: "evt-12",
+			eventId: "evt-17",
 			provider: "next",
 			modelId: "next-model",
 			previousProvider: "old",
 			previousModelId: "old-model",
 		}]);
+	});
+
+	it("maps abort, config, and error actions", () => {
+		expect(mapTypedEventToModeEvents(mkEvent("COMPACTION_ABORTED", {
+			reason: "cancelled",
+			message: "not now",
+		}))).toEqual([{
+			type: "compaction_aborted",
+			eventId: "evt-18",
+			reason: "cancelled",
+			message: "not now",
+		}]);
+
+		expect(mapTypedEventToModeEvents(mkEvent("RETRY_ABORTED", {
+			attempt: 2,
+			reason: "max_attempts",
+			error_message: "done retrying",
+		}))).toEqual([{
+			type: "retry_aborted",
+			eventId: "evt-19",
+			attempt: 2,
+			reason: "max_attempts",
+			errorMessage: "done retrying",
+		}]);
+
+		expect(mapTypedEventToModeEvents(mkEvent("THINKING_LEVEL_CHANGED", {
+			level: "high",
+			previous_level: "low",
+		}))).toEqual([{
+			type: "thinking_level_changed",
+			eventId: "evt-20",
+			level: "high",
+			previousLevel: "low",
+		}]);
+
+		expect(mapTypedEventToModeEvents(mkEvent("RUNTIME_ERROR", {
+			error: "runtime failed",
+			stack: "runtime stack",
+		}))).toEqual([{
+			type: "runtime_error",
+			eventId: "evt-21",
+			error: "runtime failed",
+			stack: "runtime stack",
+		}]);
+
+		expect(mapTypedEventToModeEvents(mkEvent("AGENT_ERROR", {
+			error: "agent failed",
+			stack: "agent stack",
+			retryable: true,
+		}))).toEqual([{
+			type: "agent_error",
+			eventId: "evt-22",
+			error: "agent failed",
+			stack: "agent stack",
+			retryable: true,
+		}]);
+	});
+
+	it("ignores typed events that have no mode-facing action", () => {
+		expect(mapTypedEventToModeEvents(mkEvent("SESSION_CREATED", {
+			session_id: "sess_1",
+			created_by: "user_explicit",
+		}))).toEqual([]);
 	});
 });

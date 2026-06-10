@@ -4,7 +4,7 @@
  * Shows how to replace or modify the default system prompt.
  */
 
-import { createAgentSession, DefaultResourceLoader, getAgentDir, SessionManager } from "@mariozechner/pi-coding-agent";
+import { createSessionFacade, DefaultResourceLoader, getAgentDir } from "@mariozechner/pi-coding-agent";
 
 const cwd = process.cwd();
 const agentDir = getAgentDir();
@@ -20,19 +20,20 @@ Always end responses with "Arrr!"`,
 });
 await loader1.reload();
 
-const { session: session1 } = await createAgentSession({
+const { facade: facade1 } = await createSessionFacade({
 	resourceLoader: loader1,
-	sessionManager: SessionManager.inMemory(),
+	storagePath: ":memory:",
 });
 
-session1.subscribe((event) => {
-	if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-		process.stdout.write(event.assistantMessageEvent.delta);
+facade1.subscribe((event) => {
+	if (event.type === "AGENT_MESSAGE_CHUNK") {
+		const cb = event.payload?.content_block;
+		if (cb?.type === "text_delta") process.stdout.write(cb.text);
 	}
 });
 
 console.log("=== Replace prompt ===");
-await session1.prompt("What is 2 + 2?");
+await facade1.prompt("What is 2 + 2?");
 console.log("\n");
 
 // Option 2: Append instructions to the default prompt
@@ -46,17 +47,18 @@ const loader2 = new DefaultResourceLoader({
 });
 await loader2.reload();
 
-const { session: session2 } = await createAgentSession({
+const { facade: facade2 } = await createSessionFacade({
 	resourceLoader: loader2,
-	sessionManager: SessionManager.inMemory(),
+	storagePath: ":memory:",
 });
 
-session2.subscribe((event) => {
-	if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-		process.stdout.write(event.assistantMessageEvent.delta);
+facade2.subscribe((event) => {
+	if (event.type === "AGENT_MESSAGE_CHUNK") {
+		const cb = event.payload?.content_block;
+		if (cb?.type === "text_delta") process.stdout.write(cb.text);
 	}
 });
 
 console.log("=== Modify prompt ===");
-await session2.prompt("List 3 benefits of TypeScript.");
+await facade2.prompt("List 3 benefits of TypeScript.");
 console.log();
