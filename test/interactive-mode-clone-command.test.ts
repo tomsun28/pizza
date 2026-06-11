@@ -5,7 +5,7 @@ type CloneCommandContext = {
 	facade: {
 		runtime: {
 			fork: (entryId: string) => Promise<{ cancelled: boolean }>;
-			sessionManager: { getLeafId: () => string | null };
+			store?: { head: string | null };
 		};
 	};
 	sessionManager: { getLeafId: () => string | null };
@@ -33,15 +33,14 @@ describe("InteractiveMode /clone", () => {
 		const showError = vi.fn();
 		const requestRender = vi.fn();
 
-		const sessionManager = { getLeafId: () => "leaf-123" };
 		const context: CloneCommandContext = {
 			facade: {
 				runtime: {
 					fork,
-					sessionManager,
+					store: { head: "leaf-123" },
 				},
 			},
-			sessionManager,
+			sessionManager: { getLeafId: () => "leaf-123" },
 			handleRuntimeSessionChange,
 			renderCurrentSessionState,
 			editor: { setText },
@@ -65,15 +64,14 @@ describe("InteractiveMode /clone", () => {
 		const showStatus = vi.fn();
 		const showError = vi.fn();
 
-		const sessionManager = { getLeafId: () => null };
 		const context: CloneCommandContext = {
 			facade: {
 				runtime: {
 					fork,
-					sessionManager,
+					store: { head: null },
 				},
 			},
-			sessionManager,
+			sessionManager: { getLeafId: () => null },
 			handleRuntimeSessionChange: vi.fn(async () => {}),
 			renderCurrentSessionState: vi.fn(),
 			editor: { setText: vi.fn() },

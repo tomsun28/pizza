@@ -173,6 +173,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 			sessionManager: {
 				getCwd: () => options.cwd ?? "/tmp/project",
 			},
+			facadeCwd: options.cwd ?? "/tmp/project",
 			session: {
 				promptTemplates: [],
 				extensionRunner: {

@@ -68,7 +68,7 @@ import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScop
 import { DefaultPackageManager } from "../../core/package-manager.js";
 import type { ResourceDiagnostic, ResourceLoader } from "../../core/resource-loader.js";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.js";
-import { type SessionContext, SessionManager } from "../../core/session-manager.js";
+import { SessionManager, type SessionEntry, type SessionTreeNode } from "../../core/session-manager.js";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.js";
 import type { SourceInfo } from "../../core/source-info.js";
 import type { TruncationResult } from "../../core/tools/truncate.js";
@@ -464,6 +464,25 @@ export class InteractiveMode {
 	private get sessionManager() {
 		return this.facade.runtime.sessionManager as any;
 	}
+	/** Active session name from projection descriptor */
+	private get sessionName(): string | undefined {
+		return this.facade.getProjection().getDescriptor().name;
+	}
+	/** Session directory (workspace dir in agent storage) */
+	private get sessionDir(): string {
+		const config = (this.facade.runtime as any).config;
+		const agentDir = config?.agentDir ?? getAgentDir();
+		const workspaceId = this.facade.getProjection().getDescriptor().workspace_id;
+		return path.join(agentDir, "workspaces", workspaceId);
+	}
+	/** Current session reference string for session selector */
+	private get sessionFile(): string | undefined {
+		const desc = this.facade.getProjection().getDescriptor();
+		return `event-session:${desc.workspace_id}:${desc.session_id}`;
+	}
+	private get facadeCwd(): string {
+		return (this.facade?.runtime as any)?.config?.cwd ?? process.cwd();
+	}
 	private get settingsManager() {
 		return this.facade.settingsManager;
 	}
@@ -485,6 +504,7 @@ export class InteractiveMode {
 		mode._isCompacting = false;
 		mode._retryAttempt = 0;
 		mode._streamingText = "";
+		mode.signalCleanupHandlers = [];
 		mode.initUI();
 		return mode;
 	}
@@ -500,7 +520,13 @@ export class InteractiveMode {
 		this.pendingMessagesContainer = new Container();
 		this.statusContainer = new Container();
 		this.widgetContainerAbove = new Container();
+		// Initialize collections that are skipped by Object.create in fromFacade()
 		this.widgetContainerBelow = new Container();
+		this.pendingTools ??= new Map();
+		this.skillCommands ??= new Map();
+		this.extensionTerminalInputUnsubscribers ??= new Set();
+		this.extensionWidgetsAbove ??= new Map();
+		this.extensionWidgetsBelow ??= new Map();
 		this.keybindings = KeybindingsManager.create();
 		setKeybindings(this.keybindings);
 		const editorPaddingX = settingsMgr.getEditorPaddingX();
@@ -684,7 +710,7 @@ export class InteractiveMode {
 		// Setup autocomplete
 		this.autocompleteProvider = new CombinedAutocompleteProvider(
 			[...slashCommands, ...templateCommands, ...extensionCommands, ...skillCommandList],
-			this.sessionManager.getCwd(),
+			this.facadeCwd,
 			fdPath,
 		);
 		this.defaultEditor.setAutocompleteProvider(this.autocompleteProvider);
@@ -803,8 +829,8 @@ export class InteractiveMode {
 	 * Update terminal title with session name and cwd.
 	 */
 	private updateTerminalTitle(): void {
-		const cwdBasename = path.basename(this.sessionManager.getCwd());
-		const sessionName = this.sessionManager.getSessionName();
+		const cwdBasename = path.basename(this.facadeCwd);
+		const sessionName = this.facade.getProjection().getDescriptor().name;
 		if (sessionName) {
 			this.ui.terminal.setTitle(`π - ${sessionName} - ${cwdBasename}`);
 		} else {
@@ -946,7 +972,7 @@ export class InteractiveMode {
 	}
 
 	private formatContextPath(p: string): string {
-		const cwd = path.resolve(this.sessionManager.getCwd());
+		const cwd = path.resolve(this.facadeCwd);
 		const absolutePath = path.isAbsolute(p) ? path.resolve(p) : path.resolve(cwd, p);
 		const relativePath = path.relative(cwd, absolutePath);
 		const isInsideCwd =
@@ -1558,7 +1584,7 @@ export class InteractiveMode {
 				await runner.emit({ type: "session_start", reason: "new" } as any);
 				// Discover extension resources
 				if (runner.hasHandlers("resources_discover")) {
-					const cwd = this.sessionManager.getCwd();
+					const cwd = this.facadeCwd;
 					const { skillPaths, promptPaths, themePaths } = await runner.emitResourcesDiscover(cwd, "startup");
 					if (skillPaths.length > 0 || promptPaths.length > 0 || themePaths.length > 0) {
 						const resourceLoader = this.facade.resourceLoader;
@@ -1581,7 +1607,7 @@ export class InteractiveMode {
 	private applyRuntimeSettings(): void {
 		this.footer.setSession(this.createFacadeFooterInfo());
 		this.footer.setAutoCompactEnabled(this.autoCompactionEnabled);
-		this.footerDataProvider.setCwd(this.sessionManager.getCwd());
+		this.footerDataProvider.setCwd(this.facadeCwd);
 		this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
 		this.ui.setShowHardwareCursor(this.settingsManager.getShowHardwareCursor());
 		this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
@@ -1644,7 +1670,7 @@ export class InteractiveMode {
 			const base: ExtensionContext = {
 				ui: this.createExtensionUIContext(),
 				hasUI: true,
-				cwd: this.sessionManager.getCwd(),
+				cwd: this.facadeCwd,
 				sessionManager: this.sessionManager as any,
 				modelRegistry: this.modelRegistryValue as any,
 				model: this.currentModel as any,
@@ -2800,7 +2826,7 @@ export class InteractiveMode {
 						},
 						this.getRegisteredToolDefinition(event.toolName),
 						this.ui,
-						this.sessionManager.getCwd(),
+						this.facadeCwd,
 					);
 					component.setExpanded(this.toolOutputExpanded);
 					this.chatContainer.addChild(component);
@@ -3102,7 +3128,7 @@ export class InteractiveMode {
 	 * @param options.populateHistory Add user messages to editor history
 	 */
 	private renderSessionContext(
-		sessionContext: SessionContext,
+		sessionContext: { messages: AgentMessage[] },
 		options: { updateFooter?: boolean; populateHistory?: boolean } = {},
 	): void {
 		this.pendingTools.clear();
@@ -3130,7 +3156,7 @@ export class InteractiveMode {
 							},
 							this.getRegisteredToolDefinition(content.name),
 							this.ui,
-							this.sessionManager.getCwd(),
+							this.facadeCwd,
 						);
 						component.setExpanded(this.toolOutputExpanded);
 						this.chatContainer.addChild(component);
@@ -3171,15 +3197,15 @@ export class InteractiveMode {
 
 	renderInitialMessages(): void {
 		// Get aligned messages and entries from session context
-		const context = this.sessionManager.buildSessionContext();
+		const context = this.facade.getProjection().buildContext();
 		this.renderSessionContext(context, {
 			updateFooter: true,
 			populateHistory: true,
 		});
 
 		// Show compaction info if session was compacted
-		const allEntries = this.sessionManager.getEntries();
-		const compactionCount = allEntries.filter((e: any) => e.type === "compaction").length;
+		const allEntries = this.facade.getProjection().getTimeline();
+		const compactionCount = allEntries.filter((e: any) => e.kind === "compaction").length;
 		if (compactionCount > 0) {
 			const times = compactionCount === 1 ? "1 time" : `${compactionCount} times`;
 			this.showStatus(`Session compacted ${times}`);
@@ -3197,7 +3223,7 @@ export class InteractiveMode {
 
 	private rebuildChatFromMessages(): void {
 		this.chatContainer.clear();
-		const context = this.sessionManager.buildSessionContext();
+		const context = this.facade.getProjection().buildContext();
 		this.renderSessionContext(context);
 	}
 
@@ -4058,7 +4084,7 @@ export class InteractiveMode {
 	}
 
 	private async handleCloneCommand(): Promise<void> {
-		const leafId = this.sessionManager.getLeafId();
+		const leafId = (this.facade.runtime as any).store?.head;
 		if (!leafId) {
 			this.showStatus("Nothing to clone yet");
 			return;
@@ -4075,9 +4101,25 @@ export class InteractiveMode {
 	}
 
 	private showTreeSelector(initialSelectedId?: string): void {
-		const tree = this.sessionManager.getTree();
-		const realLeafId = this.sessionManager.getLeafId();
+		const timeline = this.facade.getProjection().getTimeline();
+		const realLeafId = (this.facade.runtime as any).store?.head ?? null;
 		const initialFilterMode = this.settingsManager.getTreeFilterMode();
+
+		// Convert timeline entries to SessionTreeNode[] for TreeSelectorComponent
+		// In the event-sourced model there is no intra-session branching, so this is a flat list
+		const tree: SessionTreeNode[] = [];
+		for (let i = 0; i < timeline.length; i++) {
+			const entry = timeline[i]!;
+			tree.push({
+				entry: {
+					type: entry.kind,
+					id: entry.event_id,
+					parentId: i > 0 ? timeline[i - 1]!.event_id : null,
+					timestamp: new Date(entry.timestamp).toISOString(),
+				} as any as SessionEntry,
+				children: [],
+			});
+		}
 
 		if (tree.length === 0) {
 			this.showStatus("No entries in session");
@@ -4192,9 +4234,8 @@ export class InteractiveMode {
 					done();
 					this.ui.requestRender();
 				},
-				(entryId, label) => {
-					this.sessionManager.appendLabelChange(entryId, label);
-					this.ui.requestRender();
+				(_entryId, _label) => {
+					// Labels are not supported in event-sourced model; no-op
 				},
 				initialSelectedId,
 				initialFilterMode,
@@ -4207,8 +4248,8 @@ export class InteractiveMode {
 		this.showSelector((done) => {
 				const selector = new SessionSelectorComponent(
 					(onProgress) =>
-						SessionManager.list(this.sessionManager.getCwd(), this.sessionManager.getSessionDir(), onProgress),
-					(onProgress) => SessionManager.listAll(onProgress, this.sessionManager.getSessionDir()),
+						SessionManager.list(this.facadeCwd, this.sessionDir, onProgress),
+					(onProgress) => SessionManager.listAll(onProgress, this.sessionDir),
 					async (sessionPath) => {
 					done();
 					await this.handleResumeSession(sessionPath);
@@ -4232,7 +4273,7 @@ export class InteractiveMode {
 					keybindings: this.keybindings,
 				},
 
-				this.sessionManager.getSessionFile(),
+				this.sessionFile,
 			);
 			return { component: selector, focus: selector };
 		});
@@ -4692,7 +4733,7 @@ export class InteractiveMode {
 	private handleNameCommand(text: string): void {
 		const name = text.replace(/^\/name\s*/, "").trim();
 		if (!name) {
-			const currentName = this.sessionManager.getSessionName();
+			const currentName = this.sessionName;
 			if (currentName) {
 				this.chatContainer.addChild(new Spacer(1));
 				this.chatContainer.addChild(new Text(theme.fg("dim", `Session name: ${currentName}`), 1, 0));
@@ -4703,7 +4744,8 @@ export class InteractiveMode {
 			return;
 		}
 
-		this.sessionManager.appendSessionInfo(name);
+		const desc = this.facade.getProjection().getDescriptor();
+		this.sessionManager.renameSession(desc.session_id, name);
 		this.updateTerminalTitle();
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(theme.fg("dim", `Session name set: ${name}`), 1, 0));
@@ -4712,7 +4754,7 @@ export class InteractiveMode {
 
 	private handleSessionCommand(): void {
 		const stats = this.getSessionStatsFacade();
-		const sessionName = this.sessionManager.getSessionName();
+		const sessionName = this.sessionName;
 
 		let info = `${theme.bold("Session Info")}\n\n`;
 		if (sessionName) {
@@ -4973,7 +5015,7 @@ export class InteractiveMode {
 			type: "user_bash",
 			command,
 			excludeFromContext,
-			cwd: this.sessionManager.getCwd(),
+			cwd: this.facadeCwd,
 		});
 
 		// If extension returned a full result, use it directly
@@ -5053,8 +5095,8 @@ export class InteractiveMode {
 	}
 
 	private async handleCompactCommand(customInstructions?: string): Promise<void> {
-		const entries = this.sessionManager.getEntries();
-		const messageCount = entries.filter((e: any) => e.type === "message").length;
+		const entries = this.facade.getProjection().getTimeline();
+		const messageCount = entries.filter((e: any) => e.kind === "message").length;
 
 		if (messageCount < 2) {
 			this.showWarning("Nothing to compact (no messages yet)");

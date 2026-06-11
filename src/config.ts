@@ -72,10 +72,10 @@ export function getUpdateInstruction(packageName: string): string {
 // =============================================================================
 
 /**
- * Get the base directory for resolving package assets (themes, package.json, README.md, CHANGELOG.md).
+ * Get the base directory for resolving package-level assets (package.json, README.md, CHANGELOG.md).
  * - For Bun binary: returns the directory containing the executable
- * - For Node.js (dist/): returns __dirname (the dist/ directory)
- * - For tsx (src/): returns parent directory (the package root)
+ * - For Node.js: walks up from __dirname to find the package root (directory with package.json)
+ * - For tsx (src/): returns the package root
  */
 export function getPackageDir(): string {
 	// Allow override via environment variable (useful for Nix/Guix where store paths tokenize poorly)
@@ -115,14 +115,8 @@ export function getThemesDir(): string {
 	if (isBunBinary) {
 		return join(getPackageDir(), "theme");
 	}
-	const packageDir = getPackageDir();
-	// Theme is in modes/interactive/theme/ relative to dist/
-	// but in src/modes/interactive/theme/ relative to src/
-	if (packageDir.endsWith("dist") || packageDir.endsWith("dist/")) {
-		return join(packageDir, "modes", "interactive", "theme");
-	}
-	// tsx (src/): src/modes/interactive/theme/
-	return join(packageDir, "src", "modes", "interactive", "theme");
+	// __dirname is always dist/ or src/ — assets live at the same relative path from either
+	return join(__dirname, "modes", "interactive", "theme");
 }
 
 /**
@@ -135,14 +129,8 @@ export function getExportTemplateDir(): string {
 	if (isBunBinary) {
 		return join(getPackageDir(), "export-html");
 	}
-	const packageDir = getPackageDir();
-	// Export template is in core/export-html/ relative to dist/
-	// but in src/core/export-html/ relative to src/
-	if (packageDir.endsWith("dist") || packageDir.endsWith("dist/")) {
-		return join(packageDir, "core", "export-html");
-	}
-	// tsx (src/): src/core/export-html/
-	return join(packageDir, "src", "core", "export-html");
+	// __dirname is always dist/ or src/ — assets live at the same relative path from either
+	return join(__dirname, "core", "export-html");
 }
 
 /** Get path to package.json */
@@ -180,10 +168,8 @@ export function getInteractiveAssetsDir(): string {
 	if (isBunBinary) {
 		return join(getPackageDir(), "assets");
 	}
-	// Assets are in modes/interactive/assets/ relative to dist/
-	// getPackageDir() already returns dist/ for Node.js
-	const packageDir = getPackageDir();
-	return join(packageDir, "modes", "interactive", "assets");
+	// __dirname is always dist/ or src/ — assets live at the same relative path from either
+	return join(__dirname, "modes", "interactive", "assets");
 }
 
 /** Get path to a bundled interactive asset */
