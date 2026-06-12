@@ -530,6 +530,7 @@ export class InteractiveMode {
 		this.pendingBashComponents ??= [];
 		this.signalCleanupHandlers ??= [];
 		this.compactionQueuedMessages ??= [];
+		this.scopedModels ??= [];
 		this.keybindings = KeybindingsManager.create();
 		setKeybindings(this.keybindings);
 		const editorPaddingX = settingsMgr.getEditorPaddingX();
