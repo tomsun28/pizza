@@ -119,7 +119,7 @@ interface BranchSummaryEntry {
 
 ## Implementation
 
-### AgentSession.navigateTree()
+### SessionFacade.navigateTree()
 
 ```typescript
 async navigateTree(

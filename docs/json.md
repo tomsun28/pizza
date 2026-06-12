@@ -8,75 +8,55 @@ Outputs all session events as JSON lines to stdout. Useful for integrating pi in
 
 ## Event Types
 
-Events are defined in [`AgentSessionEvent`](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/core/agent-session.ts#L102):
+Events are defined in [`src/core/event-store/events.ts`](../src/core/event-store/events.ts). All events share the `EventBase` structure:
 
 ```typescript
-type AgentSessionEvent =
-  | AgentEvent
-  | { type: "queue_update"; steering: readonly string[]; followUp: readonly string[] }
-  | { type: "compaction_start"; reason: "manual" | "threshold" | "overflow" }
-  | { type: "compaction_end"; reason: "manual" | "threshold" | "overflow"; result: CompactionResult | undefined; aborted: boolean; willRetry: boolean; errorMessage?: string }
-  | { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
-  | { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string };
+interface EventBase {
+  event_id: string;       // UUIDv7 (time-ordered)
+  workspace_id: string;
+  actor_id: string;       // "user" | "coder_agent" | "runtime" | "compactor"
+  timestamp: number;      // Unix ms
+  type: EventType;        // 53 event types
+  payload: unknown;       // type-specific payload
+  caused_by?: string;     // causal chain parent event_id
+}
 ```
 
-`queue_update` emits the full pending steering and follow-up queues whenever they change. `compaction_start` and `compaction_end` cover both manual and automatic compaction.
+### Key Event Types
 
-Base events from [`AgentEvent`](https://github.com/badlogic/pi-mono/blob/main/packages/agent/src/types.ts#L179):
+| Event | Actor | Description |
+|---|---|---|
+| `USER_MESSAGE` | user | User sends a message |
+| `AGENT_MESSAGE_START` | coder_agent | LLM response begins |
+| `AGENT_MESSAGE_CHUNK` | coder_agent | Streaming text/thinking delta |
+| `AGENT_MESSAGE_END` | coder_agent | LLM response complete (contains content, usage, stop_reason) |
+| `AGENT_TURN_START` | coder_agent | Turn begins (LLM call) |
+| `AGENT_TURN_COMPLETED` | coder_agent | Turn finished (reason: stop/error/aborted) |
+| `TOOL_EXECUTION_START` | runtime | Tool execution begins |
+| `TOOL_EXECUTION_UPDATE` | runtime | Tool execution progress |
+| `TOOL_EXECUTION_END` | runtime | Tool execution complete (result, is_error) |
+| `COMPACTION_START` | compactor | Context compaction begins |
+| `COMPACTION_END` | compactor | Compaction complete (summary, tokens_before/after) |
+| `RETRY_SCHEDULED` | runtime | Error retry scheduled |
+| `MODEL_CHANGED` | user | Model switched |
 
-```typescript
-type AgentEvent =
-  // Agent lifecycle
-  | { type: "agent_start" }
-  | { type: "agent_end"; messages: AgentMessage[] }
-  // Turn lifecycle
-  | { type: "turn_start" }
-  | { type: "turn_end"; message: AgentMessage; toolResults: ToolResultMessage[] }
-  // Message lifecycle
-  | { type: "message_start"; message: AgentMessage }
-  | { type: "message_update"; message: AgentMessage; assistantMessageEvent: AssistantMessageEvent }
-  | { type: "message_end"; message: AgentMessage }
-  // Tool execution
-  | { type: "tool_execution_start"; toolCallId: string; toolName: string; args: any }
-  | { type: "tool_execution_update"; toolCallId: string; toolName: string; args: any; partialResult: any }
-  | { type: "tool_execution_end"; toolCallId: string; toolName: string; result: any; isError: boolean };
-```
-
-## Message Types
-
-Base messages from [`packages/ai/src/types.ts`](https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/types.ts#L134):
-- `UserMessage` (line 134)
-- `AssistantMessage` (line 140)
-- `ToolResultMessage` (line 152)
-
-Extended messages from [`packages/coding-agent/src/core/messages.ts`](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/core/messages.ts#L29):
-- `BashExecutionMessage` (line 29)
-- `CustomMessage` (line 46)
-- `BranchSummaryMessage` (line 55)
-- `CompactionSummaryMessage` (line 62)
+Full event type list: see [`src/core/event-store/types.ts`](../src/core/event-store/types.ts).
 
 ## Output Format
 
-Each line is a JSON object. The first line is the session header:
+Each line is a JSON object. Events are emitted in real-time as the reactor processes:
 
 ```json
-{"type":"session","version":3,"id":"uuid","timestamp":"...","cwd":"/path"}
-```
-
-Followed by events as they occur:
-
-```json
-{"type":"agent_start"}
-{"type":"turn_start"}
-{"type":"message_start","message":{"role":"assistant","content":[],...}}
-{"type":"message_update","message":{...},"assistantMessageEvent":{"type":"text_delta","delta":"Hello",...}}
-{"type":"message_end","message":{...}}
-{"type":"turn_end","message":{...},"toolResults":[]}
-{"type":"agent_end","messages":[...]}
+{"type":"USER_MESSAGE","payload":{"content":"List files"}}
+{"type":"AGENT_MESSAGE_START","payload":{"model":{"provider":"anthropic","model_id":"claude-sonnet-4"}}}
+{"type":"AGENT_MESSAGE_CHUNK","payload":{"chunk":{"kind":"text_delta","delta":"I'll list"}}}
+{"type":"AGENT_MESSAGE_CHUNK","payload":{"chunk":{"kind":"text_delta","delta":" the files."}}}
+{"type":"AGENT_MESSAGE_END","payload":{"content":[...],"usage":{"input":150,"output":20}}}
+{"type":"AGENT_TURN_COMPLETED","payload":{"reason":"stop"}}
 ```
 
 ## Example
 
 ```bash
-pi --mode json "List files" 2>/dev/null | jq -c 'select(.type == "message_end")'
+pi --mode json "List files" 2>/dev/null | jq -c 'select(.type == "AGENT_MESSAGE_END")'
 ```

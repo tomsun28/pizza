@@ -636,7 +636,7 @@ Use this to update UI elements (status bars, footers) or perform model-specific 
 
 Fired after `tool_execution_start`, before the tool executes. **Can block.** Use `isToolCallEventType` to narrow and get typed inputs.
 
-Before `tool_call` runs, pi waits for previously emitted Agent events to finish draining through `AgentSession`. This means `ctx.sessionManager` is up to date through the current assistant tool-calling message.
+Before `tool_call` runs, pi waits for previously emitted Agent events to finish draining through the event store. This means `ctx.sessionManager` is up to date through the current assistant tool-calling message.
 
 In the default parallel tool execution mode, sibling tool calls from the same assistant message are preflighted sequentially, then executed concurrently. `tool_call` is not guaranteed to see sibling tool results from that same assistant message in `ctx.sessionManager`.
 
@@ -1450,7 +1450,7 @@ pi.setActiveTools(["read", "bash"]); // Switch to read-only
 
 Typical `sourceInfo.source` values:
 - `builtin` for built-in tools
-- `sdk` for tools passed via `createAgentSession({ customTools })`
+- `sdk` for tools passed via `createSessionFacade({ customTools })`
 - extension source metadata for tools registered by extensions
 
 ### pi.setModel(model)
