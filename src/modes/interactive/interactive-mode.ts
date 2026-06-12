@@ -68,7 +68,8 @@ import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScop
 import { DefaultPackageManager } from "../../core/package-manager.js";
 import type { ResourceDiagnostic, ResourceLoader } from "../../core/resource-loader.js";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.js";
-import { SessionManager, type SessionEntry, type SessionTreeNode } from "../../core/session-manager.js";
+import { type SessionEntry, type SessionTreeNode } from "../../core/session-manager.js";
+import { listWorkspaceSessions, listAllSessions } from "../../core/session-listing.js";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.js";
 import type { SourceInfo } from "../../core/source-info.js";
 import type { TruncationResult } from "../../core/tools/truncate.js";
@@ -392,13 +393,10 @@ export class InteractiveMode {
 	private getAvailableThinkingLevelsFacade(): ThinkingLevel[] {
 		return ["off", "low", "medium", "high"];
 	}
-	private async navigateTreeFacade(targetId: string, options: any): Promise<any> {
-		const sm = this.facade.runtime.sessionManager as any;
-		const result = await sm?.navigateTree(targetId, options);
-		if (result?.cancelled) {
-			return { cancelled: true };
-		}
-		return result;
+	private async navigateTreeFacade(targetId: string, options: { summarize?: boolean; customInstructions?: string } = {}): Promise<{ cancelled?: boolean; aborted?: boolean; editorText?: string }> {
+		// Fork at the target event
+		this.facade.runtime.fork(targetId);
+		return {};
 	}
 	private getSteeringMessagesFacade(): readonly string[] {
 		return [];
@@ -445,7 +443,10 @@ export class InteractiveMode {
 		return undefined;
 	}
 	private async exportToHtmlFacade(outputPath?: string): Promise<string> {
-		throw new Error("exportToHtml is not yet supported in facade mode");
+		const ref = this.sessionFile;
+		if (!ref) throw new Error("Cannot export in-memory session");
+		const { exportFromFile } = await import("../../core/export-html/index.js");
+		return exportFromFile(ref, outputPath);
 	}
 	private async reloadFacade(): Promise<void> {
 		// No-op in facade mode
@@ -461,8 +462,8 @@ export class InteractiveMode {
 	}
 
 	// Convenience accessors
-	private get sessionManager() {
-		return this.facade.runtime.sessionManager as any;
+	private get projectionSessionManager() {
+		return this.facade.runtime.sessionManager!;
 	}
 	/** Active session name from projection descriptor */
 	private get sessionName(): string | undefined {
@@ -470,8 +471,7 @@ export class InteractiveMode {
 	}
 	/** Session directory (workspace dir in agent storage) */
 	private get sessionDir(): string {
-		const config = (this.facade.runtime as any).config;
-		const agentDir = config?.agentDir ?? getAgentDir();
+		const agentDir = this.facade.runtime.agentDir;
 		const workspaceId = this.facade.getProjection().getDescriptor().workspace_id;
 		return path.join(agentDir, "workspaces", workspaceId);
 	}
@@ -481,11 +481,22 @@ export class InteractiveMode {
 		return `event-session:${desc.workspace_id}:${desc.session_id}`;
 	}
 	private get facadeCwd(): string {
-		return (this.facade?.runtime as any)?.config?.cwd ?? process.cwd();
+		return this.facade?.runtime?.cwd ?? process.cwd();
 	}
 	private get settingsManager() {
 		return this.facade.settingsManager;
 	}
+	private getExtensionSessionManager() {
+		const { EventStoreExtensionSessionManager } = require("../../core/extensions/session-context.js") as typeof import("../../core/extensions/session-context.js");
+		return new EventStoreExtensionSessionManager({
+			store: this.facade.runtime.store,
+			projection: this.facade.getProjection(),
+			cwd: this.facadeCwd,
+			sessionDir: this.sessionDir,
+			sessionFile: this.sessionFile,
+		});
+	}
+
 
 	/**
 	 * Create InteractiveMode with SessionFacade (event-sourced architecture).
@@ -542,7 +553,7 @@ export class InteractiveMode {
 		this.editor = this.defaultEditor;
 		this.editorContainer = new Container();
 		this.editorContainer.addChild(this.editor as Component);
-		const cwd = (this.facade.runtime as any).config?.cwd ?? process.cwd();
+		const cwd = this.facade.runtime.cwd ?? process.cwd();
 		this.footerDataProvider = new FooterDataProvider(cwd);
 		this.footer = new FooterComponent(this.createFacadeFooterInfo(), this.footerDataProvider);
 		this.hideThinkingBlock = settingsMgr.getHideThinkingBlock();
@@ -587,8 +598,8 @@ export class InteractiveMode {
 				}, 0);
 				return { tokens, contextWindow, percent: (tokens / contextWindow) * 100 };
 			},
-			getCwd: () => (facade.runtime as any).config?.cwd ?? process.cwd(),
-			getSessionName: () => (facade.runtime.sessionManager as any)?.getActiveSessionName?.() ?? undefined,
+			getCwd: () => facade.runtime.cwd,
+			getSessionName: () => facade.getProjection().getDescriptor().name ?? undefined,
 			isUsingOAuthSubscription: () => facade.modelRegistry?.isUsingOAuth?.(facadeModel as any) ?? false,
 		};
 	}
@@ -1559,17 +1570,10 @@ export class InteractiveMode {
 							return this.handleFatalRuntimeError("Failed to fork session", error);
 						}
 					},
-					navigateTree: async (targetId: string, options: any) => {
-						const sm = this.facade!.runtime.sessionManager as any;
-						const result = await sm?.navigateTree(targetId, options);
-						if (result?.cancelled) {
-							return { cancelled: true };
-						}
+					navigateTree: async (targetId: string, _options: any) => {
+						this.facade!.runtime.fork(targetId);
 						this.chatContainer.clear();
 						this.renderInitialMessages();
-						if (result?.editorText && !this.editor.getText().trim()) {
-							this.editor.setText(result.editorText);
-						}
 						this.showStatus("Navigated to selected point");
 						void this.flushCompactionQueue({ willRetry: false });
 						return { cancelled: false };
@@ -1675,7 +1679,7 @@ export class InteractiveMode {
 				ui: this.createExtensionUIContext(),
 				hasUI: true,
 				cwd: this.facadeCwd,
-				sessionManager: this.sessionManager as any,
+				sessionManager: this.getExtensionSessionManager(),
 				modelRegistry: this.modelRegistryValue as any,
 				model: this.currentModel as any,
 				isIdle: () => !this.isStreaming,
@@ -4088,7 +4092,7 @@ export class InteractiveMode {
 	}
 
 	private async handleCloneCommand(): Promise<void> {
-		const leafId = (this.facade.runtime as any).store?.head;
+		const leafId = this.facade.runtime.store?.head;
 		if (!leafId) {
 			this.showStatus("Nothing to clone yet");
 			return;
@@ -4106,7 +4110,7 @@ export class InteractiveMode {
 
 	private showTreeSelector(initialSelectedId?: string): void {
 		const timeline = this.facade.getProjection().getTimeline();
-		const realLeafId = (this.facade.runtime as any).store?.head ?? null;
+		const realLeafId = this.facade.runtime.store?.head ?? null;
 		const initialFilterMode = this.settingsManager.getTreeFilterMode();
 
 		// Convert timeline entries to SessionTreeNode[] for TreeSelectorComponent
@@ -4251,9 +4255,14 @@ export class InteractiveMode {
 	private showSessionSelector(): void {
 		this.showSelector((done) => {
 				const selector = new SessionSelectorComponent(
-					(onProgress) =>
-						SessionManager.list(this.facadeCwd, this.sessionDir, onProgress),
-					(onProgress) => SessionManager.listAll(onProgress, this.sessionDir),
+					(onProgress) => {
+						const agentDir = this.facade.runtime.agentDir ?? getAgentDir();
+						return listWorkspaceSessions(this.facadeCwd, agentDir, onProgress);
+					},
+					(onProgress) => {
+						const agentDir = this.facade.runtime.agentDir ?? getAgentDir();
+						return listAllSessions(agentDir, onProgress);
+					},
 					async (sessionPath) => {
 					done();
 					await this.handleResumeSession(sessionPath);
@@ -4270,8 +4279,12 @@ export class InteractiveMode {
 					renameSession: async (sessionFilePath: string, nextName: string | undefined) => {
 						const next = (nextName ?? "").trim();
 						if (!next) return;
-						const mgr = SessionManager.open(sessionFilePath);
-						mgr.appendSessionInfo(next);
+						// Parse session ref to get session_id for rename
+						const ref = sessionFilePath.startsWith("event-session:") ? sessionFilePath.slice("event-session:".length) : sessionFilePath;
+						const [_, sessionId] = ref.split(":");
+						if (sessionId) {
+							this.projectionSessionManager.renameSession(sessionId, next);
+						}
 					},
 					showRenameHint: true,
 					keybindings: this.keybindings,
@@ -4749,7 +4762,7 @@ export class InteractiveMode {
 		}
 
 		const desc = this.facade.getProjection().getDescriptor();
-		this.sessionManager.renameSession(desc.session_id, name);
+		this.projectionSessionManager.renameSession(desc.session_id, name);
 		this.updateTerminalTitle();
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(theme.fg("dim", `Session name set: ${name}`), 1, 0));

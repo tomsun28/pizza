@@ -4,10 +4,10 @@
 
 import { ProcessTerminal, setKeybindings, TUI } from "@mariozechner/pi-tui";
 import { KeybindingsManager } from "../core/keybindings.js";
-import type { SessionInfo, SessionListProgress } from "../core/session-manager.js";
+import type { SessionListInfo, SessionListProgress } from "../core/session-listing.js";
 import { SessionSelectorComponent } from "../modes/interactive/components/session-selector.js";
 
-type SessionsLoader = (onProgress?: SessionListProgress) => Promise<SessionInfo[]>;
+type SessionsLoader = (onProgress?: SessionListProgress) => Promise<SessionListInfo[]>;
 
 /** Show TUI session selector and return selected session path or null if cancelled */
 export async function selectSession(

@@ -14,7 +14,7 @@ import {
 	visibleWidth,
 } from "@mariozechner/pi-tui";
 import { KeybindingsManager } from "../../../core/keybindings.js";
-import type { SessionInfo, SessionListProgress } from "../../../core/session-manager.js";
+import type { SessionListInfo, SessionListProgress } from "../../../core/session-listing.js";
 import { theme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
 import { keyHint, keyText } from "./keybinding-hints.js";
@@ -191,13 +191,13 @@ class SessionSelectorHeader implements Component {
 
 /** A session tree node for hierarchical display */
 interface SessionTreeNode {
-	session: SessionInfo;
+	session: SessionListInfo;
 	children: SessionTreeNode[];
 }
 
 /** Flattened node for display with tree structure info */
 interface FlatSessionNode {
-	session: SessionInfo;
+	session: SessionListInfo;
 	depth: number;
 	isLast: boolean;
 	/** For each ancestor level, whether there are more siblings after it */
@@ -208,7 +208,7 @@ interface FlatSessionNode {
  * Build a tree structure from sessions based on parentSessionPath.
  * Returns root nodes sorted by modified date (descending).
  */
-function buildSessionTree(sessions: SessionInfo[]): SessionTreeNode[] {
+function buildSessionTree(sessions: SessionListInfo[]): SessionTreeNode[] {
 	const byPath = new Map<string, SessionTreeNode>();
 
 	for (const session of sessions) {
@@ -274,7 +274,7 @@ class SessionList implements Component, Focusable {
 		const selected = this.filteredSessions[this.selectedIndex];
 		return selected?.session.path;
 	}
-	private allSessions: SessionInfo[] = [];
+	private allSessions: SessionListInfo[] = [];
 	private filteredSessions: FlatSessionNode[] = [];
 	private selectedIndex: number = 0;
 	private searchInput: Input;
@@ -309,7 +309,7 @@ class SessionList implements Component, Focusable {
 	}
 
 	constructor(
-		sessions: SessionInfo[],
+		sessions: SessionListInfo[],
 		showCwd: boolean,
 		sortMode: SortMode,
 		nameFilter: NameFilter,
@@ -347,7 +347,7 @@ class SessionList implements Component, Focusable {
 		this.filterSessions(this.searchInput.getValue());
 	}
 
-	setSessions(sessions: SessionInfo[], showCwd: boolean): void {
+	setSessions(sessions: SessionListInfo[], showCwd: boolean): void {
 		this.allSessions = sessions;
 		this.showCwd = showCwd;
 		this.filterSessions(this.searchInput.getValue());
@@ -626,7 +626,7 @@ class SessionList implements Component, Focusable {
 	}
 }
 
-type SessionsLoader = (onProgress?: SessionListProgress) => Promise<SessionInfo[]>;
+type SessionsLoader = (onProgress?: SessionListProgress) => Promise<SessionListInfo[]>;
 
 /**
  * Delete a session file, trying the `trash` CLI first, then falling back to unlink
@@ -693,8 +693,8 @@ export class SessionSelectorComponent extends Container implements Focusable {
 	private scope: SessionScope = "current";
 	private sortMode: SortMode = "threaded";
 	private nameFilter: NameFilter = "all";
-	private currentSessions: SessionInfo[] | null = null;
-	private allSessions: SessionInfo[] | null = null;
+	private currentSessions: SessionListInfo[] | null = null;
+	private allSessions: SessionListInfo[] | null = null;
 	private currentSessionsLoader: SessionsLoader;
 	private allSessionsLoader: SessionsLoader;
 	private onCancel: () => void;

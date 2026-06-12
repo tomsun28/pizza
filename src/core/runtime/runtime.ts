@@ -22,6 +22,7 @@ import { Reactor } from "./reactor.js";
 import type { CheckpointRef, RuntimeAdapter, RuntimeStatus } from "./types.js";
 import { LocalRuntimeAdapter } from "./local-runtime.js";
 import { CompactionEngine, type CompactionEngineSettings } from "../compaction/compaction-engine.js";
+import { getAgentDir } from "../../config.js";
 
 // ============================================================================
 // Runtime Configuration
@@ -96,7 +97,12 @@ export class EventSourcedRuntime {
 	readonly classifier: IntentClassifier;
 	private reactor: Reactor | null = null;
 	private config: EventSourcedRuntimeConfig;
-	private ownsStore: boolean;
+	private readonly ownsStore: boolean;
+
+	/** Working directory for this runtime */
+	get cwd(): string { return this.config.cwd; }
+	/** Agent data directory */
+	get agentDir(): string { return this.config.agentDir ?? getAgentDir(); }
 	private _isProcessing = false;
 	private _turnCompletionWaiters: Array<() => void> = [];
 	private _turnSubscription: (() => void) | undefined;

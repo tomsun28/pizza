@@ -1,5 +1,5 @@
 import { fuzzyMatch } from "@mariozechner/pi-tui";
-import type { SessionInfo } from "../../../core/session-manager.js";
+import type { SessionListInfo } from "../../../core/session-listing.js";
 
 export type SortMode = "threaded" | "recent" | "relevance";
 
@@ -23,15 +23,15 @@ function normalizeWhitespaceLower(text: string): string {
 	return text.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-function getSessionSearchText(session: SessionInfo): string {
+function getSessionSearchText(session: SessionListInfo): string {
 	return `${session.id} ${session.name ?? ""} ${session.allMessagesText} ${session.cwd}`;
 }
 
-export function hasSessionName(session: SessionInfo): boolean {
+export function hasSessionName(session: SessionListInfo): boolean {
 	return Boolean(session.name?.trim());
 }
 
-function matchesNameFilter(session: SessionInfo, filter: NameFilter): boolean {
+function matchesNameFilter(session: SessionListInfo, filter: NameFilter): boolean {
 	if (filter === "all") return true;
 	return hasSessionName(session);
 }
@@ -113,7 +113,7 @@ export function parseSearchQuery(query: string): ParsedSearchQuery {
 	return { mode: "tokens", tokens, regex: null };
 }
 
-export function matchSession(session: SessionInfo, parsed: ParsedSearchQuery): MatchResult {
+export function matchSession(session: SessionListInfo, parsed: ParsedSearchQuery): MatchResult {
 	const text = getSessionSearchText(session);
 
 	if (parsed.mode === "regex") {
@@ -154,11 +154,11 @@ export function matchSession(session: SessionInfo, parsed: ParsedSearchQuery): M
 }
 
 export function filterAndSortSessions(
-	sessions: SessionInfo[],
+	sessions: SessionListInfo[],
 	query: string,
 	sortMode: SortMode,
 	nameFilter: NameFilter = "all",
-): SessionInfo[] {
+): SessionListInfo[] {
 	const nameFiltered =
 		nameFilter === "all" ? sessions : sessions.filter((session) => matchesNameFilter(session, nameFilter));
 	const trimmed = query.trim();
@@ -169,7 +169,7 @@ export function filterAndSortSessions(
 
 	// Recent mode: filter only, keep incoming order.
 	if (sortMode === "recent") {
-		const filtered: SessionInfo[] = [];
+		const filtered: SessionListInfo[] = [];
 		for (const s of nameFiltered) {
 			const res = matchSession(s, parsed);
 			if (res.matches) filtered.push(s);
@@ -178,7 +178,7 @@ export function filterAndSortSessions(
 	}
 
 	// Relevance mode: sort by score, tie-break by modified desc.
-	const scored: { session: SessionInfo; score: number }[] = [];
+	const scored: { session: SessionListInfo; score: number }[] = [];
 	for (const s of nameFiltered) {
 		const res = matchSession(s, parsed);
 		if (!res.matches) continue;

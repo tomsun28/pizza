@@ -29,7 +29,7 @@ import { restoreStdout, takeOverStdout } from "./core/output-guard.js";
 import type { CreateSessionFacadeOptions } from "./core/session-facade-factory.js";
 import { createSessionFacade, type CreateSessionFacadeResult } from "./core/session-facade-factory.js";
 import { getAgentDirFromSessionDir, parseSessionRef } from "./core/session-ref.js";
-import { SessionManager, type SessionInfo } from "./core/session-manager.js";
+import { listWorkspaceSessions, listAllSessions, type SessionListInfo } from "./core/session-listing.js";
 import { SettingsManager } from "./core/settings-manager.js";
 import { printTimings, resetTimings, time } from "./core/timings.js";
 
@@ -134,13 +134,13 @@ type ResolvedSession =
  * Resolve a session argument to an event-session reference.
  * Accepts a full event-session ref or a session ID prefix.
  */
-async function resolveSessionPath(sessionArg: string, cwd: string, sessionDir?: string): Promise<ResolvedSession> {
+async function resolveSessionPath(sessionArg: string, cwd: string, agentDir: string): Promise<ResolvedSession> {
 	if (sessionArg.includes("/") || sessionArg.includes("\\") || sessionArg.endsWith(".jsonl")) {
 		return { type: "not_found", arg: `${sessionArg} (legacy JSONL paths are no longer supported)` };
 	}
 
 	// Try to match as session ID in current project first
-	const localSessions = await SessionManager.list(cwd, sessionDir);
+	const localSessions = await listWorkspaceSessions(cwd, agentDir);
 	const localMatches = localSessions.filter((s) => s.id.startsWith(sessionArg) || s.path === sessionArg);
 
 	if (localMatches.length >= 1) {
@@ -148,7 +148,7 @@ async function resolveSessionPath(sessionArg: string, cwd: string, sessionDir?: 
 	}
 
 	// Try global search across all projects
-	const allSessions = await SessionManager.listAll(undefined, sessionDir);
+	const allSessions = await listAllSessions(agentDir);
 	const globalMatches = allSessions.filter((s) => s.id.startsWith(sessionArg) || s.path === sessionArg);
 
 	if (globalMatches.length >= 1) {
@@ -389,11 +389,11 @@ function applyCliThinkingClampToFacade(created: CreateSessionFacadeResult, cliTh
 async function resolveFacadePrintSessionTarget(
 	parsed: Args,
 	cwd: string,
-	sessionDir: string | undefined,
+	agentDir: string,
 	settingsManager: SettingsManager,
 ): Promise<FacadePrintSessionTarget> {
 	if (parsed.fork) {
-		const resolved = await resolveSessionPath(parsed.fork, cwd, sessionDir);
+		const resolved = await resolveSessionPath(parsed.fork, cwd, agentDir);
 		switch (resolved.type) {
 			case "local":
 			case "global": {
@@ -424,8 +424,8 @@ async function resolveFacadePrintSessionTarget(
 	}
 
 	if (parsed.resume) {
-		const sessionsByPath = new Map<string, SessionInfo>();
-		const trackSessions = async (loader: () => Promise<SessionInfo[]>): Promise<SessionInfo[]> => {
+		const sessionsByPath = new Map<string, SessionListInfo>();
+		const trackSessions = async (loader: () => Promise<SessionListInfo[]>): Promise<SessionListInfo[]> => {
 			const sessions = await loader();
 			for (const session of sessions) {
 				sessionsByPath.set(session.path, session);
@@ -436,8 +436,8 @@ async function resolveFacadePrintSessionTarget(
 		initTheme(settingsManager.getTheme(), true);
 		try {
 			const selectedPath = await selectSession(
-				(onProgress) => trackSessions(() => SessionManager.list(cwd, sessionDir, onProgress)),
-				(onProgress) => trackSessions(() => SessionManager.listAll(onProgress, sessionDir)),
+				(onProgress) => trackSessions(() => listWorkspaceSessions(cwd, agentDir, onProgress)),
+				(onProgress) => trackSessions(() => listAllSessions(agentDir, onProgress)),
 			);
 			if (!selectedPath) {
 				console.log(chalk.dim("No session selected"));
@@ -447,7 +447,7 @@ async function resolveFacadePrintSessionTarget(
 			const parsedRef = parseSessionRef(selectedPath);
 			let selectedCwd = sessionsByPath.get(selectedPath)?.cwd;
 			if (!selectedCwd) {
-				const resolved = await resolveSessionPath(selectedPath, cwd, sessionDir);
+				const resolved = await resolveSessionPath(selectedPath, cwd, agentDir);
 				if (resolved.type === "global") {
 					selectedCwd = resolved.cwd;
 				}
@@ -465,7 +465,7 @@ async function resolveFacadePrintSessionTarget(
 	}
 
 	if (parsed.session) {
-		const resolved = await resolveSessionPath(parsed.session, cwd, sessionDir);
+		const resolved = await resolveSessionPath(parsed.session, cwd, agentDir);
 		switch (resolved.type) {
 			case "local": {
 				const parsedRef = parseSessionRef(resolved.path);
@@ -574,7 +574,7 @@ export async function main(args: string[], options?: MainOptions) {
 	};
 	const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
 
-	const target = await resolveFacadePrintSessionTarget(parsed, cwd, sessionDir, startupSettingsManager);
+	const target = await resolveFacadePrintSessionTarget(parsed, cwd, agentDir, startupSettingsManager);
 	const setup = await createCliSessionSetup({
 		cwd: target.cwd,
 		agentDir,

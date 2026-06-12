@@ -1,0 +1,215 @@
+/**
+ * Session Listing
+ *
+ * Lists sessions from the new session index (sessions.json) and EventStore.
+ * Replaces old SessionManager.list/listAll static methods with a clean,
+ * event-sourced implementation.
+ */
+
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import type { AgentMessage, Message } from "./agent/types.js";
+import { getAgentDir } from "../config.js";
+import { SqliteEventStore } from "./event-store/sqlite-store.js";
+import type { EventBase } from "./event-store/types.js";
+import { deriveWorkspaceId, getEventDatabasePath, getWorkspaceMetaPath } from "./event-store/workspace.js";
+import type { SessionDescriptor, SessionIndex } from "./projection/types.js";
+
+// ============================================================================
+// Types
+// ============================================================================
+
+export interface SessionListInfo {
+	path: string;
+	id: string;
+	cwd: string;
+	name?: string;
+	parentSessionPath?: string;
+	created: Date;
+	modified: Date;
+	messageCount: number;
+	firstMessage: string;
+	allMessagesText: string;
+}
+
+export type SessionListProgress = (loaded: number, total: number) => void;
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+const SESSION_REF_PREFIX = "event-session:";
+
+function makeSessionRef(workspaceId: string, sessionId: string): string {
+	return `${SESSION_REF_PREFIX}${workspaceId}:${sessionId}`;
+}
+
+function extractTextContent(message: Message): string {
+	const content = message.content;
+	if (typeof content === "string") return content;
+	return content
+		.filter((block): block is { type: "text"; text: string } => block.type === "text")
+		.map((block) => block.text)
+		.join(" ");
+}
+
+function isMessageWithContent(message: AgentMessage): message is Message {
+	return typeof (message as Message).role === "string" && "content" in message;
+}
+
+/** Read session index from a workspace directory */
+function readSessionIndex(indexPath: string): SessionIndex | undefined {
+	if (!existsSync(indexPath)) return undefined;
+	try {
+		return JSON.parse(readFileSync(indexPath, "utf8")) as SessionIndex;
+	} catch {
+		return undefined;
+	}
+}
+
+/** Read workspace cwd from meta.json */
+function readWorkspaceCwd(workspaceId: string, agentDir: string): string | undefined {
+	const metaPath = getWorkspaceMetaPath(workspaceId, agentDir);
+	if (!existsSync(metaPath)) return undefined;
+	try {
+		const meta = JSON.parse(readFileSync(metaPath, "utf8")) as { cwd?: string };
+		return meta.cwd;
+	} catch {
+		return undefined;
+	}
+}
+
+/** Build SessionListInfo from a session descriptor by querying EventStore for metadata */
+function buildSessionInfo(
+	descriptor: SessionDescriptor,
+	workspaceId: string,
+	cwd: string,
+	store: SqliteEventStore,
+): SessionListInfo {
+	let messageCount = 0;
+	let firstMessage = "";
+	const allMessages: string[] = [];
+	let lastActivity = descriptor.created_at;
+
+	// Query context-relevant events for this session's range
+	const events = store.query({
+		types: ["USER_MESSAGE", "AGENT_MESSAGE_END"],
+	});
+
+	for (const event of events) {
+		if (event.timestamp > 0) {
+			lastActivity = Math.max(lastActivity, event.timestamp);
+		}
+
+		if (event.type === "USER_MESSAGE") {
+			const payload = event.payload as { content: string | unknown[] };
+			const text = typeof payload.content === "string"
+				? payload.content
+				: "";
+			messageCount++;
+			if (text && !firstMessage) {
+				firstMessage = text.slice(0, 200);
+			}
+			if (text) allMessages.push(text);
+		} else if (event.type === "AGENT_MESSAGE_END") {
+			messageCount++;
+		}
+	}
+
+	return {
+		path: makeSessionRef(workspaceId, descriptor.session_id),
+		id: descriptor.session_id,
+		cwd,
+		name: descriptor.name,
+		parentSessionPath: descriptor.parent_session_id
+			? makeSessionRef(workspaceId, descriptor.parent_session_id)
+			: undefined,
+		created: new Date(descriptor.created_at),
+		modified: new Date(lastActivity),
+		messageCount,
+		firstMessage: firstMessage || "(no messages)",
+		allMessagesText: allMessages.join(" "),
+	};
+}
+
+// ============================================================================
+// Public API
+// ============================================================================
+
+/**
+ * List all sessions for a workspace (current cwd).
+ * Reads from sessions.json + EventStore for each session.
+ */
+export async function listWorkspaceSessions(
+	cwd: string,
+	agentDir: string = getAgentDir(),
+	onProgress?: SessionListProgress,
+): Promise<SessionListInfo[]> {
+	const workspaceId = deriveWorkspaceId(cwd);
+	const indexPath = join(agentDir, "workspaces", workspaceId, "sessions.json");
+	const index = readSessionIndex(indexPath);
+	if (!index || index.sessions.length === 0) return [];
+
+	const dbPath = getEventDatabasePath(workspaceId, agentDir);
+	if (!existsSync(dbPath)) return [];
+
+	const store = new SqliteEventStore(workspaceId, dbPath, "session_list");
+	try {
+		const workspaceCwd = readWorkspaceCwd(workspaceId, agentDir) ?? cwd;
+		const results: SessionListInfo[] = [];
+
+		for (let i = 0; i < index.sessions.length; i++) {
+			const desc = index.sessions[i]!;
+			results.push(buildSessionInfo(desc, workspaceId, workspaceCwd, store));
+			onProgress?.(i + 1, index.sessions.length);
+		}
+
+		results.sort((a, b) => b.modified.getTime() - a.modified.getTime());
+		return results;
+	} finally {
+		store.close();
+	}
+}
+
+/**
+ * List all sessions across all workspaces.
+ * Scans agentDir/workspaces/* for sessions.json files.
+ */
+export async function listAllSessions(
+	agentDir: string = getAgentDir(),
+	onProgress?: SessionListProgress,
+): Promise<SessionListInfo[]> {
+	const workspacesDir = join(agentDir, "workspaces");
+	if (!existsSync(workspacesDir)) return [];
+
+	const workspaceEntries = readdirSync(workspacesDir, { withFileTypes: true })
+		.filter((entry) => entry.isDirectory())
+		.map((entry) => entry.name);
+
+	const results: SessionListInfo[] = [];
+
+	for (let i = 0; i < workspaceEntries.length; i++) {
+		const workspaceId = workspaceEntries[i]!;
+		const indexPath = join(workspacesDir, workspaceId, "sessions.json");
+		const index = readSessionIndex(indexPath);
+		if (!index || index.sessions.length === 0) continue;
+
+		const dbPath = getEventDatabasePath(workspaceId, agentDir);
+		if (!existsSync(dbPath)) continue;
+
+		const store = new SqliteEventStore(workspaceId, dbPath, "session_list_all");
+		try {
+			const workspaceCwd = readWorkspaceCwd(workspaceId, agentDir) ?? process.cwd();
+			for (const desc of index.sessions) {
+				results.push(buildSessionInfo(desc, workspaceId, workspaceCwd, store));
+			}
+		} finally {
+			store.close();
+		}
+
+		onProgress?.(i + 1, workspaceEntries.length);
+	}
+
+	results.sort((a, b) => b.modified.getTime() - a.modified.getTime());
+	return results;
+}
