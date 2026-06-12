@@ -527,6 +527,9 @@ export class InteractiveMode {
 		this.extensionTerminalInputUnsubscribers ??= new Set();
 		this.extensionWidgetsAbove ??= new Map();
 		this.extensionWidgetsBelow ??= new Map();
+		this.pendingBashComponents ??= [];
+		this.signalCleanupHandlers ??= [];
+		this.compactionQueuedMessages ??= [];
 		this.keybindings = KeybindingsManager.create();
 		setKeybindings(this.keybindings);
 		const editorPaddingX = settingsMgr.getEditorPaddingX();
