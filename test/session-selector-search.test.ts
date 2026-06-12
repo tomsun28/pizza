@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { SessionInfo } from "../src/core/session-manager.js";
+import type { SessionInfo } from "../src/core/types/session-types.js";
 import { filterAndSortSessions } from "../src/modes/interactive/components/session-selector-search.js";
 
 function makeSession(

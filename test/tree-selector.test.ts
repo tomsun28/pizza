@@ -6,7 +6,7 @@ import type {
 	SessionEntry,
 	SessionMessageEntry,
 	SessionTreeNode,
-} from "../src/core/session-manager.js";
+} from "../src/core/types/session-types.js";
 import { TreeSelectorComponent } from "../src/modes/interactive/components/tree-selector.js";
 import { initTheme } from "../src/modes/interactive/theme/theme.js";
 

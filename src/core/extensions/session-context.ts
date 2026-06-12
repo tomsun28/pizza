@@ -23,7 +23,7 @@ import type {
 	SessionMessageEntry,
 	SessionTreeNode,
 	ThinkingLevelChangeEntry,
-} from "../session-manager.js";
+} from "../types/session-types.js";
 
 export interface ExtensionSessionManager extends ReadonlySessionManager {
 	/** Present when the session view is backed by EventStore. */

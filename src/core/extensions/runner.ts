@@ -12,9 +12,8 @@ import type { EventStore } from "../event-store/store.js";
 import type { KeybindingsConfig } from "../keybindings.js";
 import type { ModelRegistry } from "../model-registry.js";
 import { eventToMessage } from "../projection/event-to-message.js";
-import type { SessionManager } from "../session-manager.js";
-import type { BuildSystemPromptOptions } from "../system-prompt.js";
 import type { ExtensionSessionManager } from "./session-context.js";
+import type { BuildSystemPromptOptions } from "../system-prompt.js";
 import type {
 	BeforeAgentStartEvent,
 	BeforeAgentStartEventResult,
@@ -151,7 +150,7 @@ export type ExtensionErrorListener = (error: ExtensionError) => void;
 
 export type NewSessionHandler = (options?: {
 	parentSession?: string;
-	setup?: (sessionManager: SessionManager) => Promise<void>;
+	setup?: (sessionManager: ExtensionSessionManager) => Promise<void>;
 	withSession?: (ctx: ReplacedSessionContext) => Promise<void>;
 }) => Promise<{ cancelled: boolean }>;
 

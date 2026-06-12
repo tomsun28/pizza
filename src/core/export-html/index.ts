@@ -4,8 +4,8 @@ import { join } from "path";
 import { APP_NAME, getExportTemplateDir } from "../../config.js";
 import { getResolvedThemeColors, getThemeExportColors } from "../../modes/interactive/theme/theme.js";
 import type { ToolDefinition } from "../extensions/types.js";
-import type { SessionEntry } from "../session-manager.js";
-import { SessionManager } from "../session-manager.js";
+import type { SessionEntry, SessionHeader } from "../types/session-types.js";
+import { readSessionForExport } from "../session-reader.js";
 
 /**
  * Interface for rendering custom tools to HTML.
@@ -131,8 +131,8 @@ function generateThemeVars(themeName?: string): string {
 }
 
 interface SessionData {
-	header: ReturnType<SessionManager["getHeader"]>;
-	entries: ReturnType<SessionManager["getEntries"]>;
+	header: SessionHeader | null;
+	entries: SessionEntry[];
 	leafId: string | null;
 	systemPrompt?: string;
 	tools?: Array<Pick<ToolDefinition, "name" | "description" | "parameters">>;
@@ -231,56 +231,6 @@ function preRenderCustomTools(
 
 	return renderedTools;
 }
-
-/**
- * Export session to HTML using SessionManager and AgentState.
- * Used by TUI's /export command.
- */
-export async function exportSessionToHtml(
-	sm: SessionManager,
-	state?: AgentState,
-	options?: ExportOptions | string,
-): Promise<string> {
-	const opts: ExportOptions = typeof options === "string" ? { outputPath: options } : options || {};
-
-	const sessionFile = sm.getSessionFile();
-	if (!sessionFile) {
-		throw new Error("Cannot export in-memory session to HTML");
-	}
-
-	const entries = sm.getEntries();
-
-	// Pre-render custom tools if a tool renderer is provided
-	let renderedTools: Record<string, RenderedToolHtml> | undefined;
-	if (opts.toolRenderer) {
-		renderedTools = preRenderCustomTools(entries, opts.toolRenderer);
-		// Only include if we actually rendered something
-		if (Object.keys(renderedTools).length === 0) {
-			renderedTools = undefined;
-		}
-	}
-
-	const sessionData: SessionData = {
-		header: sm.getHeader(),
-		entries,
-		leafId: sm.getLeafId(),
-		systemPrompt: state?.systemPrompt,
-		tools: state?.tools?.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })),
-		renderedTools,
-	};
-
-	const html = generateHtml(sessionData, opts.themeName);
-
-	let outputPath = opts.outputPath;
-	if (!outputPath) {
-		const sessionBasename = sanitizeFileNameSegment(sm.getSessionId() || sessionFile);
-		outputPath = `${APP_NAME}-session-${sessionBasename}.html`;
-	}
-
-	writeFileSync(outputPath, html, "utf8");
-	return outputPath;
-}
-
 /**
  * Export a persisted event session to HTML (standalone, without AgentState).
  * Used by CLI for exporting a session reference or exact session id.
@@ -292,12 +242,12 @@ export async function exportFromFile(inputPath: string, options?: ExportOptions 
 		throw new Error("Legacy JSONL session export is no longer supported; pass an event session reference instead.");
 	}
 
-	const sm = SessionManager.open(inputPath);
+	const { header, entries, leafId, sessionId } = readSessionForExport(inputPath);
 
 	const sessionData: SessionData = {
-		header: sm.getHeader(),
-		entries: sm.getEntries(),
-		leafId: sm.getLeafId(),
+		header,
+		entries,
+		leafId,
 		systemPrompt: undefined,
 		tools: undefined,
 	};
@@ -306,7 +256,7 @@ export async function exportFromFile(inputPath: string, options?: ExportOptions 
 
 	let outputPath = opts.outputPath;
 	if (!outputPath) {
-		const inputBasename = sanitizeFileNameSegment(sm.getSessionId() || inputPath);
+		const inputBasename = sanitizeFileNameSegment(sessionId || inputPath);
 		outputPath = `${APP_NAME}-session-${inputBasename}.html`;
 	}
 

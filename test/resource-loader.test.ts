@@ -5,8 +5,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { ExtensionRunner } from "../src/core/extensions/runner.js";
 import { ModelRegistry } from "../src/core/model-registry.js";
+import { EventStoreExtensionSessionManager } from "../src/core/extensions/session-context.js";
+import { SqliteEventStore } from "../src/core/event-store/sqlite-store.js";
+import { SessionProjection } from "../src/core/projection/session-projection.js";
 import { DefaultResourceLoader } from "../src/core/resource-loader.js";
-import { SessionManager } from "../src/core/session-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
 import type { Skill } from "../src/core/skills.js";
 import { createSyntheticSourceInfo } from "../src/core/source-info.js";
@@ -197,7 +199,7 @@ Project skill`,
 			expect(extensionsResult.extensions).toHaveLength(2);
 			expect(extensionsResult.errors.some((e) => e.error.includes('Command "/deploy" conflicts'))).toBe(false);
 
-			const sessionManager = SessionManager.inMemory();
+			const sessionManager = new EventStoreExtensionSessionManager({ store: new SqliteEventStore("test", ":memory:", "test"), projection: new SessionProjection(new SqliteEventStore("test", ":memory:", "test"), { session_id: "test", workspace_id: "test", event_range: { start_event_id: "ORIGIN", end_event_id: "HEAD" }, created_by: "user_explicit", created_at: Date.now() }), cwd });
 			const authStorage = AuthStorage.create(join(tempDir, "auth.json"));
 			const modelRegistry = ModelRegistry.create(authStorage);
 			const runner = new ExtensionRunner(
@@ -557,7 +559,7 @@ export default function(pi: ExtensionAPI) {
 			const extensionsResult = loader.getExtensions();
 			expect(extensionsResult.extensions[0]?.path).toBe(explicitExtPath);
 
-			const sessionManager = SessionManager.inMemory();
+			const sessionManager = new EventStoreExtensionSessionManager({ store: new SqliteEventStore("test", ":memory:", "test"), projection: new SessionProjection(new SqliteEventStore("test", ":memory:", "test"), { session_id: "test", workspace_id: "test", event_range: { start_event_id: "ORIGIN", end_event_id: "HEAD" }, created_by: "user_explicit", created_at: Date.now() }), cwd });
 			const authStorage = AuthStorage.create(join(tempDir, "auth-explicit.json"));
 			const modelRegistry = ModelRegistry.create(authStorage);
 			const runner = new ExtensionRunner(

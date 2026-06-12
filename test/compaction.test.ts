@@ -17,13 +17,15 @@ import {
 } from "../src/core/compaction/index.js";
 import {
 	buildSessionContext,
-	type CompactionEntry,
-	type ModelChangeEntry,
-	type SessionEntry,
-	type SessionMessageEntry,
-	type SessionHeader,
-	type ThinkingLevelChangeEntry,
-} from "../src/core/session-manager.js";
+} from "../src/core/session-context-builder.js";
+import type {
+	CompactionEntry,
+	ModelChangeEntry,
+	SessionEntry,
+	SessionMessageEntry,
+	SessionHeader,
+	ThinkingLevelChangeEntry,
+} from "../src/core/types/session-types.js";
 
 // ============================================================================
 // Test fixtures

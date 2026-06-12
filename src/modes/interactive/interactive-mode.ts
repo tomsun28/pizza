@@ -68,7 +68,7 @@ import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScop
 import { DefaultPackageManager } from "../../core/package-manager.js";
 import type { ResourceDiagnostic, ResourceLoader } from "../../core/resource-loader.js";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.js";
-import { type SessionEntry, type SessionTreeNode } from "../../core/session-manager.js";
+import { type SessionEntry, type SessionTreeNode } from "../../core/types/session-types.js";
 import { listWorkspaceSessions, listAllSessions } from "../../core/session-listing.js";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.js";
 import type { SourceInfo } from "../../core/source-info.js";
