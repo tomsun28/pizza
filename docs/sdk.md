@@ -1,8 +1,8 @@
-> pi can help you use the SDK. Ask it to build an integration for your use case.
+> Pizza can help you use the SDK. Ask it to build an integration for your use case.
 
 # SDK
 
-The SDK provides programmatic access to pi's agent capabilities. Use it to embed pi in other applications, build custom interfaces, or integrate with automated workflows.
+The SDK provides programmatic access to Pizza's agent capabilities. Use it to embed Pizza in other applications, build custom interfaces, or integrate with automated workflows.
 
 **Example use cases:**
 - Build a custom UI (web, desktop, mobile)
@@ -16,7 +16,7 @@ See [examples/sdk/](../examples/sdk/) for working examples from minimal to full 
 ## Quick Start
 
 ```typescript
-import { createSessionFacade } from "@mariozechner/pi-coding-agent";
+import { createSessionFacade } from "pizza";
 
 const { facade } = await createSessionFacade();
 
@@ -35,7 +35,7 @@ await facade.prompt("What files are in the current directory?");
 ## Installation
 
 ```bash
-npm install @mariozechner/pi-coding-agent
+npm install pizza
 ```
 
 The SDK is included in the main package. No separate installation needed.
@@ -49,7 +49,7 @@ The main factory function. Creates a `SessionFacade` — the lightweight entry p
 `createSessionFacade()` uses a `ResourceLoader` to supply extensions, skills, prompt templates, themes, and context files. If you do not provide one, it uses `DefaultResourceLoader` with standard discovery.
 
 ```typescript
-import { createSessionFacade } from "@mariozechner/pi-coding-agent";
+import { createSessionFacade } from "pizza";
 
 // Minimal: defaults with DefaultResourceLoader
 const { facade } = await createSessionFacade();
@@ -216,7 +216,7 @@ When you pass a custom `ResourceLoader`, `cwd` and `agentDir` no longer control 
 
 ```typescript
 import { getModel } from "@mariozechner/pi-ai";
-import { AuthStorage, createSessionFacade, ModelRegistry } from "@mariozechner/pi-coding-agent";
+import { AuthStorage, createSessionFacade, ModelRegistry } from "pizza";
 
 const authStorage = AuthStorage.create();
 const modelRegistry = ModelRegistry.create(authStorage);
@@ -255,7 +255,7 @@ const { facade } = await createSessionFacade({
 
 Available tool names: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`.
 
-For custom tools, see [extensions](./extensions.md) — custom tools are registered via the extension system using `pi.registerTool()`.
+For custom tools, see [extensions](./extensions.md) — custom tools are registered via the extension system using `pizza.registerTool()`.
 
 ### Storage
 
@@ -274,7 +274,7 @@ const { facade } = await createSessionFacade({
 ### Settings
 
 ```typescript
-import { SettingsManager } from "@mariozechner/pi-coding-agent";
+import { SettingsManager } from "pizza";
 
 // In-memory settings with overrides
 const settingsManager = SettingsManager.inMemory({
@@ -290,7 +290,7 @@ const { facade } = await createSessionFacade({
 ### Resource Loader
 
 ```typescript
-import { DefaultResourceLoader } from "@mariozechner/pi-coding-agent";
+import { DefaultResourceLoader } from "pizza";
 
 const loader = new DefaultResourceLoader({ cwd: process.cwd() });
 const { facade } = await createSessionFacade({ resourceLoader: loader });
@@ -299,7 +299,7 @@ const { facade } = await createSessionFacade({ resourceLoader: loader });
 For a completely custom resource loader, implement the `ResourceLoader` interface:
 
 ```typescript
-import { createExtensionRuntime, type ResourceLoader } from "@mariozechner/pi-coding-agent";
+import { createExtensionRuntime, type ResourceLoader } from "pizza";
 
 const resourceLoader: ResourceLoader = {
   getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() }),
@@ -365,7 +365,7 @@ import {
   InteractiveMode,
   runPrintModeWithFacade,
   runRpcModeWithFacade,
-} from "@mariozechner/pi-coding-agent";
+} from "pizza";
 ```
 
 - `InteractiveMode` — Full TUI. Use `InteractiveMode.fromFacade()` to create from a facade.

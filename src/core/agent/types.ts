@@ -50,7 +50,7 @@ export type {
 export type ToolExecutionMode = "sequential" | "parallel";
 
 // ============================================================================
-// Thinking levels (pizza's extension; includes "off" which pi-ai doesn't have)
+// Thinking levels (Pizza's extension; includes "off" which pi-ai doesn't have)
 // ============================================================================
 
 export type ThinkingLevel = "off" | PiThinkingLevel;

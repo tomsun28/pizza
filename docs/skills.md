@@ -1,4 +1,4 @@
-> pi can create skills. Ask it to build one for your use case.
+> Pizza can create skills. Ask it to build one for your use case.
 
 # Skills
 
@@ -21,7 +21,7 @@ Pi implements the [Agent Skills standard](https://agentskills.io/specification),
 
 > **Security:** Skills can instruct the model to perform any action and may include executable code the model invokes. Review skill content before use.
 
-Pi loads skills from:
+Pizza loads skills from:
 
 - Global:
   - `~/.pizza/agent/skills/`
@@ -29,7 +29,7 @@ Pi loads skills from:
 - Project:
   - `.pizza/skills/`
   - `.agents/skills/` in `cwd` and ancestor directories (up to git repo root, or filesystem root when not in a repo)
-- Packages: `skills/` directories or `pi.skills` entries in `package.json`
+- Packages: `skills/` directories or `pizza.skills` entries in `package.json`
 - Settings: `skills` array with files or directories
 - CLI: `--skill <path>` (repeatable, additive even with `--no-skills`)
 
@@ -63,7 +63,7 @@ For project-level Claude Code skills, add to `.pizza/settings.json`:
 
 ## How Skills Work
 
-1. At startup, pi scans skill locations and extracts names and descriptions
+1. At startup, Pizza scans skill locations and extracts names and descriptions
 2. The system prompt includes available skills in XML format per the [specification](https://agentskills.io/integrate-skills)
 3. When a task matches, the agent uses `read` to load the full SKILL.md (models don't always do this; use prompting or `/skill:name` to force it)
 4. The agent follows the instructions, using relative paths to reference scripts and assets

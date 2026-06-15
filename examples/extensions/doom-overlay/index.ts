@@ -1,7 +1,7 @@
 /**
  * DOOM Overlay Demo - Play DOOM as an overlay
  *
- * Usage: pi --extension ./examples/extensions/doom-overlay
+ * Usage: pizza --extension ./examples/extensions/doom-overlay
  *
  * Commands:
  *   /doom-overlay - Play DOOM in an overlay (Q to pause/exit)
@@ -9,7 +9,7 @@
  * This demonstrates that overlays can handle real-time game rendering at 35 FPS.
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "pizza";
 import { DoomOverlayComponent } from "./doom-component.js";
 import { DoomEngine } from "./doom-engine.js";
 import { ensureWadFile } from "./wad-finder.js";
@@ -18,8 +18,8 @@ import { ensureWadFile } from "./wad-finder.js";
 let activeEngine: DoomEngine | null = null;
 let activeWadPath: string | null = null;
 
-export default function (pi: ExtensionAPI) {
-	pi.registerCommand("doom-overlay", {
+export default function (pizza: ExtensionAPI) {
+	pizza.registerCommand("doom-overlay", {
 		description: "Play DOOM as an overlay. Q to pause and exit.",
 
 		handler: async (args, ctx) => {

@@ -5,7 +5,7 @@
  * from cwd and ~/.pizza/agent. Model chosen from settings or first available.
  */
 
-import { createSessionFacade } from "@mariozechner/pi-coding-agent";
+import { createSessionFacade } from "pizza";
 
 const { facade } = await createSessionFacade();
 

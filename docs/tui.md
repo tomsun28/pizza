@@ -1,4 +1,4 @@
-> pi can create TUI components. Ask it to build one for your use case.
+> Pizza can create TUI components. Ask it to build one for your use case.
 
 # TUI Components
 
@@ -89,18 +89,18 @@ Without this propagation, typing with an IME (Chinese, Japanese, Korean, etc.) w
 **In extensions** via `ctx.ui.custom()`:
 
 ```typescript
-pi.on("session_start", async (_event, ctx) => {
+pizza.on("session_start", async (_event, ctx) => {
   const handle = ctx.ui.custom(myComponent);
   // handle.requestRender() - trigger re-render
   // handle.close() - restore normal UI
 });
 ```
 
-**In custom tools** via `pi.ui.custom()`:
+**In custom tools** via `pizza.ui.custom()`:
 
 ```typescript
 async execute(toolCallId, params, onUpdate, ctx, signal) {
-  const handle = pi.ui.custom(myComponent);
+  const handle = pizza.ui.custom(myComponent);
   // ...
   handle.close();
 }
@@ -363,7 +363,7 @@ class MySelector {
 Usage in an extension:
 
 ```typescript
-pi.registerCommand("pick", {
+pizza.registerCommand("pick", {
   description: "Pick an item",
   handler: async (args, ctx) => {
     const items = ["Option A", "Option B", "Option C"];
@@ -425,7 +425,7 @@ renderResult(result, options, theme, context) {
 **For Markdown**, use `getMarkdownTheme()`:
 
 ```typescript
-import { getMarkdownTheme } from "@mariozechner/pi-coding-agent";
+import { getMarkdownTheme } from "pizza";
 import { Markdown } from "@mariozechner/pi-tui";
 
 renderResult(result, options, theme, context) {
@@ -590,11 +590,11 @@ These patterns cover the most common UI needs in extensions. **Copy these patter
 For letting users pick from a list of options. Use `SelectList` from `@mariozechner/pi-tui` with `DynamicBorder` for framing.
 
 ```typescript
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { DynamicBorder } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "pizza";
+import { DynamicBorder } from "pizza";
 import { Container, type SelectItem, SelectList, Text } from "@mariozechner/pi-tui";
 
-pi.registerCommand("pick", {
+pizza.registerCommand("pick", {
   handler: async (_args, ctx) => {
     const items: SelectItem[] = [
       { value: "opt1", label: "Option 1", description: "First option" },
@@ -650,9 +650,9 @@ pi.registerCommand("pick", {
 For operations that take time and should be cancellable. `BorderedLoader` shows a spinner and handles escape to cancel.
 
 ```typescript
-import { BorderedLoader } from "@mariozechner/pi-coding-agent";
+import { BorderedLoader } from "pizza";
 
-pi.registerCommand("fetch", {
+pizza.registerCommand("fetch", {
   handler: async (_args, ctx) => {
     const result = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
       const loader = new BorderedLoader(tui, theme, "Fetching data...");
@@ -682,10 +682,10 @@ pi.registerCommand("fetch", {
 For toggling multiple settings. Use `SettingsList` from `@mariozechner/pi-tui` with `getSettingsListTheme()`.
 
 ```typescript
-import { getSettingsListTheme } from "@mariozechner/pi-coding-agent";
+import { getSettingsListTheme } from "pizza";
 import { Container, type SettingItem, SettingsList, Text } from "@mariozechner/pi-tui";
 
-pi.registerCommand("settings", {
+pizza.registerCommand("settings", {
   handler: async (_args, ctx) => {
     const items: SettingItem[] = [
       { id: "verbose", label: "Verbose mode", currentValue: "off", values: ["on", "off"] },
@@ -737,7 +737,7 @@ ctx.ui.setStatus("my-ext", undefined);
 
 ### Pattern 4b: Working Indicator Customization
 
-Customize the inline working indicator shown while pi is streaming a response.
+Customize the inline working indicator shown while Pizza is streaming a response.
 
 ```typescript
 // Static indicator
@@ -757,7 +757,7 @@ ctx.ui.setWorkingIndicator({
 // Hide the indicator entirely
 ctx.ui.setWorkingIndicator({ frames: [] });
 
-// Restore pi's default spinner
+// Restore Pizza's default spinner
 ctx.ui.setWorkingIndicator();
 ```
 
@@ -822,7 +822,7 @@ Token stats available via `ctx.sessionManager.getBranch()` and `ctx.model`.
 Replace the main input editor with a custom implementation. Useful for modal editing (vim), different keybindings (emacs), or specialized input handling.
 
 ```typescript
-import { CustomEditor, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { CustomEditor, type ExtensionAPI } from "pizza";
 import { matchesKey, truncateToWidth } from "@mariozechner/pi-tui";
 
 type Mode = "normal" | "insert";
@@ -874,8 +874,8 @@ class VimEditor extends CustomEditor {
   }
 }
 
-export default function (pi: ExtensionAPI) {
-  pi.on("session_start", (_event, ctx) => {
+export default function (pizza: ExtensionAPI) {
+  pizza.on("session_start", (_event, ctx) => {
     // Factory receives theme and keybindings from the app
     ctx.ui.setEditorComponent((tui, theme, keybindings) =>
       new VimEditor(theme, keybindings)

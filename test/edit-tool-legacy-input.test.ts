@@ -8,7 +8,7 @@ import { createEditToolDefinition } from "../src/core/tools/edit.js";
 const tempDirs: string[] = [];
 
 async function createTempDir(): Promise<string> {
-	const dir = await mkdtemp(join(tmpdir(), "pi-edit-legacy-input-"));
+	const dir = await mkdtemp(join(tmpdir(), "pizza-edit-legacy-input-"));
 	tempDirs.push(dir);
 	return dir;
 }

@@ -7,10 +7,10 @@
  * createSessionFacade() applies that cwd when it builds the actual built-in tools.
  *
  * For custom tools, see 06-extensions.ts - custom tools are registered via the
- * extensions system using pi.registerTool().
+ * extensions system using pizza.registerTool().
  */
 
-import { createSessionFacade } from "@mariozechner/pi-coding-agent";
+import { createSessionFacade } from "pizza";
 
 // Read-only mode (no edit/write)
 await createSessionFacade({

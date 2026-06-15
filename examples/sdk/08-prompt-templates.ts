@@ -10,7 +10,7 @@ import {
 	DefaultResourceLoader,
 	getAgentDir,
 	type PromptTemplate,
-} from "@mariozechner/pi-coding-agent";
+} from "pizza";
 
 // Define custom templates
 const deployTemplate: PromptTemplate = {

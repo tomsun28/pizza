@@ -11,21 +11,37 @@ import type { IntentClassification, IntentCategory, IntentRisk } from "./types.j
 // ============================================================================
 
 export interface ClassifierConfig {
-	/** Auto-approve file writes */
-	approve_writes: boolean;
-	/** Auto-approve file edits */
-	approve_edits: boolean;
-	/** Auto-approve moderate shell commands */
-	approve_shell_moderate: boolean;
-	/** Require approval for unknown tools */
-	approve_unknown: boolean;
+	/** Require user approval before file writes. */
+	require_approval_writes?: boolean;
+	/** Require user approval before file edits. */
+	require_approval_edits?: boolean;
+	/** Require user approval before moderate shell commands. */
+	require_approval_shell_moderate?: boolean;
+	/** Require user approval before unknown tools. */
+	require_approval_unknown?: boolean;
+
+	/** @deprecated Use require_approval_writes. Historical alias. */
+	approve_writes?: boolean;
+	/** @deprecated Use require_approval_edits. Historical alias. */
+	approve_edits?: boolean;
+	/** @deprecated Use require_approval_shell_moderate. Historical alias. */
+	approve_shell_moderate?: boolean;
+	/** @deprecated Use require_approval_unknown. Historical alias. */
+	approve_unknown?: boolean;
 }
 
-const DEFAULT_CLASSIFIER_CONFIG: ClassifierConfig = {
-	approve_writes: false,
-	approve_edits: false,
-	approve_shell_moderate: false,
-	approve_unknown: true,
+interface ResolvedClassifierConfig {
+	require_approval_writes: boolean;
+	require_approval_edits: boolean;
+	require_approval_shell_moderate: boolean;
+	require_approval_unknown: boolean;
+}
+
+const DEFAULT_CLASSIFIER_CONFIG: ResolvedClassifierConfig = {
+	require_approval_writes: true,
+	require_approval_edits: true,
+	require_approval_shell_moderate: false,
+	require_approval_unknown: true,
 };
 
 // ============================================================================
@@ -37,11 +53,16 @@ const DEFAULT_CLASSIFIER_CONFIG: ClassifierConfig = {
  *
  * Default policy:
  * - file_read, shell_safe: auto-approve
- * - file_write, shell_moderate, network: auto-approve (configurable)
+ * - file_write, network, unknown: require approval (configurable)
+ * - shell_moderate: auto-approve by default (configurable)
  * - file_delete, shell_dangerous: always require approval
  */
 export class IntentClassifier {
-	constructor(private config: ClassifierConfig = DEFAULT_CLASSIFIER_CONFIG) {}
+	private config: ResolvedClassifierConfig;
+
+	constructor(config: ClassifierConfig = {}) {
+		this.config = resolveClassifierConfig(config);
+	}
 
 	/**
 	 * Classify a tool call by name and arguments.
@@ -64,7 +85,7 @@ export class IntentClassifier {
 			case "write":
 				return {
 					risk: "moderate",
-					requires_approval: this.config.approve_writes,
+					requires_approval: this.config.require_approval_writes,
 					category: "file_write",
 					affected_files: [String(args.path)],
 					description: `Write to ${args.path}`,
@@ -74,7 +95,7 @@ export class IntentClassifier {
 			case "edit_diff":
 				return {
 					risk: "moderate",
-					requires_approval: this.config.approve_edits,
+					requires_approval: this.config.require_approval_edits,
 					category: "file_write",
 					affected_files: [String(args.path)],
 					description: `Edit ${args.path}`,
@@ -97,7 +118,7 @@ export class IntentClassifier {
 			default:
 				return {
 					risk: "moderate",
-					requires_approval: this.config.approve_unknown,
+					requires_approval: this.config.require_approval_unknown,
 					category: "unknown",
 					description: `Execute ${toolName}`,
 				};
@@ -109,6 +130,36 @@ export class IntentClassifier {
 	 */
 	private _classifyBashCommand(command: string): IntentClassification {
 		const trimmed = command.trim();
+		const builtin = parseBuiltinInvocation(trimmed);
+		if (builtin) {
+			if (builtin.command === "read") {
+				return {
+					risk: "safe",
+					requires_approval: false,
+					category: "file_read",
+					affected_files: builtin.path ? [builtin.path] : undefined,
+					description: `Read ${builtin.path ?? ""}`,
+				};
+			}
+			if (builtin.command === "write") {
+				return {
+					risk: "moderate",
+					requires_approval: this.config.require_approval_writes,
+					category: "file_write",
+					affected_files: builtin.path ? [builtin.path] : undefined,
+					description: `Write to ${builtin.path ?? ""}`,
+				};
+			}
+			if (builtin.command === "edit") {
+				return {
+					risk: "moderate",
+					requires_approval: this.config.require_approval_edits,
+					category: "file_write",
+					affected_files: builtin.path ? [builtin.path] : undefined,
+					description: `Edit ${builtin.path ?? ""}`,
+				};
+			}
+		}
 
 		// Dangerous patterns
 		const dangerousPatterns: Array<{ pattern: RegExp; description: string }> = [
@@ -135,6 +186,17 @@ export class IntentClassifier {
 			}
 		}
 
+		const redirectedPath = getNonNullRedirectPath(trimmed);
+		if (redirectedPath) {
+			return {
+				risk: "moderate",
+				requires_approval: this.config.require_approval_writes,
+				category: "file_write",
+				affected_files: [redirectedPath],
+				description: `Shell redirection to ${redirectedPath}`,
+			};
+		}
+
 		// Safe patterns
 		const safePatterns: RegExp[] = [
 			/^(echo|cat|pwd|ls|find|grep|head|tail|wc|date|whoami|id|uname)\b/,
@@ -145,8 +207,9 @@ export class IntentClassifier {
 			/^docker\s+(ps|images|logs)\b/,
 		];
 
-		for (const pattern of safePatterns) {
-			if (pattern.test(trimmed)) {
+		if (isSingleSafeShellCommand(trimmed)) {
+			for (const pattern of safePatterns) {
+				if (!pattern.test(trimmed)) continue;
 				return {
 					risk: "safe",
 					requires_approval: false,
@@ -159,7 +222,7 @@ export class IntentClassifier {
 		// Moderate (default for shell)
 		return {
 			risk: "moderate",
-			requires_approval: this.config.approve_shell_moderate,
+			requires_approval: this.config.require_approval_shell_moderate,
 			category: "shell_moderate",
 			description: trimmed.length > 50 ? trimmed.slice(0, 50) + "..." : trimmed,
 		};
@@ -212,7 +275,7 @@ export class IntentClassifier {
 			case "file_write":
 				return {
 					risk: "moderate",
-					requires_approval: this.config.approve_writes,
+					requires_approval: this.config.require_approval_writes,
 					category,
 					affected_files: [String(args.path)],
 					description: `Write to ${args.path}`,
@@ -234,7 +297,7 @@ export class IntentClassifier {
 			case "shell_moderate":
 				return {
 					risk: "moderate",
-					requires_approval: this.config.approve_shell_moderate,
+					requires_approval: this.config.require_approval_shell_moderate,
 					category,
 					description: toolName,
 				};
@@ -248,17 +311,110 @@ export class IntentClassifier {
 			case "network":
 				return {
 					risk: "moderate",
-					requires_approval: this.config.approve_unknown,
+					requires_approval: this.config.require_approval_unknown,
 					category,
 					description: `Network: ${args.url ?? toolName}`,
 				};
 			case "unknown":
 				return {
 					risk: "moderate",
-					requires_approval: this.config.approve_unknown,
+					requires_approval: this.config.require_approval_unknown,
 					category,
 					description: toolName,
 				};
 		}
 	}
+}
+
+function resolveClassifierConfig(config: ClassifierConfig): ResolvedClassifierConfig {
+	return {
+		require_approval_writes:
+			config.require_approval_writes ?? config.approve_writes ?? DEFAULT_CLASSIFIER_CONFIG.require_approval_writes,
+		require_approval_edits:
+			config.require_approval_edits ?? config.approve_edits ?? DEFAULT_CLASSIFIER_CONFIG.require_approval_edits,
+		require_approval_shell_moderate:
+			config.require_approval_shell_moderate ??
+			config.approve_shell_moderate ??
+			DEFAULT_CLASSIFIER_CONFIG.require_approval_shell_moderate,
+		require_approval_unknown:
+			config.require_approval_unknown ?? config.approve_unknown ?? DEFAULT_CLASSIFIER_CONFIG.require_approval_unknown,
+	};
+}
+
+function parseBuiltinInvocation(command: string): { command: "read" | "write" | "edit"; path?: string } | undefined {
+	const firstLine = command.split("\n", 1)[0]?.trim() ?? "";
+	const parts = splitShellWords(firstLine);
+	const builtin = parts[0]?.toLowerCase();
+	if (builtin !== "read" && builtin !== "write" && builtin !== "edit") return undefined;
+
+	let path: string | undefined;
+	for (let i = 1; i < parts.length; i++) {
+		const arg = parts[i]!;
+		if ((arg === "--path" || arg === "-p") && parts[i + 1]) {
+			path = parts[i + 1];
+			break;
+		}
+		if (!arg.startsWith("-") && !path) {
+			path = arg;
+			break;
+		}
+	}
+
+	return { command: builtin, path };
+}
+
+function splitShellWords(input: string): string[] {
+	const words: string[] = [];
+	let current = "";
+	let quote: "'" | "\"" | undefined;
+	let escaped = false;
+
+	for (const char of input) {
+		if (escaped) {
+			current += char;
+			escaped = false;
+			continue;
+		}
+		if (char === "\\") {
+			escaped = true;
+			continue;
+		}
+		if (quote) {
+			if (char === quote) {
+				quote = undefined;
+			} else {
+				current += char;
+			}
+			continue;
+		}
+		if (char === "'" || char === "\"") {
+			quote = char;
+			continue;
+		}
+		if (/\s/.test(char)) {
+			if (current) {
+				words.push(current);
+				current = "";
+			}
+			continue;
+		}
+		current += char;
+	}
+	if (current) words.push(current);
+	return words;
+}
+
+function getNonNullRedirectPath(command: string): string | undefined {
+	const matches = command.matchAll(/(?:^|[\s;|&])(?:\d*)>>?\s*(['"]?)([^'"\s;&|]+)\1/g);
+	for (const match of matches) {
+		const path = match[2];
+		if (!path || path === "/dev/null") continue;
+		return path;
+	}
+	return undefined;
+}
+
+function isSingleSafeShellCommand(command: string): boolean {
+	const withoutNullRedirects = command.replace(/\s+\d*>\/dev\/null\b/g, "");
+	return !/[|;&<>`$()]/.test(withoutNullRedirects);
 }

@@ -28,7 +28,7 @@ import { executeBuiltinCommand, BUILTIN_COMMANDS, parseBuiltinCommandWithHeredoc
  */
 function getTempFilePath(): string {
 	const id = randomBytes(8).toString("hex");
-	return join(tmpdir(), `pi-bash-${id}.log`);
+	return join(tmpdir(), `pizza-bash-${id}.log`);
 }
 
 const bashSchema = Type.Object({
@@ -68,9 +68,9 @@ export interface BashOperations {
 }
 
 /**
- * Create bash operations using pi's built-in local shell execution backend.
+ * Create bash operations using Pizza's built-in local shell execution backend.
  *
- * This is useful for extensions that intercept user_bash and still want pi's
+ * This is useful for extensions that intercept user_bash and still want Pizza's
  * standard local shell behavior while wrapping or rewriting commands.
  */
 export function createLocalBashOperations(options?: { shellPath?: string }): BashOperations {

@@ -1,6 +1,6 @@
 # Compaction & Branch Summarization
 
-LLMs have limited context windows. When conversations grow too long, pi uses compaction to summarize older content while preserving recent work. This page covers both auto-compaction and branch summarization.
+LLMs have limited context windows. When conversations grow too long, Pizza uses compaction to summarize older content while preserving recent work. This page covers both auto-compaction and branch summarization.
 
 **Source files** ([pi-mono](https://github.com/badlogic/pi-mono)):
 - [`packages/coding-agent/src/core/compaction/compaction.ts`](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/core/compaction/compaction.ts) - Auto-compaction logic
@@ -9,7 +9,7 @@ LLMs have limited context windows. When conversations grow too long, pi uses com
 - [`packages/coding-agent/src/core/session-manager.ts`](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/core/session-manager.ts) - Entry types (`CompactionEntry`, `BranchSummaryEntry`)
 - [`packages/coding-agent/src/core/extensions/types.ts`](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/core/extensions/types.ts) - Extension event types
 
-For TypeScript definitions in your project, inspect `node_modules/@mariozechner/pi-coding-agent/dist/`.
+For TypeScript definitions in your project, inspect `node_modules/pizza/dist/`.
 
 ## Overview
 
@@ -102,7 +102,7 @@ Split turn (one huge turn exceeds budget):
   turnPrefixMessages = [usr, ass, tool, ass, tool, tool]
 ```
 
-For split turns, pi generates two summaries and merges them:
+For split turns, Pizza generates two summaries and merges them:
 1. **History summary**: Previous context (if any)
 2. **Turn prefix summary**: The early part of the split turn
 
@@ -148,7 +148,7 @@ See [`prepareCompaction()`](https://github.com/badlogic/pi-mono/blob/main/packag
 
 ### When It Triggers
 
-When you use `/tree` to navigate to a different branch, pi offers to summarize the work you're leaving. This injects context from the left branch into the new branch.
+When you use `/tree` to navigate to a different branch, Pizza offers to summarize the work you're leaving. This injects context from the left branch into the new branch.
 
 ### How It Works
 
@@ -177,7 +177,7 @@ After navigation with summary:
 
 ### Cumulative File Tracking
 
-Both compaction and branch summarization track files cumulatively. When generating a summary, pi extracts file operations from:
+Both compaction and branch summarization track files cumulatively. When generating a summary, Pizza extracts file operations from:
 - Tool calls in the messages being summarized
 - Previous compaction or branch summary `details` (if any)
 
@@ -275,7 +275,7 @@ Extensions can intercept and customize both compaction and branch summarization.
 Fired before auto-compaction or `/compact`. Can cancel or provide custom summary. See `SessionBeforeCompactEvent` and `CompactionPreparation` in the types file.
 
 ```typescript
-pi.on("session_before_compact", async (event, ctx) => {
+pizza.on("session_before_compact", async (event, ctx) => {
   const { preparation, branchEntries, customInstructions, signal } = event;
 
   // preparation.messagesToSummarize - messages to summarize
@@ -309,9 +309,9 @@ pi.on("session_before_compact", async (event, ctx) => {
 To generate a summary with your own model, convert messages to text using `serializeConversation`:
 
 ```typescript
-import { convertToLlm, serializeConversation } from "@mariozechner/pi-coding-agent";
+import { convertToLlm, serializeConversation } from "pizza";
 
-pi.on("session_before_compact", async (event, ctx) => {
+pizza.on("session_before_compact", async (event, ctx) => {
   const { preparation } = event;
   
   // Convert AgentMessage[] to Message[], then serialize to text
@@ -345,7 +345,7 @@ See [custom-compaction.ts](../examples/extensions/custom-compaction.ts) for a co
 Fired before `/tree` navigation. Always fires regardless of whether user chose to summarize. Can cancel navigation or provide custom summary.
 
 ```typescript
-pi.on("session_before_tree", async (event, ctx) => {
+pizza.on("session_before_tree", async (event, ctx) => {
   const { preparation, signal } = event;
 
   // preparation.targetId - where we're navigating to

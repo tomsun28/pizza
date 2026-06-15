@@ -564,7 +564,13 @@ export async function createSessionFacade(
 		systemPrompt,
 		model: toModelConfig(model ?? ({ provider: "none", id: "none" } as Model<any>), thinkingLevel),
 		tools: activeToolDefinitions.map(toRuntimeToolDefinition),
-		classifierConfig: { approve_unknown: false },
+		// The default facade currently has no approval UI handler, so keep coding tools usable.
+		// Direct runtime/classifier consumers get the stricter defaults unless they opt out.
+		classifierConfig: {
+			require_approval_writes: false,
+			require_approval_edits: false,
+			require_approval_unknown: false,
+		},
 		retryAssistantErrorCompletions: true,
 		retryPolicy: new DefaultRetryPolicy({ capDelayMs: settingsManager.getRetrySettings().maxDelayMs }),
 		contextBudget: options.contextBudget ?? model?.contextWindow ?? 128000,

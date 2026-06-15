@@ -4,7 +4,7 @@
  * Context files provide project-specific instructions loaded into the system prompt.
  */
 
-import { createSessionFacade, DefaultResourceLoader, getAgentDir } from "@mariozechner/pi-coding-agent";
+import { createSessionFacade, DefaultResourceLoader, getAgentDir } from "pizza";
 
 // Disable context files entirely by returning an empty list in agentsFilesOverride.
 const loader = new DefaultResourceLoader({

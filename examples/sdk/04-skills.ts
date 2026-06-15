@@ -11,7 +11,7 @@ import {
 	DefaultResourceLoader,
 	getAgentDir,
 	type Skill,
-} from "@mariozechner/pi-coding-agent";
+} from "pizza";
 
 // Or define custom skills inline
 const customSkill: Skill = {

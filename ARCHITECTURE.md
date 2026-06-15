@@ -1,12 +1,12 @@
 # Pizza 架构
 
-最后更新：2026-06-11
+最后更新：2026-06-15
 
 ---
 
 ## 1. 架构总览
 
-Pizza 是一个纯事件驱动的 coding agent。EventStore (SQLite) 是唯一的真相来源，Reactor 以 handler 表驱动 agent turn 循环，所有可观测状态从事件流投影得出。
+Pizza 是一个事件驱动的 coding agent。EventStore (SQLite) 是持久、可观测状态的事实来源，Reactor 以 handler 表驱动 agent turn 循环，UI/上下文等可重建状态从事件流投影得出。Reactor 仍保留短生命周期的协调状态（如工具 join、follow-up、retry timer），这些状态必须能由事件流解释或在中断后安全放弃。
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -25,7 +25,7 @@ Pizza 是一个纯事件驱动的 coding agent。EventStore (SQLite) 是唯一�
 │                          │ ModeEvent                         │
 │  ┌───────────────────────▼────────────────────┐              │
 │  │  ModeEventMapper                           │              │
-│  │  TypedEvent → ModeEvent (19 种 UI 动作)    │              │
+│  │  TypedEvent → ModeEvent (17 种 UI 动作)    │              │
 │  └───────────────────────┬────────────────────┘              │
 ├──────────────────────────┼───────────────────────────────────┤
 │  SessionFacade (轻量门面) │                                   │
@@ -38,7 +38,7 @@ Pizza 是一个纯事件驱动的 coding agent。EventStore (SQLite) 是唯一�
 │  ├ 持有 Reactor（turn 循环引擎）                              │
 │  ├ 持有 SessionProjection（上下文构建）                       │
 │  ├ 持有 SessionManager（会话描述管理）                        │
-│  ├ 持有 IntentExecutor + Classifier                          │
+│  ├ 持有 Classifier + ApprovalHandler（Reactor 内联分类与审批）│
 │  └ 持有 CompactionEngine                                     │
 ├──────────────────────────────────────────────────────────────┤
 │           ┌─────────────┼──────────────┐                     │
@@ -55,7 +55,7 @@ Pizza 是一个纯事件驱动的 coding agent。EventStore (SQLite) 是唯一�
 
 ### 设计原则
 
-1. **EventStore 是唯一真相来源** — 所有状态从事件流投影得出
+1. **EventStore 是持久事实来源** — UI、LLM 上下文、session/timeline 等可观测状态从事件流投影得出
 2. **Reactor 是唯一执行引擎** — handler 表驱动一切，无 while-loop
 3. **Projection 替代命令式状态** — 不存在 `state.messages` 数组
 4. **零 adapter 层** — 消费方直接订阅 TypedEvent
@@ -75,7 +75,7 @@ USER_MESSAGE
 [_onAgentTurnRequested] → buildContext() → AGENT_TURN_START → LLM_CALL_REQUESTED
     │
     ▼
-[_onLlmCallRequested] → AGENT_MESSAGE_START → await LLM → AGENT_MESSAGE_CHUNK* → AGENT_MESSAGE_END
+[_onLlmCallRequested] → AGENT_MESSAGE_START → await LLM → AGENT_MESSAGE_CHUNK* → AGENT_MESSAGE_END → AGENT_THINKING_END
     │
     ▼
 [_onAgentMessageEnd]
@@ -94,8 +94,9 @@ USER_MESSAGE
          │
          ▼
     [_onAgentTurnCompleted]
+         ├─ abortedByUser? → 清空 followUpQueue → idle
+         ├─ error+retryable? → RETRY_SCHEDULED → 延时后重新进入 AGENT_TURN_REQUESTED
          ├─ followUpQueue? → USER_MESSAGE ──→ 循环回顶部
-         ├─ error? → RETRY_SCHEDULED → 延时后重新进入 AGENT_TURN_REQUESTED
          ├─ compaction needed? → COMPACTION_REQUESTED
          └─ idle → reactor settles，prompt() Promise resolve
 ```
@@ -110,35 +111,37 @@ Append-only 事件存储，按 workspace 分库。
 
 | 文件 | 行数 | 用途 |
 |---|---|---|
-| `types.ts` | 173 | EventBase、EventType（53 种事件类型）、支持类型 |
+| `types.ts` | 173 | EventBase、EventType（65 种事件类型）、支持类型 |
 | `events.ts` | 583 | 每种事件的具体 payload 接口 |
 | `store.ts` | 117 | EventStore 接口（append/subscribe/query/getCausalChain） |
 | `sqlite-store.ts` | 330 | SQLite 实现，UUIDv7 event_id，同步通知 subscriber |
 | `workspace.ts` | 85 | workspace ID 推导、路径计算 |
 
-**事件类型分类（53 种）**：
+**事件类型分类（65 种）**：
 
 | 类别 | 事件 |
 |---|---|
 | 用户 (6) | USER_MESSAGE, USER_APPROVAL, USER_REJECTION, USER_INTERRUPT, USER_FOLLOWUP_QUEUED, USER_CONFIG_CHANGE |
 | Agent (8) | AGENT_THINKING_START/END, AGENT_MESSAGE_START/CHUNK/END, AGENT_TURN_START/END, AGENT_ERROR |
 | Intent (3) | INTENT_TOOL_CALL, INTENT_FILE_EDIT, INTENT_COMMAND_EXEC |
-| 执行 (7) | TOOL_EXECUTION_START/UPDATE/END, FILE_MUTATION_APPLIED, BASH_EXECUTION, CUSTOM_MESSAGE, BRANCH_SUMMARY |
+| 执行 (8) | TOOL_EXECUTION_START/UPDATE/END, FILE_MUTATION_APPLIED, BASH_EXECUTION, CUSTOM_MESSAGE, BRANCH_SUMMARY, COMMAND_EXECUTED |
 | 会话 (4) | SESSION_CREATED, SESSION_BOUNDARY_INFERRED, SESSION_FORKED, SESSION_ENTRY_APPENDED |
 | Compaction (4) | COMPACTION_REQUESTED/START/END/ABORTED |
-| 运行时 (10+) | RUNTIME_STARTED/PAUSED/RESUMED, MODEL_CHANGED, THINKING_LEVEL_CHANGED, RUNTIME_ERROR, CHECKPOINT_*, RETRY_* |
-| Goal/Task (13) | GOAL_CREATED..CANCELLED, TASK_CREATED..CANCELLED |
+| Reactor 控制 (7) | AGENT_TURN_REQUESTED, AGENT_TURN_COMPLETED, LLM_CALL_REQUESTED, LLM_CALL_FAILED, TOOL_RESULTS_AGGREGATED, RETRY_SCHEDULED, RETRY_ABORTED |
+| 运行时 (9) | RUNTIME_STARTED/PAUSED/RESUMED, CHECKPOINT_CREATED/RESTORED/FAILED, MODEL_CHANGED, THINKING_LEVEL_CHANGED, RUNTIME_ERROR |
+| Goal (7) | GOAL_CREATED, GOAL_CLASSIFIED, GOAL_PLANNED, GOAL_PAUSED, GOAL_RESUMED, GOAL_COMPLETED, GOAL_CANCELLED |
+| Task (9) | TASK_CREATED, TASK_ASSIGNED, TASK_STARTED, TASK_PROGRESS, TASK_COMPLETED, TASK_FAILED, TASK_REWORK_REQUESTED, TASK_ACCEPTED, TASK_CANCELLED |
 
 ### 3.2 Reactor (`src/core/runtime/reactor.ts`, 1117 行)
 
 事件驱动 turn 循环引擎。14 个 handler 函数替代传统 while-loop。
 
 **关键机制**：
-- **TurnTracker** — join-pattern，追踪并行工具执行，所有工具完成后才发 TOOL_RESULTS_AGGREGATED
+- **TurnTracker** — 短生命周期 join-pattern，追踪并行工具执行，所有工具完成后才发 TOOL_RESULTS_AGGREGATED
 - **followUpQueue** — 跟进消息队列，turn 完成后自动 drain
 - **retryTimers** — 重试计时器，支持指数退避和用户取消
 - **因果链遍历** — 通过 `store.getCausalChain()` 追溯重试次数、定位 assistant message
-- **并发 guard** — `_isProcessing` 防止并发 prompt，steer/followUp 是唯一允许的排队操作
+- **并发 guard** — `EventSourcedRuntime._isProcessing` 防止并发 prompt，steer/followUp 是唯一允许的排队操作
 
 ### 3.3 EventSourcedRuntime (`src/core/runtime/runtime.ts`, 589 行)
 
@@ -172,12 +175,17 @@ Append-only 事件存储，按 workspace 分库。
 
 ### 3.5 IntentSystem (`src/core/intent/`)
 
-工具执行的安全门。
+工具分类与执行的安全门。
+
+> **注意**：Reactor 已将 classify → approval → execute 逻辑内联到 `_onIntentToolCall` handler 中，
+> 工具执行实际走 `Reactor → classifier → approvalHandler → RuntimeAdapter.executeTool() → ToolRegistry → tool.execute()`。
+> `IntentExecutor` 是遗留的并行实现（`runtime.ts` 注释标注 "legacy direct execution path"），Reactor 路径不经过它。
+> `IntentClassifier` 和 `ApprovalHandler` 在两条路径间共享。
 
 | 文件 | 行数 | 用途 |
 |---|---|---|
 | `classifier.ts` | 264 | 按工具名/参数分类风险等级（file_read→file_delete, shell_safe→shell_dangerous） |
-| `executor.ts` | 326 | 唯一授权执行变更的组件，审批门 → 执行 → 记录文件变更 |
+| `executor.ts` | 326 | 遗留执行路径，内含审批门 → 执行 → 记录文件变更（Reactor 已内联等效逻辑） |
 | `tool-adapter.ts` | 180 | AgentTool 桥接到 ToolExecutor 接口 |
 
 ### 3.6 SessionFacade (`src/core/session-facade.ts`, 141 行)
@@ -224,13 +232,13 @@ JSON-RPC over stdio。支持 prompt/abort/compact/bash/export_html 等命令。
 
 ### 4.4 ModeEventMapper (`src/modes/event-mapper.ts`, 248 行)
 
-TypedEvent → 19 种 ModeEvent 的映射层，替代旧的 AgentEvent switch-case。
+TypedEvent → 17 种 ModeEvent 的映射层，替代旧的 AgentEvent switch-case。
 
 ---
 
 ## 5. 工具系统 (`src/core/tools/`)
 
-6 个内置工具定义，每个包含 LLM schema + 执行逻辑：
+7 个内置工具定义，每个包含 LLM schema + 执行逻辑：
 
 | 工具 | 文件 | 行数 |
 |---|---|---|
@@ -242,7 +250,7 @@ TypedEvent → 19 种 ModeEvent 的映射层，替代旧的 AgentEvent switch-ca
 | read | `read.ts` | 273 |
 | write | `write.ts` | 281 |
 
-通过 `createToolRegistry()` 注册到 IntentExecutor。
+通过 `createToolRegistry()` 注册到 Reactor（经 RuntimeAdapter 执行）。
 
 ---
 
@@ -271,7 +279,7 @@ TypedEvent → 19 种 ModeEvent 的映射层，替代旧的 AgentEvent switch-ca
 | `src/core/event-store/events.ts` | 事件 payload 定义 |
 | `src/core/projection/session-projection.ts` | LLM 上下文构建 |
 | `src/core/projection/event-to-message.ts` | 事件 → 消息转换 |
-| `src/core/intent/executor.ts` | IntentExecutor（唯一变更执行器） |
+| `src/core/intent/executor.ts` | IntentExecutor（遗留执行路径，Reactor 已内联等效逻辑） |
 | `src/core/compaction/compaction-engine.ts` | CompactionEngine |
 | `src/core/extensions/runner.ts` | ExtensionRunner |
 | `src/modes/event-mapper.ts` | TypedEvent → ModeEvent 映射 |

@@ -24,7 +24,7 @@ npm test                          # Run all tests (offline mode)
 npm test -- test/specific.test.ts # Run specific test
 ```
 
-Tests run with `PI_OFFLINE=1` by default (no API keys needed). Use `npm run test:online` for tests requiring network.
+Tests run with `PIZZA_OFFLINE=1` by default (no API keys needed). Use `npm run test:online` for tests requiring network.
 
 ## Project Structure
 
@@ -86,7 +86,7 @@ Configure via `package.json`:
 
 ```json
 {
-  "piConfig": {
+  "pizzaConfig": {
     "name": "pizza",
     "configDir": ".pizza"
   }

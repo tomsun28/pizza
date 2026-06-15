@@ -1,5 +1,5 @@
 import type { EventBase } from "../event-store/types.js";
-import type { ToolExecutionResult } from "../intent/types.js";
+import type { ToolExecutionResult, ToolExecutionUpdate } from "../intent/types.js";
 
 export type RuntimeKind = "local" | "cloud" | "container";
 
@@ -8,6 +8,8 @@ export interface ToolExecutionRequest {
 	tool_name: string;
 	arguments: Record<string, unknown>;
 	caused_by?: string;
+	signal?: AbortSignal;
+	onUpdate?: (partial: ToolExecutionUpdate) => void;
 }
 
 export interface CheckpointRequest {

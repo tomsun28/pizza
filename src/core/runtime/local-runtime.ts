@@ -43,7 +43,11 @@ export class LocalRuntimeAdapter implements RuntimeAdapter {
 
 		this.status = "running";
 		try {
-			return await tool.execute(request.arguments);
+			return await tool.execute(request.arguments, {
+				tool_call_id: request.tool_call_id,
+				signal: request.signal,
+				onUpdate: request.onUpdate,
+			});
 		} finally {
 			this.status = "idle";
 		}

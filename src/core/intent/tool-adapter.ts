@@ -5,13 +5,13 @@
  * interface used by the event-sourced runtime.
  *
  * Key responsibilities:
- * - Convert AgentTool.execute(toolCallId, params, signal, onUpdate) → ToolExecutor.execute(args)
+ * - Convert AgentTool.execute(toolCallId, params, signal, onUpdate) → ToolExecutor.execute(args, options)
  * - Detect file mutations from tool results and populate file_mutations
  * - Build a ToolRegistry from an array of AgentTools
  */
 
 import type { AgentTool } from "../agent/types.js";
-import type { IntentCategory, IntentRisk, ToolExecutionResult, ToolExecutor, ToolMetadata, ToolRegistry } from "./types.js";
+import type { IntentCategory, IntentRisk, ToolExecutionOptions, ToolExecutionResult, ToolExecutor, ToolMetadata, ToolRegistry } from "./types.js";
 import type { FileMutation } from "../event-store/types.js";
 
 // ============================================================================
@@ -114,15 +114,13 @@ export class AgentToolAdapter implements ToolExecutor {
 		};
 	}
 
-	async execute(args: Record<string, unknown>): Promise<ToolExecutionResult> {
-		// Generate a synthetic tool_call_id (the new runtime tracks these at a higher level)
-		const toolCallId = `tc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-
+	async execute(args: Record<string, unknown>, options?: ToolExecutionOptions): Promise<ToolExecutionResult> {
+		const toolCallId = options?.tool_call_id ?? `tc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 		// Prepare arguments if the tool has a prepareArguments hook
 		const prepared = this.tool.prepareArguments ? this.tool.prepareArguments(args) : args;
 
 		try {
-			const result = await this.tool.execute(toolCallId, prepared);
+			const result = await this.tool.execute(toolCallId, prepared, options?.signal, options?.onUpdate);
 
 			const executionResult: ToolExecutionResult = {
 				content: result.content.map((block) => ({ ...block })),

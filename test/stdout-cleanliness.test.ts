@@ -17,7 +17,7 @@ afterEach(() => {
 });
 
 function createTempDir(): string {
-	const dir = mkdtempSync(join(tmpdir(), "pi-stdout-clean-"));
+	const dir = mkdtempSync(join(tmpdir(), "pizza-stdout-clean-"));
 	tempDirs.push(dir);
 	return dir;
 }
@@ -86,7 +86,7 @@ describe("stdout cleanliness in non-interactive modes", () => {
 		expect(result.code).toBe(0);
 		expect(result.stdout).toBe("");
 		// In offline mode, npm install is skipped
-		if (!process.env.PI_OFFLINE) {
+		if (!process.env.PIZZA_OFFLINE) {
 			expect(result.stderr).toContain("changed 1 package in 471ms");
 			expect(result.stderr).toContain("found 0 vulnerabilities");
 		}
@@ -99,7 +99,7 @@ describe("stdout cleanliness in non-interactive modes", () => {
 		expect(result.code).toBe(0);
 		expect(result.stdout).toBe("");
 		// In offline mode, npm install is skipped
-		if (!process.env.PI_OFFLINE) {
+		if (!process.env.PIZZA_OFFLINE) {
 			expect(result.stderr).toContain("changed 1 package in 471ms");
 			expect(result.stderr).toContain("found 0 vulnerabilities");
 		}

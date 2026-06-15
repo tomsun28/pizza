@@ -5,12 +5,12 @@
  * Uses device code flow with PKCE for secure browser-based authentication.
  *
  * Usage:
- *   pi -e ./packages/coding-agent/examples/extensions/custom-provider-qwen-cli
+ *   pizza -e ./packages/coding-agent/examples/extensions/custom-provider-qwen-cli
  *   # Then /login qwen-cli, or set QWEN_CLI_API_KEY=...
  */
 
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@mariozechner/pi-ai";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "pizza";
 
 // =============================================================================
 // Constants
@@ -294,8 +294,8 @@ function getQwenBaseUrl(resourceUrl?: string): string {
 // Extension Entry Point
 // =============================================================================
 
-export default function (pi: ExtensionAPI) {
-	pi.registerProvider("qwen-cli", {
+export default function (pizza: ExtensionAPI) {
+	pizza.registerProvider("qwen-cli", {
 		baseUrl: QWEN_DEFAULT_BASE_URL,
 		apiKey: "QWEN_CLI_API_KEY",
 		api: "openai-completions",

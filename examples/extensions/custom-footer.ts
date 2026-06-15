@@ -9,13 +9,13 @@
  */
 
 import type { AssistantMessage } from "@mariozechner/pi-ai";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "pizza";
 import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 
-export default function (pi: ExtensionAPI) {
+export default function (pizza: ExtensionAPI) {
 	let enabled = false;
 
-	pi.registerCommand("footer", {
+	pizza.registerCommand("footer", {
 		description: "Toggle custom footer",
 		handler: async (_args, ctx) => {
 			enabled = !enabled;

@@ -4,7 +4,7 @@
  * Override settings using SettingsManager.
  */
 
-import { createSessionFacade, SettingsManager } from "@mariozechner/pi-coding-agent";
+import { createSessionFacade, SettingsManager } from "pizza";
 
 const cwd = process.cwd();
 

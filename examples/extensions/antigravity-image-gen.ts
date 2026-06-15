@@ -13,11 +13,11 @@
  *   save=none     - Don't save to disk (default)
  *   save=project  - Save to <repo>//.pizza/generated-images/
  *   save=global   - Save to ~/.pizza/agent/generated-images/
- *   save=custom   - Save to saveDir param or PI_IMAGE_SAVE_DIR
+ *   save=custom   - Save to saveDir param or PIZZA_IMAGE_SAVE_DIR
  *
  * Environment variables:
- *   PI_IMAGE_SAVE_MODE  - Default save mode (none|project|global|custom)
- *   PI_IMAGE_SAVE_DIR   - Directory for custom save mode
+ *   PIZZA_IMAGE_SAVE_MODE  - Default save mode (none|project|global|custom)
+ *   PIZZA_IMAGE_SAVE_DIR   - Directory for custom save mode
  *
  * Config files (project overrides global):
  *   ~/.pizza/agent/extensions/antigravity-image-gen.json
@@ -30,7 +30,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { StringEnum } from "@mariozechner/pi-ai";
-import { type ExtensionAPI, getAgentDir, withFileMutationQueue } from "@mariozechner/pi-coding-agent";
+import { type ExtensionAPI, getAgentDir, withFileMutationQueue } from "pizza";
 import { type Static, Type } from "@sinclair/typebox";
 
 const PROVIDER = "google-antigravity";
@@ -51,7 +51,7 @@ const ANTIGRAVITY_ENDPOINT = "https://daily-cloudcode-pa.sandbox.googleapis.com"
 const DEFAULT_ANTIGRAVITY_VERSION = "1.21.9";
 
 const ANTIGRAVITY_HEADERS = {
-	"User-Agent": `antigravity/${process.env.PI_AI_ANTIGRAVITY_VERSION || DEFAULT_ANTIGRAVITY_VERSION} darwin/arm64`,
+	"User-Agent": `antigravity/${process.env.PIZZA_AI_ANTIGRAVITY_VERSION || process.env.PI_AI_ANTIGRAVITY_VERSION || DEFAULT_ANTIGRAVITY_VERSION} darwin/arm64`,
 	"X-Goog-Api-Client": "google-cloud-sdk vscode_cloudshelleditor/0.1",
 	"Client-Metadata": JSON.stringify({
 		ideType: "IDE_UNSPECIFIED",
@@ -74,7 +74,7 @@ const TOOL_PARAMS = Type.Object({
 	save: Type.Optional(StringEnum(SAVE_MODES)),
 	saveDir: Type.Optional(
 		Type.String({
-			description: "Directory to save image when save=custom. Defaults to PI_IMAGE_SAVE_DIR if set.",
+			description: "Directory to save image when save=custom. Defaults to PIZZA_IMAGE_SAVE_DIR if set.",
 		}),
 	),
 });
@@ -185,13 +185,13 @@ function readConfigFile(path: string): ExtensionConfig {
 function loadConfig(cwd: string): ExtensionConfig {
 	const globalPath = join(getAgentDir(), "extensions", "antigravity-image-gen.json");
 	const globalConfig = readConfigFile(globalPath);
-	const projectConfig = readConfigFile(join(cwd, ".pi", "extensions", "antigravity-image-gen.json"));
+	const projectConfig = readConfigFile(join(cwd, ".pizza", "extensions", "antigravity-image-gen.json"));
 	return { ...globalConfig, ...projectConfig };
 }
 
 function resolveSaveConfig(params: ToolParams, cwd: string): SaveConfig {
 	const config = loadConfig(cwd);
-	const envMode = (process.env.PI_IMAGE_SAVE_MODE || "").toLowerCase();
+	const envMode = (process.env.PIZZA_IMAGE_SAVE_MODE || process.env.PI_IMAGE_SAVE_MODE || "").toLowerCase();
 	const paramMode = params.save;
 	const mode = (paramMode || envMode || config.save || DEFAULT_SAVE_MODE) as SaveMode;
 
@@ -200,7 +200,7 @@ function resolveSaveConfig(params: ToolParams, cwd: string): SaveConfig {
 	}
 
 	if (mode === "project") {
-		return { mode, outputDir: join(cwd, ".pi", "generated-images") };
+		return { mode, outputDir: join(cwd, ".pizza", "generated-images") };
 	}
 
 	if (mode === "global") {
@@ -209,9 +209,9 @@ function resolveSaveConfig(params: ToolParams, cwd: string): SaveConfig {
 	}
 
 	if (mode === "custom") {
-		const dir = params.saveDir || process.env.PI_IMAGE_SAVE_DIR || config.saveDir;
+		const dir = params.saveDir || process.env.PIZZA_IMAGE_SAVE_DIR || process.env.PI_IMAGE_SAVE_DIR || config.saveDir;
 		if (!dir || !dir.trim()) {
-			throw new Error("save=custom requires saveDir or PI_IMAGE_SAVE_DIR.");
+			throw new Error("save=custom requires saveDir or PIZZA_IMAGE_SAVE_DIR.");
 		}
 		return { mode, outputDir: dir };
 	}
@@ -350,12 +350,12 @@ async function getCredentials(ctx: {
 	return parseOAuthCredentials(apiKey);
 }
 
-export default function antigravityImageGen(pi: ExtensionAPI) {
-	pi.registerTool({
+export default function antigravityImageGen(pizza: ExtensionAPI) {
+	pizza.registerTool({
 		name: "generate_image",
 		label: "Generate image",
 		description:
-			"Generate an image via Google Antigravity image models. Returns the image as a tool result attachment. Optional saving via save=project|global|custom|none, or PI_IMAGE_SAVE_MODE/PI_IMAGE_SAVE_DIR.",
+			"Generate an image via Google Antigravity image models. Returns the image as a tool result attachment. Optional saving via save=project|global|custom|none, or PIZZA_IMAGE_SAVE_MODE/PIZZA_IMAGE_SAVE_DIR.",
 		parameters: TOOL_PARAMS,
 		async execute(_toolCallId, params: ToolParams, signal, onUpdate, ctx) {
 			const { accessToken, projectId } = await getCredentials(ctx);

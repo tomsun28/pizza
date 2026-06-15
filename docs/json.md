@@ -1,10 +1,10 @@
 # JSON Event Stream Mode
 
 ```bash
-pi --mode json "Your prompt"
+pizza --mode json "Your prompt"
 ```
 
-Outputs all session events as JSON lines to stdout. Useful for integrating pi into other tools or custom UIs.
+Outputs all session events as JSON lines to stdout. Useful for integrating Pizza into other tools or custom UIs.
 
 ## Event Types
 
@@ -58,5 +58,5 @@ Each line is a JSON object. Events are emitted in real-time as the reactor proce
 ## Example
 
 ```bash
-pi --mode json "List files" 2>/dev/null | jq -c 'select(.type == "AGENT_MESSAGE_END")'
+pizza --mode json "List files" 2>/dev/null | jq -c 'select(.type == "AGENT_MESSAGE_END")'
 ```

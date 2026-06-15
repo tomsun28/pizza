@@ -17,7 +17,7 @@ import { SessionManager } from "../projection/session-manager.js";
 import { SessionProjection } from "../projection/session-projection.js";
 import { TimelineProjection, type TimelineQueryOptions } from "../projection/timeline-projection.js";
 import { IntentExecutor } from "../intent/executor.js";
-import { IntentClassifier } from "../intent/classifier.js";
+import { IntentClassifier, type ClassifierConfig } from "../intent/classifier.js";
 import { Reactor } from "./reactor.js";
 import type { CheckpointRef, RuntimeAdapter, RuntimeStatus } from "./types.js";
 import { LocalRuntimeAdapter } from "./local-runtime.js";
@@ -42,12 +42,7 @@ export interface EventSourcedRuntimeConfig {
 	/** Pre-configured SessionManager (optional, will create if not provided) */
 	sessionManager?: SessionManager;
 	/** Classifier configuration */
-	classifierConfig?: {
-		approve_writes?: boolean;
-		approve_edits?: boolean;
-		approve_shell_moderate?: boolean;
-		approve_unknown?: boolean;
-	};
+	classifierConfig?: ClassifierConfig;
 	/** Tool registry */
 	toolRegistry: ToolRegistry;
 	/** Runtime adapter for deterministic tool execution and checkpoints */
@@ -132,12 +127,7 @@ export class EventSourcedRuntime {
 		) : undefined);
 
 		// 3. Create IntentClassifier
-		this.classifier = new IntentClassifier({
-			approve_writes: config.classifierConfig?.approve_writes ?? false,
-			approve_edits: config.classifierConfig?.approve_edits ?? false,
-			approve_shell_moderate: config.classifierConfig?.approve_shell_moderate ?? false,
-			approve_unknown: config.classifierConfig?.approve_unknown ?? true,
-		});
+		this.classifier = new IntentClassifier(config.classifierConfig);
 
 		// 4. Create IntentExecutor (still used for the legacy direct execution path)
 		this.intentExecutor = new IntentExecutor(

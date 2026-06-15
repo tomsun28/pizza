@@ -64,7 +64,7 @@ describe("main print facade resume route", () => {
 	const tempDirs: string[] = [];
 	const originalCwd = process.cwd();
 	const originalEnvAgentDir = process.env[ENV_AGENT_DIR];
-	const originalOffline = process.env.PI_OFFLINE;
+	const originalOffline = process.env.PIZZA_OFFLINE;
 	const stdinIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 	let selectedSessionPath: string | null = null;
 
@@ -76,9 +76,9 @@ describe("main print facade resume route", () => {
 			process.env[ENV_AGENT_DIR] = originalEnvAgentDir;
 		}
 		if (originalOffline === undefined) {
-			delete process.env.PI_OFFLINE;
+			delete process.env.PIZZA_OFFLINE;
 		} else {
-			process.env.PI_OFFLINE = originalOffline;
+			process.env.PIZZA_OFFLINE = originalOffline;
 		}
 		if (stdinIsTtyDescriptor) {
 			Object.defineProperty(process.stdin, "isTTY", stdinIsTtyDescriptor);
@@ -116,7 +116,7 @@ describe("main print facade resume route", () => {
 		mkdirSync(agentDir, { recursive: true });
 		mkdirSync(projectDir, { recursive: true });
 		process.env[ENV_AGENT_DIR] = agentDir;
-		process.env.PI_OFFLINE = "1";
+		process.env.PIZZA_OFFLINE = "1";
 		Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
 		process.chdir(projectDir);
 		return { agentDir, projectDir };
@@ -125,9 +125,9 @@ describe("main print facade resume route", () => {
 	function createFacadeProviderExtension(
 		responses: string[],
 		seenContexts?: Context[],
-	): (pi: ExtensionAPI) => void {
-		return (pi: ExtensionAPI) => {
-			pi.registerProvider("facade-test", {
+	): (pizza: ExtensionAPI) => void {
+		return (pizza: ExtensionAPI) => {
+			pizza.registerProvider("facade-test", {
 				baseUrl: "https://example.invalid",
 				apiKey: "test-key",
 				api: "anthropic-messages",

@@ -7,19 +7,19 @@
  * Usage: /session-name [name] - set or show session name
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "pizza";
 
-export default function (pi: ExtensionAPI) {
-	pi.registerCommand("session-name", {
+export default function (pizza: ExtensionAPI) {
+	pizza.registerCommand("session-name", {
 		description: "Set or show session name (usage: /session-name [new name])",
 		handler: async (args, ctx) => {
 			const name = args.trim();
 
 			if (name) {
-				pi.setSessionName(name);
+				pizza.setSessionName(name);
 				ctx.ui.notify(`Session named: ${name}`, "info");
 			} else {
-				const current = pi.getSessionName();
+				const current = pizza.getSessionName();
 				ctx.ui.notify(current ? `Session: ${current}` : "No session name set", "info");
 			}
 		},

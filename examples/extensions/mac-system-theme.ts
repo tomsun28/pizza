@@ -1,13 +1,13 @@
 /**
- * Syncs pi theme with macOS system appearance (dark/light mode).
+ * Syncs Pizza theme with macOS system appearance (dark/light mode).
  *
  * Usage:
- *   pi -e examples/extensions/mac-system-theme.ts
+ *   pizza -e examples/extensions/mac-system-theme.ts
  */
 
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "pizza";
 
 const execAsync = promisify(exec);
 
@@ -22,10 +22,10 @@ async function isDarkMode(): Promise<boolean> {
 	}
 }
 
-export default function (pi: ExtensionAPI) {
+export default function (pizza: ExtensionAPI) {
 	let intervalId: ReturnType<typeof setInterval> | null = null;
 
-	pi.on("session_start", async (_event, ctx) => {
+	pizza.on("session_start", async (_event, ctx) => {
 		let currentTheme = (await isDarkMode()) ? "dark" : "light";
 		ctx.ui.setTheme(currentTheme);
 
@@ -38,7 +38,7 @@ export default function (pi: ExtensionAPI) {
 		}, 2000);
 	});
 
-	pi.on("session_shutdown", () => {
+	pizza.on("session_shutdown", () => {
 		if (intervalId) {
 			clearInterval(intervalId);
 			intervalId = null;

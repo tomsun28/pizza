@@ -6,7 +6,7 @@
  */
 
 import { getModel } from "@mariozechner/pi-ai";
-import { AuthStorage, createSessionFacade, ModelRegistry } from "@mariozechner/pi-coding-agent";
+import { AuthStorage, createSessionFacade, ModelRegistry } from "pizza";
 
 // Set up auth storage and model registry
 const authStorage = AuthStorage.create();

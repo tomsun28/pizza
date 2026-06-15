@@ -21,7 +21,7 @@ describe("getThemeExportColors", () => {
 	let previousAgentDir: string | undefined;
 
 	beforeEach(() => {
-		tempRoot = mkdtempSync(join(tmpdir(), "pi-theme-export-"));
+		tempRoot = mkdtempSync(join(tmpdir(), "pizza-theme-export-"));
 		previousAgentDir = process.env[ENV_AGENT_DIR];
 		process.env[ENV_AGENT_DIR] = join(tempRoot, "agent");
 		mkdirSync(join(process.env[ENV_AGENT_DIR]!, "themes"), { recursive: true });

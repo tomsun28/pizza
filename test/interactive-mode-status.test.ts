@@ -296,44 +296,44 @@ describe("InteractiveMode.showLoadedResources", () => {
 				}),
 			},
 			{
-				path: "/tmp/project/.pizza/npm/node_modules/pi-markdown-preview/extensions/index.ts",
-				sourceInfo: createSourceInfo("/tmp/project/.pizza/npm/node_modules/pi-markdown-preview/extensions/index.ts", {
-					source: "npm:pi-markdown-preview",
+				path: "/tmp/project/.pizza/npm/node_modules/pizza-markdown-preview/extensions/index.ts",
+				sourceInfo: createSourceInfo("/tmp/project/.pizza/npm/node_modules/pizza-markdown-preview/extensions/index.ts", {
+					source: "npm:pizza-markdown-preview",
 					scope: "project",
 					origin: "package",
-					baseDir: "/tmp/project/.pizza/npm/node_modules/pi-markdown-preview",
+					baseDir: "/tmp/project/.pizza/npm/node_modules/pizza-markdown-preview",
 				}),
 			},
 			{
-				path: "/tmp/project/.pizza/npm/node_modules/@scope/pi-scoped/extensions/index.ts",
-				sourceInfo: createSourceInfo("/tmp/project/.pizza/npm/node_modules/@scope/pi-scoped/extensions/index.ts", {
-					source: "npm:@scope/pi-scoped",
+				path: "/tmp/project/.pizza/npm/node_modules/@scope/pizza-scoped/extensions/index.ts",
+				sourceInfo: createSourceInfo("/tmp/project/.pizza/npm/node_modules/@scope/pizza-scoped/extensions/index.ts", {
+					source: "npm:@scope/pizza-scoped",
 					scope: "project",
 					origin: "package",
-					baseDir: "/tmp/project/.pizza/npm/node_modules/@scope/pi-scoped",
+					baseDir: "/tmp/project/.pizza/npm/node_modules/@scope/pizza-scoped",
 				}),
 			},
 			{
-				path: "/tmp/project/.pizza/git/github.com/HazAT/pi-interactive-subagents/extensions/index.ts",
+				path: "/tmp/project/.pizza/git/github.com/HazAT/pizza-interactive-subagents/extensions/index.ts",
 				sourceInfo: createSourceInfo(
-					"/tmp/project/.pizza/git/github.com/HazAT/pi-interactive-subagents/extensions/index.ts",
+					"/tmp/project/.pizza/git/github.com/HazAT/pizza-interactive-subagents/extensions/index.ts",
 					{
-						source: "git:github.com/HazAT/pi-interactive-subagents",
+						source: "git:github.com/HazAT/pizza-interactive-subagents",
 						scope: "project",
 						origin: "package",
-						baseDir: "/tmp/project/.pizza/git/github.com/HazAT/pi-interactive-subagents",
+						baseDir: "/tmp/project/.pizza/git/github.com/HazAT/pizza-interactive-subagents",
 					},
 				),
 			},
 			{
-				path: "/tmp/project/.pizza/git/github.com/HazAT/pi-interactive-subagents/extensions/subagents/index.ts",
+				path: "/tmp/project/.pizza/git/github.com/HazAT/pizza-interactive-subagents/extensions/subagents/index.ts",
 				sourceInfo: createSourceInfo(
-					"/tmp/project/.pizza/git/github.com/HazAT/pi-interactive-subagents/extensions/subagents/index.ts",
+					"/tmp/project/.pizza/git/github.com/HazAT/pizza-interactive-subagents/extensions/subagents/index.ts",
 					{
-						source: "git:github.com/HazAT/pi-interactive-subagents",
+						source: "git:github.com/HazAT/pizza-interactive-subagents",
 						scope: "project",
 						origin: "package",
-						baseDir: "/tmp/project/.pizza/git/github.com/HazAT/pi-interactive-subagents",
+						baseDir: "/tmp/project/.pizza/git/github.com/HazAT/pizza-interactive-subagents",
 					},
 				),
 			},
@@ -429,7 +429,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 
 		expect(normalizeRenderedOutput(fakeThis.chatContainer)).toMatchInlineSnapshot(`
 "[Extensions]
-  @scope/pi-scoped, answer.ts, cli-extension.ts, HazAT/pi-interactive-subagents, HazAT/pi-interactive-subagents:subagents, local-index/index.ts, pi-markdown-preview, user-index/index.ts"`);
+  @scope/pizza-scoped, answer.ts, cli-extension.ts, HazAT/pizza-interactive-subagents, HazAT/pizza-interactive-subagents:subagents, local-index/index.ts, pizza-markdown-preview, user-index/index.ts"`);
 	});
 
 	test("adds more parent folders until local extension labels are unique", () => {
@@ -495,12 +495,12 @@ describe("InteractiveMode.showLoadedResources", () => {
   project
     /tmp/project/.pizza/extensions/answer.ts
     /tmp/project/.pizza/extensions/local-index/index.ts
-    git:github.com/HazAT/pi-interactive-subagents
+    git:github.com/HazAT/pizza-interactive-subagents
       extensions/index.ts
       extensions/subagents/index.ts
-    npm:@scope/pi-scoped
+    npm:@scope/pizza-scoped
       extensions/index.ts
-    npm:pi-markdown-preview
+    npm:pizza-markdown-preview
       extensions/index.ts
   user
     /tmp/agent/extensions/user-index/index.ts
@@ -510,7 +510,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 
 	test("shows context paths relative to cwd while preserving full external paths", () => {
 		const home = homedir();
-		const cwd = path.join(home, "Development", "pi-mono");
+		const cwd = path.join(home, "Development", "pizza");
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
 			cwd,
@@ -529,7 +529,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 
 	test("shows full context paths when expanded", () => {
 		const home = homedir();
-		const cwd = path.join(home, "Development", "pi-mono");
+		const cwd = path.join(home, "Development", "pizza");
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
 			toolOutputExpanded: true,
@@ -544,7 +544,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 		const output = renderAll(fakeThis.chatContainer).replace(/\\/g, "/");
 		expect(output).toContain("[Context]");
 		expect(output).toContain("~/.pizza/agent/AGENTS.md");
-		expect(output).toContain("~/Development/pi-mono/AGENTS.md");
+		expect(output).toContain("~/Development/pizza/AGENTS.md");
 		expect(output).not.toContain("~/.pizza/agent/AGENTS.md, AGENTS.md");
 	});
 

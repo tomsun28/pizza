@@ -11,12 +11,12 @@
  * - Minimal: Shows only tool call, no output (this extension's collapsed mode)
  *
  * Usage:
- *   pi -e ./minimal-mode.ts
+ *   pizza -e ./minimal-mode.ts
  *
  * Then use ctrl+o to toggle between minimal (collapsed) and full (expanded) views.
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "pizza";
 import {
 	createBashTool,
 	createEditTool,
@@ -25,7 +25,7 @@ import {
 	createLsTool,
 	createReadTool,
 	createWriteTool,
-} from "@mariozechner/pi-coding-agent";
+} from "pizza";
 import { Text } from "@mariozechner/pi-tui";
 import { homedir } from "os";
 
@@ -64,11 +64,11 @@ function getBuiltInTools(cwd: string) {
 	return tools;
 }
 
-export default function (pi: ExtensionAPI) {
+export default function (pizza: ExtensionAPI) {
 	// =========================================================================
 	// Read Tool
 	// =========================================================================
-	pi.registerTool({
+	pizza.registerTool({
 		name: "read",
 		label: "read",
 		description:
@@ -115,7 +115,7 @@ export default function (pi: ExtensionAPI) {
 	// =========================================================================
 	// Bash Tool
 	// =========================================================================
-	pi.registerTool({
+	pizza.registerTool({
 		name: "bash",
 		label: "bash",
 		description:
@@ -164,7 +164,7 @@ export default function (pi: ExtensionAPI) {
 	// =========================================================================
 	// Write Tool
 	// =========================================================================
-	pi.registerTool({
+	pizza.registerTool({
 		name: "write",
 		label: "write",
 		description:
@@ -206,7 +206,7 @@ export default function (pi: ExtensionAPI) {
 	// =========================================================================
 	// Edit Tool
 	// =========================================================================
-	pi.registerTool({
+	pizza.registerTool({
 		name: "edit",
 		label: "edit",
 		description:
@@ -251,7 +251,7 @@ export default function (pi: ExtensionAPI) {
 	// =========================================================================
 	// Find Tool
 	// =========================================================================
-	pi.registerTool({
+	pizza.registerTool({
 		name: "find",
 		label: "find",
 		description:
@@ -309,7 +309,7 @@ export default function (pi: ExtensionAPI) {
 	// =========================================================================
 	// Grep Tool
 	// =========================================================================
-	pi.registerTool({
+	pizza.registerTool({
 		name: "grep",
 		label: "grep",
 		description:
@@ -371,7 +371,7 @@ export default function (pi: ExtensionAPI) {
 	// =========================================================================
 	// Ls Tool
 	// =========================================================================
-	pi.registerTool({
+	pizza.registerTool({
 		name: "ls",
 		label: "ls",
 		description:

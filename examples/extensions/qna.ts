@@ -8,8 +8,8 @@
  */
 
 import { complete, type UserMessage } from "@mariozechner/pi-ai";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { BorderedLoader } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "pizza";
+import { BorderedLoader } from "pizza";
 
 const SYSTEM_PROMPT = `You are a question extractor. Given text from a conversation, extract any questions that need answering and format them for the user to fill in.
 
@@ -27,8 +27,8 @@ A:
 
 Keep questions in the order they appeared. Be concise.`;
 
-export default function (pi: ExtensionAPI) {
-	pi.registerCommand("qna", {
+export default function (pizza: ExtensionAPI) {
+	pizza.registerCommand("qna", {
 		description: "Extract questions from last assistant message into editor",
 		handler: async (_args, ctx) => {
 			if (!ctx.hasUI) {

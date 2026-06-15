@@ -141,6 +141,80 @@ describe("Reactor (event-driven core)", () => {
 		runtime.dispose();
 	});
 
+	it("passes tool execution context through the runtime and emits updates", async () => {
+		const cwd = makeTempDir();
+		let receivedToolCallId: string | undefined;
+		let receivedSignal: AbortSignal | undefined;
+		const registry: ToolRegistry = {
+			get(name: string): ToolExecutor | undefined {
+				if (name !== "echo") return undefined;
+				return {
+					async execute(args, options) {
+						receivedToolCallId = options?.tool_call_id;
+						receivedSignal = options?.signal;
+						options?.onUpdate?.({
+							content: [{ type: "text", text: `partial ${String(args.text ?? "")}` }],
+						});
+						return { content: [{ type: "text", text: String(args.text ?? "") }], is_error: false };
+					},
+					getMetadata() {
+						return { name: "echo", category: "file_read", defaultRisk: "safe" };
+					},
+				};
+			},
+			list() {
+				return ["echo"];
+			},
+		};
+
+		let calls = 0;
+		const client: LLMClient = {
+			async complete(): Promise<LLMResponse> {
+				calls++;
+				if (calls === 1) {
+					return {
+						content: [
+							{ type: "tool_call", id: "call_update", name: "echo", arguments: { text: "hello" } } as ContentBlock,
+						],
+						provider: "test",
+						model: "test",
+						usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, cost: 0 },
+						stopReason: "tool_use",
+					};
+				}
+				return {
+					content: [{ type: "text", text: "done" } as ContentBlock],
+					provider: "test",
+					model: "test",
+					usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, cost: 0 },
+					stopReason: "stop",
+				};
+			},
+		};
+
+		const runtime = new EventSourcedRuntime({
+			cwd,
+			agentDir: cwd,
+			toolRegistry: registry,
+			llmClient: client,
+			classifierConfig: { require_approval_unknown: false },
+			systemPrompt: "test system",
+			model: { provider: "test", model_id: "test" },
+			tools: [],
+		});
+
+		await runtime.prompt("please echo hello");
+
+		const updates = runtime.store.query({ types: ["TOOL_EXECUTION_UPDATE"] });
+		expect(receivedToolCallId).toBe("call_update");
+		expect(receivedSignal).toBeInstanceOf(AbortSignal);
+		expect(updates).toHaveLength(1);
+		expect((updates[0].payload as { tool_call_id: string; update: string }).tool_call_id).toBe("call_update");
+		expect((updates[0].payload as { tool_call_id: string; update: string }).update).toBe("partial hello");
+
+		runtime.dispose();
+	});
+
 	it("executes legacy camelCase toolCall blocks returned by a provider", async () => {
 		const cwd = makeTempDir();
 		const registry = makeRegistry();

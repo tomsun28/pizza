@@ -2,8 +2,8 @@
  * Print mode (single-shot): Send prompts, output result, exit.
  *
  * Used for:
- * - `pi -p "prompt"` - text output
- * - `pi --mode json "prompt"` - JSON event stream
+ * - `pizza -p "prompt"` - text output
+ * - `pizza --mode json "prompt"` - JSON event stream
  */
 
 import type { AssistantMessage, ImageContent } from "@mariozechner/pi-ai";

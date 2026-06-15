@@ -1,5 +1,5 @@
 {
-  "name": "pi-extension-with-deps",
+  "name": "pizza-extension-with-deps",
   "private": true,
   "version": "0.68.1",
   "type": "module",
@@ -8,7 +8,7 @@
     "build": "echo 'nothing to build'",
     "check": "echo 'nothing to check'"
   },
-  "pi": {
+  "pizza": {
     "extensions": [
       "./index.ts"
     ]

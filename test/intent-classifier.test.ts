@@ -39,6 +39,7 @@ describe("IntentClassifier", () => {
 		it("should classify write as moderate", () => {
 			const result = classifier.classify("write", { path: "/some/file.ts" });
 			expect(result.risk).toBe("moderate");
+			expect(result.requires_approval).toBe(true);
 			expect(result.category).toBe("file_write");
 			expect(result.affected_files).toContain("/some/file.ts");
 		});
@@ -46,18 +47,23 @@ describe("IntentClassifier", () => {
 		it("should classify edit as moderate", () => {
 			const result = classifier.classify("edit", { path: "/some/file.ts" });
 			expect(result.risk).toBe("moderate");
+			expect(result.requires_approval).toBe(true);
 			expect(result.category).toBe("file_write");
 		});
 
-		it("should require approval for write when configured", () => {
-			const strict = new IntentClassifier({
-				approve_writes: true,
-				approve_edits: true,
-				approve_shell_moderate: false,
-				approve_unknown: true,
+		it("should allow writes when explicitly configured", () => {
+			const permissive = new IntentClassifier({
+				require_approval_writes: false,
+				require_approval_edits: false,
 			});
-			const result = strict.classify("write", { path: "/some/file.ts" });
-			expect(result.requires_approval).toBe(true);
+			const result = permissive.classify("write", { path: "/some/file.ts" });
+			expect(result.requires_approval).toBe(false);
+		});
+
+		it("should support deprecated approval aliases", () => {
+			const strict = new IntentClassifier({ approve_writes: true, approve_edits: true });
+			expect(strict.classify("write", { path: "/some/file.ts" }).requires_approval).toBe(true);
+			expect(strict.classify("edit", { path: "/some/file.ts" }).requires_approval).toBe(true);
 		});
 	});
 
@@ -114,6 +120,24 @@ describe("IntentClassifier", () => {
 			expect(result.risk).toBe("moderate");
 			expect(result.requires_approval).toBe(false);
 			expect(result.category).toBe("shell_moderate");
+		});
+
+		it("should classify bash built-in writes as file writes", () => {
+			const result = classifier.classify("bash", { command: "write src/app.ts <<EOF\nhello\nEOF" });
+
+			expect(result.risk).toBe("moderate");
+			expect(result.requires_approval).toBe(true);
+			expect(result.category).toBe("file_write");
+			expect(result.affected_files).toEqual(["src/app.ts"]);
+		});
+
+		it("should classify non-null shell redirection as file writes", () => {
+			const result = classifier.classify("bash", { command: "echo hello > output.txt" });
+
+			expect(result.risk).toBe("moderate");
+			expect(result.requires_approval).toBe(true);
+			expect(result.category).toBe("file_write");
+			expect(result.affected_files).toEqual(["output.txt"]);
 		});
 	});
 

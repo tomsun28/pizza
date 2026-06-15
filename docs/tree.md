@@ -215,8 +215,8 @@ interface SessionTreeEvent {
 ### Example: Custom Summarizer
 
 ```typescript
-export default function(pi: HookAPI) {
-  pi.on("session_before_tree", async (event, ctx) => {
+export default function(pizza: HookAPI) {
+  pizza.on("session_before_tree", async (event, ctx) => {
     if (!event.preparation.userWantsSummary) return;
     if (event.preparation.entriesToSummarize.length === 0) return;
     

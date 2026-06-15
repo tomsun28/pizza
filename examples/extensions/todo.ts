@@ -11,7 +11,7 @@
  */
 
 import { StringEnum } from "@mariozechner/pi-ai";
-import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, Theme } from "pizza";
 import { matchesKey, Text, truncateToWidth } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 
@@ -102,7 +102,7 @@ class TodoListComponent {
 	}
 }
 
-export default function (pi: ExtensionAPI) {
+export default function (pizza: ExtensionAPI) {
 	// In-memory state (reconstructed from session on load)
 	let todos: Todo[] = [];
 	let nextId = 1;
@@ -129,11 +129,11 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	// Reconstruct state on session events
-	pi.on("session_start", async (_event, ctx) => reconstructState(ctx));
-	pi.on("session_tree", async (_event, ctx) => reconstructState(ctx));
+	pizza.on("session_start", async (_event, ctx) => reconstructState(ctx));
+	pizza.on("session_tree", async (_event, ctx) => reconstructState(ctx));
 
 	// Register the todo tool for the LLM
-	pi.registerTool({
+	pizza.registerTool({
 		name: "todo",
 		label: "Todo",
 		description: "Manage a todo list. Actions: list, add (text), toggle (id), clear",
@@ -281,7 +281,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	// Register the /todos command for users
-	pi.registerCommand("todos", {
+	pizza.registerCommand("todos", {
 		description: "Show all todos on the current branch",
 		handler: async (_args, ctx) => {
 			if (!ctx.hasUI) {

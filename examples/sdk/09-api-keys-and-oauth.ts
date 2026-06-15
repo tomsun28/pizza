@@ -4,7 +4,7 @@
  * Configure API key resolution via AuthStorage and ModelRegistry.
  */
 
-import { AuthStorage, createSessionFacade, ModelRegistry } from "@mariozechner/pi-coding-agent";
+import { AuthStorage, createSessionFacade, ModelRegistry } from "pizza";
 
 // Default: AuthStorage uses ~/.pizza/agent/auth.json
 // ModelRegistry loads built-in + custom models from ~/.pizza/agent/models.json

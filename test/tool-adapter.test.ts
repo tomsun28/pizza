@@ -89,6 +89,35 @@ describe("AgentToolAdapter", () => {
 		expect(receivedArgs.path).toBe("test.ts");
 	});
 
+	it("passes runtime execution context to AgentTool", async () => {
+		let receivedToolCallId: string | undefined;
+		let receivedSignal: AbortSignal | undefined;
+		let updateText: string | undefined;
+		const signal = new AbortController().signal;
+		const tool = createMockTool("read", {
+			execute: async (toolCallId, _params, toolSignal, onUpdate) => {
+				receivedToolCallId = toolCallId;
+				receivedSignal = toolSignal;
+				onUpdate?.({ content: [{ type: "text" as const, text: "partial" }] });
+				return { content: [{ type: "text" as const, text: "ok" }] };
+			},
+		});
+		const adapter = new AgentToolAdapter(tool);
+
+		await adapter.execute({ path: "test.ts" }, {
+			tool_call_id: "call_123",
+			signal,
+			onUpdate: (partial) => {
+				const textBlock = partial.content[0] as { text?: string };
+				updateText = textBlock.text;
+			},
+		});
+
+		expect(receivedToolCallId).toBe("call_123");
+		expect(receivedSignal).toBe(signal);
+		expect(updateText).toBe("partial");
+	});
+
 	it("returns correct metadata", () => {
 		const readTool = new AgentToolAdapter(createMockTool("read"));
 		expect(readTool.getMetadata()).toEqual({

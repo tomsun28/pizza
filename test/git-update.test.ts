@@ -16,7 +16,7 @@ import { DefaultPackageManager } from "../src/core/package-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
 
 // Skip git update tests in offline mode since they require actual git operations
-const skipInOfflineMode = process.env.PI_OFFLINE === "1";
+const skipInOfflineMode = process.env.PIZZA_OFFLINE === "1";
 
 describe(skipInOfflineMode ? "DefaultPackageManager git update (skipped in offline mode)" : "DefaultPackageManager git update", () => {
 	if (skipInOfflineMode) {
@@ -323,14 +323,14 @@ let tempDir: string;
 			const gitHost = "github.com";
 			const gitPath = "test/extension";
 			const hash = createHash("sha256").update(`git-${gitHost}-${gitPath}`).digest("hex").slice(0, 8);
-			const cachedDir = join(tmpdir(), "pi-extensions", `git-${gitHost}`, hash, gitPath);
-			const extensionFile = join(cachedDir, "pi-extensions", "session-breakdown.ts");
+			const cachedDir = join(tmpdir(), "pizza-extensions", `git-${gitHost}`, hash, gitPath);
+			const extensionFile = join(cachedDir, "pizza-extensions", "session-breakdown.ts");
 
 			rmSync(cachedDir, { recursive: true, force: true });
-			mkdirSync(join(cachedDir, "pi-extensions"), { recursive: true });
+			mkdirSync(join(cachedDir, "pizza-extensions"), { recursive: true });
 			writeFileSync(
 				join(cachedDir, "package.json"),
-				JSON.stringify({ pi: { extensions: ["./pi-extensions"] } }, null, 2),
+				JSON.stringify({ pizza: { extensions: ["./pizza-extensions"] } }, null, 2),
 			);
 			writeFileSync(extensionFile, "// stale");
 
@@ -363,21 +363,21 @@ let tempDir: string;
 			expect(executedCommands).toContain(
 				"git fetch --prune --no-tags origin +refs/heads/main:refs/remotes/origin/main",
 			);
-			expect(getFileContent(cachedDir, "pi-extensions/session-breakdown.ts")).toBe("// fresh");
+			expect(getFileContent(cachedDir, "pizza-extensions/session-breakdown.ts")).toBe("// fresh");
 		});
 
 		it("should not refresh pinned temporary git sources", async () => {
 			const gitHost = "github.com";
 			const gitPath = "test/extension";
 			const hash = createHash("sha256").update(`git-${gitHost}-${gitPath}`).digest("hex").slice(0, 8);
-			const cachedDir = join(tmpdir(), "pi-extensions", `git-${gitHost}`, hash, gitPath);
-			const extensionFile = join(cachedDir, "pi-extensions", "session-breakdown.ts");
+			const cachedDir = join(tmpdir(), "pizza-extensions", `git-${gitHost}`, hash, gitPath);
+			const extensionFile = join(cachedDir, "pizza-extensions", "session-breakdown.ts");
 
 			rmSync(cachedDir, { recursive: true, force: true });
-			mkdirSync(join(cachedDir, "pi-extensions"), { recursive: true });
+			mkdirSync(join(cachedDir, "pizza-extensions"), { recursive: true });
 			writeFileSync(
 				join(cachedDir, "package.json"),
-				JSON.stringify({ pi: { extensions: ["./pi-extensions"] } }, null, 2),
+				JSON.stringify({ pizza: { extensions: ["./pizza-extensions"] } }, null, 2),
 			);
 			writeFileSync(extensionFile, "// pinned");
 
@@ -392,7 +392,7 @@ let tempDir: string;
 			await packageManager.resolveExtensionSources([`${gitSource}@main`], { temporary: true });
 
 			expect(executedCommands).toEqual([]);
-			expect(getFileContent(cachedDir, "pi-extensions/session-breakdown.ts")).toBe("// pinned");
+			expect(getFileContent(cachedDir, "pizza-extensions/session-breakdown.ts")).toBe("// pinned");
 		});
 	});
 

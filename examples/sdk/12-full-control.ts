@@ -12,7 +12,7 @@ import {
 	ModelRegistry,
 	type ResourceLoader,
 	SettingsManager,
-} from "@mariozechner/pi-coding-agent";
+} from "pizza";
 
 // Custom auth storage location
 const authStorage = AuthStorage.create("/tmp/my-agent/auth.json");

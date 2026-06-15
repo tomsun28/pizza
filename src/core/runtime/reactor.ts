@@ -38,6 +38,7 @@ import type { EventStore, EventAppendInput } from "../event-store/store.js";
 import type {
 	ApprovalHandler,
 	IntentClassification,
+	ToolExecutionUpdate,
 	ToolExecutionResult,
 	ToolRegistry,
 } from "../intent/types.js";
@@ -675,7 +676,16 @@ export class Reactor {
 		});
 
 		try {
-			const result = await this.config.runtimeAdapter.executeTool({ tool_call_id, tool_name, arguments: args });
+			const result = await this.config.runtimeAdapter.executeTool({
+				tool_call_id,
+				tool_name,
+				arguments: args,
+				caused_by: causedBy,
+				signal: this.abortController?.signal,
+				onUpdate: (partial) => {
+					this._emitToolExecutionUpdate(tool_call_id, partial, causedBy);
+				},
+			});
 			this._emitToolExecutionEnd(tool_call_id, tool_name, result, causedBy, startTime);
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
@@ -685,6 +695,23 @@ export class Reactor {
 				error_message: msg,
 			}, causedBy, startTime);
 		}
+	}
+
+	private _emitToolExecutionUpdate(
+		tool_call_id: string,
+		partial: ToolExecutionUpdate,
+		causedBy: string,
+	): void {
+		this._emit({
+			actor_id: "runtime",
+			type: "TOOL_EXECUTION_UPDATE",
+			payload: {
+				tool_call_id,
+				update: stringifyToolUpdate(partial),
+				progress: partial.progress,
+			},
+			caused_by: causedBy,
+		});
 	}
 
 	private _emitToolExecutionEnd(
@@ -1114,4 +1141,17 @@ export class Reactor {
 		return undefined;
 	}
 
+}
+
+function stringifyToolUpdate(partial: ToolExecutionUpdate): string {
+	const text = partial.content
+		.filter((block): block is { type: string; text: string } => {
+			return block.type === "text" && "text" in block && typeof block.text === "string";
+		})
+		.map((block) => block.text)
+		.join("\n");
+	if (text) return text;
+	if (partial.content.length > 0) return JSON.stringify(partial.content);
+	if (partial.details !== undefined) return JSON.stringify(partial.details);
+	return "";
 }

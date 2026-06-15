@@ -12,7 +12,7 @@
  * 2. Use the extension — it automatically adapts to your active tools and skills
  */
 
-import type { BuildSystemPromptOptions, ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { BuildSystemPromptOptions, ExtensionAPI } from "pizza";
 
 /**
  * Adds tool-specific guidance that adapts to the active tool set.
@@ -83,8 +83,8 @@ If you have additional requirements, configure them via --append-system-prompt o
 	return extensionSpecific;
 }
 
-export default function promptCustomizer(pi: ExtensionAPI) {
-	pi.on("before_agent_start", async (event) => {
+export default function promptCustomizer(pizza: ExtensionAPI) {
+	pizza.on("before_agent_start", async (event) => {
 		const { systemPrompt, systemPromptOptions } = event;
 
 		const customPrompt = addToolGuidance(systemPromptOptions, systemPrompt);

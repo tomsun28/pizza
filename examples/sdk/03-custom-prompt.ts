@@ -4,7 +4,7 @@
  * Shows how to replace or modify the default system prompt.
  */
 
-import { createSessionFacade, DefaultResourceLoader, getAgentDir } from "@mariozechner/pi-coding-agent";
+import { createSessionFacade, DefaultResourceLoader, getAgentDir } from "pizza";
 
 const cwd = process.cwd();
 const agentDir = getAgentDir();
@@ -15,7 +15,7 @@ const loader1 = new DefaultResourceLoader({
 	agentDir,
 	systemPromptOverride: () => `You are a helpful assistant that speaks like a pirate.
 Always end responses with "Arrr!"`,
-	// Needed to avoid DefaultResourceLoader appending APPEND_SYSTEM.md from ~/.pizza/agent or <cwd>/.pi.
+	// Needed to avoid DefaultResourceLoader appending APPEND_SYSTEM.md from ~/.pizza/agent or <cwd>/.pizza.
 	appendSystemPromptOverride: () => [],
 });
 await loader1.reload();

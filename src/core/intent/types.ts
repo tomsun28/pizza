@@ -50,6 +50,20 @@ export interface ToolExecutionResult {
 	error_message?: string;
 }
 
+/** Partial tool execution update emitted while a tool is running. */
+export interface ToolExecutionUpdate {
+	content: Array<{ type: string }>;
+	details?: unknown;
+	progress?: number;
+}
+
+/** Runtime-provided execution context for a tool call. */
+export interface ToolExecutionOptions {
+	tool_call_id?: string;
+	signal?: AbortSignal;
+	onUpdate?: (partial: ToolExecutionUpdate) => void;
+}
+
 /** Tool registry interface */
 export interface ToolRegistry {
 	get(name: string): ToolExecutor | undefined;
@@ -58,7 +72,7 @@ export interface ToolRegistry {
 
 /** Tool executor interface */
 export interface ToolExecutor {
-	execute(args: Record<string, unknown>): Promise<ToolExecutionResult>;
+	execute(args: Record<string, unknown>, options?: ToolExecutionOptions): Promise<ToolExecutionResult>;
 	getMetadata(): ToolMetadata;
 }
 

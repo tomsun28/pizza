@@ -4,7 +4,7 @@
  * Session persistence via EventStore: in-memory, persistent, continue, or open specific.
  */
 
-import { createSessionFacade } from "@mariozechner/pi-coding-agent";
+import { createSessionFacade } from "pizza";
 
 const cwd = process.cwd();
 

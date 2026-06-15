@@ -5,10 +5,10 @@
  * Demonstrates how to cancel session events using the before_* events.
  */
 
-import type { ExtensionAPI, SessionBeforeSwitchEvent, SessionMessageEntry } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, SessionBeforeSwitchEvent, SessionMessageEntry } from "pizza";
 
-export default function (pi: ExtensionAPI) {
-	pi.on("session_before_switch", async (event: SessionBeforeSwitchEvent, ctx) => {
+export default function (pizza: ExtensionAPI) {
+	pizza.on("session_before_switch", async (event: SessionBeforeSwitchEvent, ctx) => {
 		if (!ctx.hasUI) return;
 
 		if (event.reason === "new") {
@@ -43,7 +43,7 @@ export default function (pi: ExtensionAPI) {
 		}
 	});
 
-	pi.on("session_before_fork", async (event, ctx) => {
+	pizza.on("session_before_fork", async (event, ctx) => {
 		if (!ctx.hasUI) return;
 
 		const choice = await ctx.ui.select(`Fork from entry ${event.entryId.slice(0, 8)}?`, [
