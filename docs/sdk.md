@@ -88,10 +88,10 @@ await facade.waitForIdle();
 facade.compact();
 
 // Change model mid-session
-facade.setModel("anthropic", "claude-sonnet-4-20250514");
+facade.setModel({ provider: "anthropic", model_id: "claude-sonnet-4-20250514" });
 
 // Change thinking level
-facade.setThinkingLevel("high");
+facade.thinkingLevel = "high";
 
 // Subscribe to real-time events
 facade.subscribe((event) => {
@@ -320,7 +320,7 @@ const { facade } = await createSessionFacade({ resourceLoader });
 
 ### createSessionFacade(options?)
 
-Returns `{ facade: SessionFacade }`.
+Returns `CreateSessionFacadeResult` with `{ facade, runtime, model, thinkingLevel, extensionsResult, modelFallbackMessage? }`.
 
 | Option | Type | Default | Description |
 |---|---|---|---|
@@ -333,7 +333,7 @@ Returns `{ facade: SessionFacade }`.
 | `storagePath` | `string` | Auto-derived | EventStore SQLite path (`:memory:` for in-memory) |
 | `authStorage` | `AuthStorage` | `AuthStorage.create()` | Credential storage |
 | `modelRegistry` | `ModelRegistry` | `ModelRegistry.create(authStorage)` | Model resolution |
-| `settingsManager` | `SettingsManager` | `SettingsManager.create()` | Settings |
+| `settingsManager` | `SettingsManager` | `SettingsManager.create(cwd)` | Settings |
 | `resourceLoader` | `ResourceLoader` | `DefaultResourceLoader` | Extension/skill/context discovery |
 | `extensions` | `ExtensionFactory[]` | Discovered | Extension factories |
 | `sessionDir` | `string` | Auto-derived | Session directory |
@@ -349,11 +349,12 @@ Returns `{ facade: SessionFacade }`.
 | `compact(options?)` | Request context compaction |
 | `waitForIdle()` | Promise that resolves when agent finishes |
 | `subscribe(handler, options?)` | Subscribe to EventStore event stream |
-| `setModel(provider, modelId)` | Change model |
-| `setThinkingLevel(level)` | Change thinking level |
+| `setModel(model, thinkingLevel?)` | Change model (`ModelConfig` or `Model`) |
+| `model` (property) | Getter/setter for current model |
+| `thinkingLevel` (property) | Getter/setter for thinking level |
+| `tools` (property) | Getter/setter for tool list |
+| `systemPrompt` (property) | Getter/setter for system prompt |
 | `getProjection()` | Get SessionProjection for context queries |
-| `getTools()` / `setTools(tools)` | Tool management |
-| `getModel()` / `getThinkingLevel()` | Current settings |
 | `dispose()` | Clean up resources |
 
 ## Run Modes
@@ -379,6 +380,6 @@ The SDK is built on an event-sourced architecture:
 - **EventStore** (SQLite) is the single source of truth — all state derives from the event log
 - **Reactor** drives agent turns via a handler table (14 handlers)
 - **SessionProjection** builds LLM context from events
-- **IntentExecutor** is the sole component authorized to execute tool mutations
+- **IntentExecutor** is a legacy execution path; the Reactor inlines classify → approval → execute via RuntimeAdapter
 
 See [ARCHITECTURE.md](../../ARCHITECTURE.md) for the full architecture overview.

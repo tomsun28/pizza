@@ -1,6 +1,6 @@
 # Windows Setup
 
-Pi requires a bash shell on Windows. Checked locations (in order):
+Pizza requires a bash shell on Windows. Checked locations (in order):
 
 1. Custom path from `~/.pizza/agent/settings.json`
 2. Git Bash (`C:\Program Files\Git\bin\bash.exe`)

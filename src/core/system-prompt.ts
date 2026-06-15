@@ -4,7 +4,6 @@
 
 import { existsSync } from "fs";
 import { execSync } from "child_process";
-import { getDocsPath, getExamplesPath, getReadmePath } from "../config.js";
 import { formatSkillsForPrompt, type Skill } from "./skills.js";
 
 /**
@@ -119,11 +118,6 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 
 		return prompt;
 	}
-
-	// Get absolute paths to documentation and examples
-	const readmePath = getReadmePath();
-	const docsPath = getDocsPath();
-	const examplesPath = getExamplesPath();
 
 	// Build tools list - only bash is exposed via function calls.
 	// read/write/edit are handled internally by the bash tool;
