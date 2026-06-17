@@ -10,11 +10,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "@mariozechner/jiti";
-import * as _bundledPiAgentCore from "../agent/index.js";
-import * as _bundledPiAi from "@mariozechner/pi-ai";
-import * as _bundledPiAiOauth from "@mariozechner/pi-ai/oauth";
+import * as _bundledAi from "@mariozechner/pi-ai";
+import * as _bundledAiOauth from "@mariozechner/pi-ai/oauth";
 import type { KeyId } from "@mariozechner/pi-tui";
-import * as _bundledPiTui from "@mariozechner/pi-tui";
+import * as _bundledTui from "@mariozechner/pi-tui";
 // Static imports of packages that extensions may use.
 // These MUST be static so Bun bundles them into the compiled binary.
 // The virtualModules option then makes them available to extensions.
@@ -22,7 +21,7 @@ import * as _bundledTypebox from "@sinclair/typebox";
 import { CONFIG_DIR_NAME, getAgentDir, isBunBinary } from "../../config.js";
 // NOTE: This import works because loader.ts exports are NOT re-exported from index.ts,
 // avoiding a circular dependency. Extensions can import from "pizza".
-import * as _bundledPiCodingAgent from "../../index.js";
+import * as _bundledPizza from "../../index.js";
 import { createEventBus, type EventBus } from "../event-bus.js";
 import type { ExecOptions } from "../exec.js";
 import { execCommand } from "../exec.js";
@@ -42,12 +41,10 @@ import type {
 /** Modules available to extensions via virtualModules (for compiled Bun binary) */
 const VIRTUAL_MODULES: Record<string, unknown> = {
 	"@sinclair/typebox": _bundledTypebox,
-	"@mariozechner/pi-agent-core": _bundledPiAgentCore,
-	"@mariozechner/pi-tui": _bundledPiTui,
-	"@mariozechner/pi-ai": _bundledPiAi,
-	"@mariozechner/pi-ai/oauth": _bundledPiAiOauth,
-	pizza: _bundledPiCodingAgent,
-	"@mariozechner/pi-coding-agent": _bundledPiCodingAgent,
+	"@mariozechner/pi-tui": _bundledTui,
+	"@mariozechner/pi-ai": _bundledAi,
+	"@mariozechner/pi-ai/oauth": _bundledAiOauth,
+	pizza: _bundledPizza,
 };
 
 const require = createRequire(import.meta.url);
@@ -95,14 +92,8 @@ function getAliases(): Record<string, string> {
 		}
 	};
 
-	const piAgentCoreEntry = path.resolve(__dirname, "../agent/index.js");
-
 	_aliases = {
 		pizza: packageIndex,
-		"@mariozechner/pi-coding-agent": packageIndex,
-		// Pizza no longer depends on @mariozechner/pi-agent-core; alias it to our own agent module
-		// so legacy extension code that imports it keeps working.
-		"@mariozechner/pi-agent-core": piAgentCoreEntry,
 		"@mariozechner/pi-tui": resolveWorkspaceOrImport("tui/dist/index.js", "@mariozechner/pi-tui"),
 		"@mariozechner/pi-ai": resolveWorkspaceOrImport("ai/dist/index.js", "@mariozechner/pi-ai"),
 		"@mariozechner/pi-ai/oauth": resolveWorkspaceOrImport("ai/dist/oauth.js", "@mariozechner/pi-ai/oauth"),
@@ -473,9 +464,6 @@ function readPizzaManifest(packageJsonPath: string): PizzaManifest | null {
 		if (pkg.pizza && typeof pkg.pizza === "object") {
 			return pkg.pizza as PizzaManifest;
 		}
-		if (pkg.pi && typeof pkg.pi === "object") {
-			return pkg.pi as PizzaManifest;
-		}
 		return null;
 	} catch {
 		return null;
@@ -496,7 +484,7 @@ function isExtensionFile(name: string): boolean {
  * Returns resolved paths or null if no entry points found.
  */
 function resolveExtensionEntries(dir: string): string[] | null {
-	// Check package.json manifest fields first. The legacy "pi" field is still accepted.
+	// Check package.json manifest fields first.
 	const packageJsonPath = path.join(dir, "package.json");
 	if (fs.existsSync(packageJsonPath)) {
 		const manifest = readPizzaManifest(packageJsonPath);

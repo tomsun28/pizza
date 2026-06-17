@@ -35,7 +35,7 @@ fi
 mkdir -p "$BUILD_DIR"
 
 # Copy our platform file
-cp "$DOOM_DIR/doomgeneric_pi.c" "$DOOM_DIR/doomgeneric/doomgeneric/"
+cp "$DOOM_DIR/doomgeneric_pizza.c" "$DOOM_DIR/doomgeneric/doomgeneric/"
 
 echo "Compiling DOOM to WebAssembly..."
 cd "$DOOM_DIR/doomgeneric/doomgeneric"
@@ -73,7 +73,7 @@ emcc -O2 \
     d_net.c \
     doomdef.c \
     doomgeneric.c \
-    doomgeneric_pi.c \
+    doomgeneric_pizza.c \
     doomstat.c \
     dstrings.c \
     f_finale.c \

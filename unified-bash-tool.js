@@ -1,5 +1,5 @@
 /**
- * Pi Coding Agent 统一 Bash 工具
+ * Pizza Coding Agent 统一 Bash 工具
  * 
  * 只暴露一个 bash tool，内置 read/edit/write 通过命令路由调用原生实现
  * 

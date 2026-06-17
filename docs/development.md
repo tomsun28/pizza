@@ -42,7 +42,7 @@ src/
     runtime/
       reactor.ts             # Event-driven turn loop (handler table)
       runtime.ts             # EventSourcedRuntime (store + reactor + projection)
-      pi-ai-client.ts        # LLM client adapter
+      ai-client.ts           # LLM client adapter
       policies.ts            # RetryPolicy, CompactionPolicy interfaces
     projection/
       session-projection.ts  # LLM context builder from events

@@ -28,7 +28,7 @@ package
 .npm/
 coverage/
 .nyc_output/
-.pi_config/
+.pizza_config/
 tui-debug.log
 compaction-results/
 .opencode/
@@ -39,7 +39,6 @@ out.html
 packages/coding-agent/binaries/
 todo.md
 plans/
-.pi/hf-sessions/
-.pi/hf-sessions-backup/
+.pizza/hf-sessions/
+.pizza/hf-sessions-backup/
 collect.sh
-

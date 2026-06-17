@@ -79,7 +79,7 @@ export function getUpdateInstruction(packageName: string): string {
  */
 export function getPackageDir(): string {
 	// Allow override via environment variable (useful for Nix/Guix where store paths tokenize poorly)
-	const envDir = process.env.PIZZA_PACKAGE_DIR ?? process.env.PI_PACKAGE_DIR;
+	const envDir = process.env.PIZZA_PACKAGE_DIR;
 	if (envDir) {
 		if (envDir === "~") return homedir();
 		if (envDir.startsWith("~/")) return homedir() + envDir.slice(1);
@@ -174,7 +174,7 @@ export function getBundledInteractiveAssetPath(name: string): string {
 
 const pkg = JSON.parse(readFileSync(getPackageJsonPath(), "utf-8"));
 
-const appConfig = pkg.pizzaConfig ?? pkg.piConfig ?? {};
+const appConfig = pkg.pizzaConfig ?? {};
 
 export const APP_NAME: string = appConfig.name || "pizza";
 export const CONFIG_DIR_NAME: string = appConfig.configDir || ".pizza";
@@ -186,7 +186,7 @@ const DEFAULT_SHARE_VIEWER_URL = "https://pizza.dev/session/";
 
 /** Get the share viewer URL for a gist ID */
 export function getShareViewerUrl(gistId: string): string {
-	const baseUrl = process.env.PIZZA_SHARE_VIEWER_URL || process.env.PI_SHARE_VIEWER_URL || DEFAULT_SHARE_VIEWER_URL;
+	const baseUrl = process.env.PIZZA_SHARE_VIEWER_URL || DEFAULT_SHARE_VIEWER_URL;
 	return `${baseUrl}#${gistId}`;
 }
 

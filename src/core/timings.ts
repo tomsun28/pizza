@@ -3,7 +3,7 @@
  * Enable with PIZZA_TIMING=1 environment variable.
  */
 
-const ENABLED = (process.env.PIZZA_TIMING ?? process.env.PI_TIMING) === "1";
+const ENABLED = process.env.PIZZA_TIMING === "1";
 const timings: Array<{ label: string; ms: number }> = [];
 let lastTime = Date.now();
 

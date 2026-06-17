@@ -2,11 +2,11 @@
  * Agent Types — pizza's own message / tool / state model.
  *
  * Built on top of pi-ai's primitives (`UserMessage`, `AssistantMessage`,
- * `ToolResultMessage`, `Tool`, `Model`) but free of any dependency on
- * `@mariozechner/pi-agent-core`.
+ * `ToolResultMessage`, `Tool`, `Model`) without carrying the old standalone
+ * agent-core package boundary.
  *
  * This module is the new canonical home for agent shape definitions.
- * Callers should import from here, not from pi-agent-core.
+ * Callers should import from here.
  */
 
 import type {
@@ -19,7 +19,7 @@ import type {
 	SimpleStreamOptions,
 	streamSimple,
 	TextContent,
-	ThinkingLevel as PiThinkingLevel,
+	ThinkingLevel as AiThinkingLevel,
 	Tool,
 	ToolResultMessage,
 	UserMessage,
@@ -53,7 +53,7 @@ export type ToolExecutionMode = "sequential" | "parallel";
 // Thinking levels (Pizza's extension; includes "off" which pi-ai doesn't have)
 // ============================================================================
 
-export type ThinkingLevel = "off" | PiThinkingLevel;
+export type ThinkingLevel = "off" | AiThinkingLevel;
 
 // ============================================================================
 // Custom message types — pizza-specific roles that flow alongside LLM messages

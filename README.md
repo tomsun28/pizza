@@ -2,7 +2,7 @@
 
 Pizza is a terminal coding agent. It helps you read files, execute commands, edit code, and write new files.
 
-Based on [pi-mono](https://github.com/badlogic/pi-mono). Thanks to pi-mono.
+Pizza builds on the existing terminal agent architecture in this repository.
 
 ## Quick Start
 
@@ -59,4 +59,3 @@ pizza -c
 # Non-interactive
 pizza -p "Summarize this codebase"
 ```
-

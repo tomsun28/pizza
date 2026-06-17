@@ -84,10 +84,6 @@ function isTruthyEnvFlag(value: string | undefined): boolean {
 	return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
 }
 
-function getEnvWithLegacyFallback(primary: string, legacy: string): string | undefined {
-	return process.env[primary] ?? process.env[legacy];
-}
-
 type AppMode = "interactive" | "print" | "json" | "rpc";
 
 function resolveAppMode(parsed: Args, stdinIsTTY: boolean): AppMode {
@@ -507,12 +503,10 @@ export interface MainOptions {
 
 export async function main(args: string[], options?: MainOptions) {
 	resetTimings();
-	const offlineMode = args.includes("--offline") || isTruthyEnvFlag(getEnvWithLegacyFallback("PIZZA_OFFLINE", "PI_OFFLINE"));
+	const offlineMode = args.includes("--offline") || isTruthyEnvFlag(process.env.PIZZA_OFFLINE);
 	if (offlineMode) {
 		process.env.PIZZA_OFFLINE = "1";
-		process.env.PI_OFFLINE = "1";
 		process.env.PIZZA_SKIP_VERSION_CHECK = "1";
-		process.env.PI_SKIP_VERSION_CHECK = "1";
 	}
 
 	if (await handlePackageCommand(args)) {
@@ -650,9 +644,7 @@ export async function main(args: string[], options?: MainOptions) {
 			process.exit(1);
 		}
 
-		const startupBenchmark = isTruthyEnvFlag(
-			getEnvWithLegacyFallback("PIZZA_STARTUP_BENCHMARK", "PI_STARTUP_BENCHMARK"),
-		);
+		const startupBenchmark = isTruthyEnvFlag(process.env.PIZZA_STARTUP_BENCHMARK);
 		if (startupBenchmark) {
 			console.error(chalk.red("Error: PIZZA_STARTUP_BENCHMARK only supports interactive mode"));
 			process.exit(1);
@@ -728,9 +720,7 @@ export async function main(args: string[], options?: MainOptions) {
 			console.log(chalk.dim(`Model scope: ${modelList} ${chalk.gray("(Ctrl+P to cycle)")}`));
 		}
 
-		const startupBenchmark = isTruthyEnvFlag(
-			getEnvWithLegacyFallback("PIZZA_STARTUP_BENCHMARK", "PI_STARTUP_BENCHMARK"),
-		);
+		const startupBenchmark = isTruthyEnvFlag(process.env.PIZZA_STARTUP_BENCHMARK);
 		const interactiveMode = InteractiveMode.fromFacade(created, scopedModelsList, {
 			modelFallbackMessage: created.modelFallbackMessage,
 			initialMessage,
@@ -809,9 +799,7 @@ export async function main(args: string[], options?: MainOptions) {
 		process.exit(1);
 	}
 
-	const startupBenchmark = isTruthyEnvFlag(
-		getEnvWithLegacyFallback("PIZZA_STARTUP_BENCHMARK", "PI_STARTUP_BENCHMARK"),
-	);
+	const startupBenchmark = isTruthyEnvFlag(process.env.PIZZA_STARTUP_BENCHMARK);
 	if (startupBenchmark) {
 		console.error(chalk.red("Error: PIZZA_STARTUP_BENCHMARK only supports interactive mode"));
 		process.exit(1);

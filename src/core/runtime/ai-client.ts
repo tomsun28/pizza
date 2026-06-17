@@ -9,7 +9,7 @@ import type {
 } from "@mariozechner/pi-ai";
 import type { LLMChunk, LLMClient, ModelConfig } from "./llm-types.js";
 
-export type PiAiStreamFn = (
+export type AiStreamFn = (
 	model: Model<any>,
 	context: Context,
 	options?: SimpleStreamOptions,
@@ -26,10 +26,10 @@ function getStreamToolCall(event: AssistantMessageEvent): ToolCall | undefined {
 	return partialBlock?.type === "toolCall" ? (partialBlock as ToolCall) : undefined;
 }
 
-/** Build an EventSourcedRuntime LLMClient around a pi-ai stream function. */
+/** Build an EventSourcedRuntime LLMClient around the configured AI stream function. */
 export function buildLlmClientFromStreamFn(
 	model: Model<any>,
-	streamFn: PiAiStreamFn,
+	streamFn: AiStreamFn,
 	options?: {
 		getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
 		thinkingBudgets?: any;
@@ -41,7 +41,7 @@ export function buildLlmClientFromStreamFn(
 	return {
 		async complete({ messages, systemPrompt, tools, onChunk, signal }) {
 			const apiKey = options?.getApiKey ? await options.getApiKey(model.provider) : undefined;
-			const piTools = tools?.map((tool) => ({
+			const streamTools = tools?.map((tool) => ({
 				name: tool.name,
 				description: tool.description ?? "",
 				parameters: tool.input_schema as any,
@@ -55,7 +55,7 @@ export function buildLlmClientFromStreamFn(
 						(message) =>
 							message.role === "user" || message.role === "assistant" || message.role === "toolResult",
 					) as any,
-					tools: piTools,
+					tools: streamTools,
 				},
 				{
 					apiKey,

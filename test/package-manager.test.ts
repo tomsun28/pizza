@@ -48,13 +48,10 @@ describe("DefaultPackageManager", () => {
 	let settingsManager: SettingsManager;
 	let packageManager: DefaultPackageManager;
 	let previousOfflineEnv: string | undefined;
-	let previousLegacyOfflineEnv: string | undefined;
 
 	beforeEach(() => {
 		previousOfflineEnv = process.env.PIZZA_OFFLINE;
-		previousLegacyOfflineEnv = process.env.PI_OFFLINE;
 		delete process.env.PIZZA_OFFLINE;
-		delete process.env.PI_OFFLINE;
 		tempDir = join(tmpdir(), `pm-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(tempDir, { recursive: true });
 		agentDir = join(tempDir, "agent");
@@ -73,11 +70,6 @@ describe("DefaultPackageManager", () => {
 			delete process.env.PIZZA_OFFLINE;
 		} else {
 			process.env.PIZZA_OFFLINE = previousOfflineEnv;
-		}
-		if (previousLegacyOfflineEnv === undefined) {
-			delete process.env.PI_OFFLINE;
-		} else {
-			process.env.PI_OFFLINE = previousLegacyOfflineEnv;
 		}
 		vi.restoreAllMocks();
 		vi.unstubAllGlobals();

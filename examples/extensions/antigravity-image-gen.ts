@@ -51,7 +51,7 @@ const ANTIGRAVITY_ENDPOINT = "https://daily-cloudcode-pa.sandbox.googleapis.com"
 const DEFAULT_ANTIGRAVITY_VERSION = "1.21.9";
 
 const ANTIGRAVITY_HEADERS = {
-	"User-Agent": `antigravity/${process.env.PIZZA_AI_ANTIGRAVITY_VERSION || process.env.PI_AI_ANTIGRAVITY_VERSION || DEFAULT_ANTIGRAVITY_VERSION} darwin/arm64`,
+	"User-Agent": `antigravity/${process.env.PIZZA_AI_ANTIGRAVITY_VERSION || DEFAULT_ANTIGRAVITY_VERSION} darwin/arm64`,
 	"X-Goog-Api-Client": "google-cloud-sdk vscode_cloudshelleditor/0.1",
 	"Client-Metadata": JSON.stringify({
 		ideType: "IDE_UNSPECIFIED",
@@ -191,7 +191,7 @@ function loadConfig(cwd: string): ExtensionConfig {
 
 function resolveSaveConfig(params: ToolParams, cwd: string): SaveConfig {
 	const config = loadConfig(cwd);
-	const envMode = (process.env.PIZZA_IMAGE_SAVE_MODE || process.env.PI_IMAGE_SAVE_MODE || "").toLowerCase();
+	const envMode = (process.env.PIZZA_IMAGE_SAVE_MODE || "").toLowerCase();
 	const paramMode = params.save;
 	const mode = (paramMode || envMode || config.save || DEFAULT_SAVE_MODE) as SaveMode;
 
@@ -209,7 +209,7 @@ function resolveSaveConfig(params: ToolParams, cwd: string): SaveConfig {
 	}
 
 	if (mode === "custom") {
-		const dir = params.saveDir || process.env.PIZZA_IMAGE_SAVE_DIR || process.env.PI_IMAGE_SAVE_DIR || config.saveDir;
+		const dir = params.saveDir || process.env.PIZZA_IMAGE_SAVE_DIR || config.saveDir;
 		if (!dir || !dir.trim()) {
 			throw new Error("save=custom requires saveDir or PIZZA_IMAGE_SAVE_DIR.");
 		}

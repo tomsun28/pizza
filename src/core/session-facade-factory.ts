@@ -34,7 +34,7 @@ import { findInitialModel } from "./model-resolver.js";
 import { SessionManager as ProjectionSessionManager } from "./projection/session-manager.js";
 import { DefaultResourceLoader, type ResourceLoader } from "./resource-loader.js";
 import type { ToolDefinition as RuntimeToolDefinition } from "./runtime/llm-types.js";
-import { buildLlmClientFromStreamFn, toModelConfig } from "./runtime/pi-ai-client.js";
+import { buildLlmClientFromStreamFn, toModelConfig } from "./runtime/ai-client.js";
 import { DefaultRetryPolicy } from "./runtime/policies.js";
 import { EventSourcedRuntime } from "./runtime/runtime.js";
 import { SessionFacade } from "./session-facade.js";
@@ -519,7 +519,7 @@ export async function createSessionFacade(
 		() => extensionRunner.createContext(),
 	);
 
-	// ── LLM client (pi-ai streamFn → reactor LLMClient) ────────────────────
+	// ── LLM client (AI stream function -> reactor LLMClient) ───────────────
 	const llmClient = model
 		? buildLlmClientFromStreamFn(model, async (m, context, opts) => {
 				const auth = await modelRegistry.getApiKeyAndHeaders(m);

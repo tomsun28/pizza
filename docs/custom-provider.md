@@ -345,12 +345,12 @@ interface OAuthCredentials {
 For providers with non-standard APIs, implement `streamSimple`. Study the existing provider implementations before writing your own:
 
 **Reference implementations:**
-- [anthropic.ts](https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/providers/anthropic.ts) - Anthropic Messages API
-- [mistral.ts](https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/providers/mistral.ts) - Mistral Conversations API
-- [openai-completions.ts](https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/providers/openai-completions.ts) - OpenAI Chat Completions
-- [openai-responses.ts](https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/providers/openai-responses.ts) - OpenAI Responses API
-- [google.ts](https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/providers/google.ts) - Google Generative AI
-- [amazon-bedrock.ts](https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/providers/amazon-bedrock.ts) - AWS Bedrock
+- `@mariozechner/pi-ai` provider sources for Anthropic Messages API
+- `@mariozechner/pi-ai` provider sources for Mistral Conversations API
+- `@mariozechner/pi-ai` provider sources for OpenAI Chat Completions
+- `@mariozechner/pi-ai` provider sources for OpenAI Responses API
+- `@mariozechner/pi-ai` provider sources for Google Generative AI
+- `@mariozechner/pi-ai` provider sources for AWS Bedrock
 
 ### Stream Pattern
 
@@ -522,7 +522,7 @@ pizza.registerProvider("my-provider", {
 
 ## Testing Your Implementation
 
-Test your provider against the same test suites used by built-in providers. Copy and adapt these test files from [packages/ai/test/](https://github.com/badlogic/pi-mono/tree/main/packages/ai/test):
+Test your provider against the same style of contract tests used by built-in providers. Copy and adapt provider tests from the AI package when available:
 
 | Test | Purpose |
 |------|---------|

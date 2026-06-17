@@ -7,7 +7,7 @@ import { SettingsManager } from "../src/core/settings-manager.js";
  * Tests for the fix to a bug where external file changes to arrays were overwritten.
  *
  * The bug scenario was:
- * 1. Pi starts with settings.json containing packages: ["npm:some-pkg"]
+ * 1. Pizza starts with settings.json containing packages: ["npm:some-pkg"]
  * 2. User externally edits file to packages: []
  * 3. User changes an unrelated setting (e.g., theme) via UI
  * 4. save() would overwrite packages back to ["npm:some-pkg"] from stale in-memory state
@@ -46,7 +46,7 @@ describe("SettingsManager - External Edit Preservation", () => {
 			}),
 		);
 
-		// Pi starts up, loads settings into memory
+		// Pizza starts up, loads settings into memory
 		const manager = SettingsManager.create(projectDir, agentDir);
 
 		// At this point, globalSettings.packages = ["npm:pizza-mcp-adapter"]
