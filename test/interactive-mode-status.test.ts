@@ -99,6 +99,60 @@ describe("InteractiveMode.setToolsExpanded", () => {
 	});
 });
 
+describe("InteractiveMode facade footer model info", () => {
+	test("reads the current facade model instead of the startup model snapshot", () => {
+		const firstModel = {
+			id: "shared-id",
+			provider: "first",
+			reasoning: false,
+			contextWindow: 128_000,
+		};
+		const nextModel = {
+			id: "shared-id",
+			provider: "next",
+			reasoning: true,
+			contextWindow: 1_000_000,
+		};
+		let currentModelConfig = { provider: "first", model_id: "shared-id" };
+		const modelRegistry = {
+			find: (provider: string, modelId: string) => {
+				if (provider === "first" && modelId === "shared-id") return firstModel;
+				if (provider === "next" && modelId === "shared-id") return nextModel;
+				return undefined;
+			},
+			isUsingOAuth: vi.fn(() => false),
+		};
+		const fakeThis: any = Object.create(InteractiveMode.prototype);
+		fakeThis.facadeResult = { model: firstModel };
+		fakeThis.facade = {
+			get model() {
+				return currentModelConfig;
+			},
+			modelRegistry,
+			getProjection: () => ({
+				buildContext: () => ({ messages: [{ role: "user", content: "hello world" }] }),
+				getDescriptor: () => ({ name: undefined }),
+			}),
+			runtime: { cwd: "/tmp/project" },
+			thinkingLevel: "off",
+		};
+
+		const footerInfo = (InteractiveMode as any).prototype.createFacadeFooterInfo.call(fakeThis);
+		expect(footerInfo.getModel()).toMatchObject({ provider: "first", contextWindow: 128_000 });
+		expect(footerInfo.getContextUsage()).toMatchObject({ contextWindow: 128_000 });
+
+		currentModelConfig = { provider: "next", model_id: "shared-id" };
+
+		expect(footerInfo.getModel()).toMatchObject({
+			provider: "next",
+			id: "shared-id",
+			reasoning: true,
+			contextWindow: 1_000_000,
+		});
+		expect(footerInfo.getContextUsage()).toMatchObject({ contextWindow: 1_000_000 });
+	});
+});
+
 describe("InteractiveMode.createExtensionUIContext setTheme", () => {
 	test("persists theme changes to settings manager", () => {
 		initTheme("dark");

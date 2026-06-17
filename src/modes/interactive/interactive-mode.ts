@@ -269,8 +269,21 @@ export class InteractiveMode {
 	}
 
 	private get currentModel() {
-		const mc = this.facade.model;
-		return this.facade.modelRegistry?.getAvailable().find((m: any) => m.id === mc.model_id);
+		return this.getCurrentModelFromFacade();
+	}
+
+	private getCurrentModelFromFacade(): Model<any> | undefined {
+		const current = this.facade.model;
+		const registry = this.facade.modelRegistry;
+		const resolved = registry?.find(current.provider, current.model_id);
+		if (resolved) return resolved as Model<any>;
+
+		const initialModel = this.facadeResult?.model;
+		if (initialModel?.provider === current.provider && initialModel.id === current.model_id) {
+			return initialModel as Model<any>;
+		}
+
+		return undefined;
 	}
 	private get currentThinkingLevel(): ThinkingLevel {
 		return (this.facade.thinkingLevel ?? "off") as ThinkingLevel;
@@ -325,7 +338,7 @@ export class InteractiveMode {
 	}
 
 	private getContextUsageFacade() {
-		const model = this.facadeResult?.model;
+		const model = this.getCurrentModelFromFacade();
 		const contextWindow = (model as any)?.contextWindow ?? 0;
 		if (contextWindow <= 0) return undefined;
 		const messages = this.facade.getProjection().buildContext().messages;
@@ -565,9 +578,9 @@ export class InteractiveMode {
 
 	private createFacadeFooterInfo() {
 		const facade = this.facade!;
-		const facadeModel = this.facadeResult?.model;
 		return {
 			getModel: () => {
+				const facadeModel = this.getCurrentModelFromFacade();
 				if (!facadeModel) return undefined;
 				return { id: facadeModel.id, provider: facadeModel.provider, reasoning: facadeModel.reasoning, contextWindow: facadeModel.contextWindow };
 			},
@@ -588,6 +601,7 @@ export class InteractiveMode {
 				return { totalInput, totalOutput, totalCacheRead, totalCacheWrite, totalCost };
 			},
 			getContextUsage: () => {
+				const facadeModel = this.getCurrentModelFromFacade();
 				const contextWindow = facadeModel?.contextWindow ?? 0;
 				if (contextWindow <= 0) return undefined;
 				const messages = facade.getProjection().buildContext().messages;
@@ -601,7 +615,10 @@ export class InteractiveMode {
 			},
 			getCwd: () => facade.runtime.cwd,
 			getSessionName: () => facade.getProjection().getDescriptor().name ?? undefined,
-			isUsingOAuthSubscription: () => facade.modelRegistry?.isUsingOAuth?.(facadeModel as any) ?? false,
+			isUsingOAuthSubscription: () => {
+				const facadeModel = this.getCurrentModelFromFacade();
+				return facadeModel ? (facade.modelRegistry?.isUsingOAuth?.(facadeModel as any) ?? false) : false;
+			},
 		};
 	}
 
