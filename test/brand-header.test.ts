@@ -1,0 +1,46 @@
+import { setKeybindings, visibleWidth } from "@mariozechner/pi-tui";
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { KeybindingsManager } from "../src/core/keybindings.js";
+import { BrandHeaderComponent } from "../src/modes/interactive/components/brand-header.js";
+import { initTheme } from "../src/modes/interactive/theme/theme.js";
+
+function stripAnsi(text: string): string {
+	return text.replace(/\u001b\[[0-9;]*m/g, "");
+}
+
+describe("BrandHeaderComponent", () => {
+	beforeAll(() => {
+		initTheme("dark");
+	});
+
+	beforeEach(() => {
+		setKeybindings(new KeybindingsManager());
+	});
+
+	it("renders the Pizza brand and startup value proposition", () => {
+		const header = new BrandHeaderComponent("pizza", "1.2.3");
+		const rendered = stripAnsi(header.render(90).join("\n"));
+
+		expect(rendered).toContain("PIZZA");
+		expect(rendered).toContain("v1.2.3");
+		expect(rendered).toContain("Create together with Pizza.");
+		expect(rendered).toContain("Read code");
+	});
+
+	it("keeps all compact and expanded lines within render width", () => {
+		for (const width of [20, 45, 46, 68, 90]) {
+			const header = new BrandHeaderComponent("pizza", "1.2.3", true);
+			for (const line of header.render(width)) {
+				expect(visibleWidth(line), `width ${width}: ${stripAnsi(line)}`).toBeLessThanOrEqual(width);
+			}
+		}
+	});
+
+	it("updates rendered content when expansion changes", () => {
+		const header = new BrandHeaderComponent("pizza", "1.2.3");
+		expect(stripAnsi(header.render(90).join("\n"))).not.toContain("Shortcuts");
+
+		header.setExpanded(true);
+		expect(stripAnsi(header.render(90).join("\n"))).toContain("Shortcuts");
+	});
+});
