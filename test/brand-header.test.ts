@@ -43,4 +43,34 @@ describe("BrandHeaderComponent", () => {
 		header.setExpanded(true);
 		expect(stripAnsi(header.render(90).join("\n"))).toContain("Shortcuts");
 	});
+
+	it("renders recent task history on wide headers", () => {
+		const header = new BrandHeaderComponent("pizza", "1.2.3");
+		header.setTaskHistory([
+			{
+				task_id: "task_1",
+				status: "completed",
+				title: "Build projection",
+				summary: "Projection summarizes task events",
+				updated_at: 3,
+			},
+			{
+				task_id: "task_2",
+				status: "in_progress",
+				title: "Render header",
+				summary: "Header shows recent tasks",
+				updated_at: 2,
+			},
+		]);
+
+		const rendered = header.render(120);
+		const text = stripAnsi(rendered.join("\n"));
+
+		expect(text).toContain("Recent tasks");
+		expect(text).toContain("Projection summarizes task events");
+		expect(text).toContain("Header shows recent tasks");
+		for (const line of rendered) {
+			expect(visibleWidth(line), stripAnsi(line)).toBeLessThanOrEqual(120);
+		}
+	});
 });

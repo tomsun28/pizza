@@ -68,7 +68,7 @@
 		"syntaxOperator": "#89DDFF",
 		"syntaxPunctuation": "#89DDFF",
 
-		"thinkingOff": "darkGray",
+"thinkingOff": "cyan",
 		"thinkingMinimal": "#4A5568",
 		"thinkingLow": "#4A7FBF",
 		"thinkingMedium": "#5B9BF2",

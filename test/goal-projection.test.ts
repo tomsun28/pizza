@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { SqliteEventStore } from "../src/core/event-store/sqlite-store.js";
 import { GoalProjection } from "../src/core/projection/goal-projection.js";
+import { buildRecentTaskHistory } from "../src/core/projection/task-history.js";
 
 describe("GoalProjection", () => {
 	let store: SqliteEventStore;
@@ -258,5 +259,50 @@ describe("GoalProjection", () => {
 		expect(projection.listActiveGoals()).toHaveLength(0);
 
 		projection.stopLive();
+	});
+
+	it("builds recent task history with generated summaries", () => {
+		store.append({
+			actor_id: "user",
+			type: "GOAL_CREATED",
+			payload: { goal_id: "goal_1", title: "Feature" },
+		});
+		store.append({
+			actor_id: "coder_agent",
+			type: "TASK_CREATED",
+			timestamp: 1_000,
+			payload: { task_id: "task_1", goal_id: "goal_1", title: "Write types", priority: "high" },
+		});
+		store.append({
+			actor_id: "coder_agent",
+			type: "TASK_CREATED",
+			timestamp: 2_000,
+			payload: { task_id: "task_2", goal_id: "goal_1", title: "Write implementation", priority: "medium" },
+		});
+		store.append({
+			actor_id: "coder_agent",
+			type: "TASK_PROGRESS",
+			timestamp: 3_000,
+			payload: { task_id: "task_2", note: "Parsing and rendering wired" },
+		});
+		store.append({
+			actor_id: "coder_agent",
+			type: "TASK_COMPLETED",
+			timestamp: 4_000,
+			payload: { task_id: "task_1", summary: "Types exported and covered" },
+		});
+
+		projection.rebuild();
+		const history = buildRecentTaskHistory(projection, 2);
+
+		expect(history.map((task) => task.task_id)).toEqual(["task_1", "task_2"]);
+		expect(history[0]).toMatchObject({
+			status: "completed",
+			summary: "Types exported and covered",
+		});
+		expect(history[1]).toMatchObject({
+			status: "in_progress",
+			summary: "Parsing and rendering wired",
+		});
 	});
 });

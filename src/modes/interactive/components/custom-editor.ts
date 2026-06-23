@@ -1,6 +1,17 @@
 import { Editor, type EditorOptions, type EditorTheme, type TUI } from "@mariozechner/pi-tui";
 import type { AppKeybinding, KeybindingsManager } from "../../../core/keybindings.js";
 
+/** Strip ANSI escape sequences for visible-text checks. */
+function stripAnsi(str: string): string {
+	return str.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+/** Check if a rendered line is a plain border (all ─ characters). */
+function isPlainBorder(line: string): boolean {
+	const stripped = stripAnsi(line);
+	return stripped.length > 2 && /^─+$/.test(stripped);
+}
+
 /**
  * Custom editor that handles app-level keybindings for coding-agent.
  */
@@ -76,5 +87,31 @@ export class CustomEditor extends Editor {
 
 		// Pass to parent for editor handling
 		super.handleInput(data);
+	}
+
+	/**
+	 * Override render to add cyber-style corner brackets on border lines.
+	 * The parent Editor renders plain ─── lines; we replace the first and
+	 * last simple border lines with angular corners (┌┐ / └┘).
+	 * Scroll indicators and content lines are passed through unchanged.
+	 */
+	render(width: number): string[] {
+		const lines = super.render(width);
+		if (width < 4 || lines.length < 2) return lines;
+
+		// Top border: first line if it's a plain border
+		if (isPlainBorder(lines[0]!)) {
+			lines[0] = this.borderColor("┌") + this.borderColor("─").repeat(width - 2) + this.borderColor("┐");
+		}
+
+		// Bottom border: scan backwards from end for the last plain border
+		for (let i = lines.length - 1; i >= 1; i--) {
+			if (isPlainBorder(lines[i]!)) {
+				lines[i] = this.borderColor("└") + this.borderColor("─").repeat(width - 2) + this.borderColor("┘");
+				break;
+			}
+		}
+
+		return lines;
 	}
 }

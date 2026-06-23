@@ -7,7 +7,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { EventBase } from "../event-store/types.js";
-import type { EventStore } from "../event-store/store.js";
+import type { EventQuery, EventStore } from "../event-store/store.js";
 import type { SessionDescriptor, SessionIndex } from "./types.js";
 import { SessionProjection } from "./session-projection.js";
 import { SessionBoundaryInferrer } from "./boundary-inferrer.js";
@@ -250,18 +250,21 @@ export class SessionManager {
 		// Only evaluate if we're at HEAD
 		if (current.event_range.end_event_id !== "HEAD") return;
 
-		const recent = this.store.latest(20);
+		const recent = this._getRecentEventsBefore(event, current);
 		const decision = this.inferrer.evaluate(recent, event);
 
 		if (decision.should_split) {
-			// End current session's event_range
-			const lastEvent = recent[recent.length - 2]; // event before current
-			if (lastEvent) {
-				current.event_range.end_event_id = lastEvent.event_id;
-			}
+			const lastEventBeforeSplit = recent[recent.length - 1];
 
-			// Create new session
-			this.createSession("auto_inferred", decision.suggested_name);
+			// End the current session before the triggering message.
+			// EventStore range queries use exclusive end boundaries.
+			current.event_range.end_event_id = event.event_id;
+
+			// Start the inferred session after the previous event so the triggering
+			// message becomes the first user-visible message in the new view.
+			this.createSession("auto_inferred", decision.suggested_name, {
+				startEventId: lastEventBeforeSplit?.event_id ?? current.event_range.start_event_id,
+			});
 
 			this.store.append({
 				actor_id: "runtime",
@@ -273,6 +276,20 @@ export class SessionManager {
 				caused_by: event.event_id,
 			});
 		}
+	}
+
+	private _getRecentEventsBefore(event: EventBase, current: SessionDescriptor): EventBase[] {
+		const query: EventQuery = {
+			before_sequence: event.sequence,
+			limit: 20,
+			reverse: true,
+		};
+
+		if (current.event_range.start_event_id !== "ORIGIN") {
+			query.after = current.event_range.start_event_id;
+		}
+
+		return this.store.query(query).reverse();
 	}
 
 	private _ensureStorageDir(): void {

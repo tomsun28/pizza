@@ -128,6 +128,10 @@ export class FooterComponent implements Component {
 		const sessionName = this.getFromSession("sessionName");
 		const usingSubscription = this.getFromSession("usingOAuth");
 
+		// Cyber-style prefix and content width (prefix takes 2 columns)
+		const prefix = theme.fg("accent", "❯ ");
+		const contentWidth = Math.max(1, width - 2);
+
 		const contextWindow = contextUsage?.contextWindow ?? modelInfo?.contextWindow ?? 0;
 		const contextPercentValue = contextUsage?.percent ?? 0;
 		const contextPercent = contextUsage?.percent !== null ? contextPercentValue.toFixed(1) : "?";
@@ -186,16 +190,15 @@ export class FooterComponent implements Component {
 		}
 		statsParts.push({ text: contextPercentDisplay, color: contextColor });
 
-		let statsLeft = statsParts.map((part) => part.text).join(" ");
-
+		let statsLeft = statsParts.map((part) => part.text).join("│");
 		// Add model name on the right side, plus thinking level if model supports it
 		const modelName = modelInfo?.id || "no-model";
 
 		let statsLeftWidth = visibleWidth(statsLeft);
 
 		// If statsLeft is too wide, truncate it
-		if (statsLeftWidth > width) {
-			statsLeft = truncateToWidth(statsLeft, width, "...");
+		if (statsLeftWidth > contentWidth) {
+			statsLeft = truncateToWidth(statsLeft, contentWidth, "...");
 			statsLeftWidth = visibleWidth(statsLeft);
 		}
 
@@ -214,7 +217,7 @@ export class FooterComponent implements Component {
 		let rightSide = rightSideWithoutProvider;
 		if (this.footerData.getAvailableProviderCount() > 1 && modelInfo) {
 			rightSide = `(${modelInfo.provider}) ${rightSideWithoutProvider}`;
-			if (statsLeftWidth + minPadding + visibleWidth(rightSide) > width) {
+			if (statsLeftWidth + minPadding + visibleWidth(rightSide) > contentWidth) {
 				// Too wide, fall back
 				rightSide = rightSideWithoutProvider;
 			}
@@ -225,23 +228,23 @@ export class FooterComponent implements Component {
 
 		let renderedStatsLeft: string;
 		if (visibleWidth(statsLeft) === statsParts.reduce((sum, part) => sum + visibleWidth(part.text), 0) + Math.max(0, statsParts.length - 1)) {
-			renderedStatsLeft = statsParts.map((part) => theme.fg(part.color, part.text)).join(theme.fg("dim", " "));
+			renderedStatsLeft = statsParts.map((part) => theme.fg(part.color, part.text)).join(theme.fg("borderMuted", "│"));
 		} else {
 			renderedStatsLeft = theme.fg("dim", statsLeft);
 		}
 
 		let statsLine: string;
-		if (totalNeeded <= width) {
+		if (totalNeeded <= contentWidth) {
 			// Both fit - add padding to right-align model
-			const padding = " ".repeat(width - statsLeftWidth - rightSideWidth);
+			const padding = " ".repeat(contentWidth - statsLeftWidth - rightSideWidth);
 			statsLine = renderedStatsLeft + theme.fg("dim", padding) + renderRightSide(rightSide, modelInfo?.provider);
 		} else {
 			// Need to truncate right side
-			const availableForRight = width - statsLeftWidth - minPadding;
+			const availableForRight = contentWidth - statsLeftWidth - minPadding;
 			if (availableForRight > 0) {
 				const truncatedRight = truncateToWidth(rightSide, availableForRight, "");
 				const truncatedRightWidth = visibleWidth(truncatedRight);
-				const padding = " ".repeat(Math.max(0, width - statsLeftWidth - truncatedRightWidth));
+				const padding = " ".repeat(Math.max(0, contentWidth - statsLeftWidth - truncatedRightWidth));
 				statsLine = renderedStatsLeft + theme.fg("dim", padding) + renderRightSide(truncatedRight, modelInfo?.provider);
 			} else {
 				// Not enough space for right side at all
@@ -249,8 +252,8 @@ export class FooterComponent implements Component {
 			}
 		}
 
-		const pwdLine = truncateToWidth(renderSegments(pathSegments), width, theme.fg("dim", "..."));
-		const lines = [pwdLine, statsLine];
+		const pwdContent = truncateToWidth(renderSegments(pathSegments), contentWidth, theme.fg("dim", "..."));
+		const lines = [prefix + pwdContent, prefix + statsLine];
 
 		// Add extension statuses on a single line, sorted by key alphabetically
 		const extensionStatuses = this.footerData.getExtensionStatuses();
@@ -260,7 +263,7 @@ export class FooterComponent implements Component {
 				.map(([, text]) => sanitizeStatusText(text));
 			const statusLine = sortedStatuses.join(" ");
 			// Truncate to terminal width with dim ellipsis for consistency with footer style
-			lines.push(truncateToWidth(theme.fg("muted", statusLine), width, theme.fg("dim", "...")));
+			lines.push(prefix + truncateToWidth(theme.fg("muted", statusLine), contentWidth, theme.fg("dim", "...")));
 		}
 
 		return lines;

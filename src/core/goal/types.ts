@@ -107,8 +107,14 @@ export interface TaskDescriptor {
 	acceptance_criteria?: string[];
 	/** Progress notes (from TASK_PROGRESS events) */
 	progress_notes: string[];
+	/** Generated or agent-provided task summary */
+	summary?: string;
+	/** Failure message (if status is "failed") */
+	failure_message?: string;
 	/** Rework reason (if status is "rework") */
 	rework_reason?: string;
+	/** Cancellation reason (if status is "cancelled") */
+	cancel_reason?: string;
 	/** Timestamp of creation */
 	created_at: number;
 	/** Timestamp of last status change */

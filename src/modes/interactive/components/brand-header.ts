@@ -1,5 +1,6 @@
 import { type Component, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import type { AppKeybinding } from "../../../core/keybindings.js";
+import type { TaskHistoryItem } from "../../../core/projection/task-history.js";
 import { theme } from "../theme/theme.js";
 import { keyHint, keyText, rawKeyHint } from "./keybinding-hints.js";
 
@@ -17,6 +18,7 @@ export class BrandHeaderComponent implements Component {
 	private cachedWidth?: number;
 	private cachedExpanded?: boolean;
 	private cachedLines?: string[];
+	private taskHistory: TaskHistoryItem[] = [];
 
 	constructor(
 		private readonly appName: string,
@@ -29,6 +31,11 @@ export class BrandHeaderComponent implements Component {
 	setExpanded(expanded: boolean): void {
 		if (this.expanded === expanded) return;
 		this.expanded = expanded;
+		this.invalidate();
+	}
+
+	setTaskHistory(taskHistory: TaskHistoryItem[]): void {
+		this.taskHistory = taskHistory.slice(0, 3);
 		this.invalidate();
 	}
 
@@ -62,7 +69,7 @@ export class BrandHeaderComponent implements Component {
 			this.rule(width, "╭", "─", "╮"),
 			this.boxedLine(this.splitLine(this.brandText(), theme.fg("muted", "terminal coding agent"), width - 4), width),
 			this.rule(width, "├", "─", "┤"),
-			...LOGO_LINES.map((line) => this.boxedLine(theme.fg("accent", line), width)),
+			...this.renderLogoBody(width),
 			this.boxedLine("", width),
 			this.boxedLine(theme.fg("muted", `Create together with ${this.displayName()}.`), width),
 			this.boxedLine(theme.fg("dim", "Read code · edit files · run commands · keep context"), width),
@@ -77,6 +84,66 @@ export class BrandHeaderComponent implements Component {
 
 		lines.push(this.rule(width, "╰", "─", "╯"));
 		return lines;
+	}
+
+	private renderLogoBody(width: number): string[] {
+		if (this.taskHistory.length === 0 || width < 100) {
+			return LOGO_LINES.map((line) => this.boxedLine(theme.fg("accent", line), width));
+		}
+
+		const innerWidth = Math.max(1, width - 4);
+		const taskWidth = Math.min(44, Math.max(32, Math.floor(innerWidth * 0.38)));
+		const separator = theme.fg("borderMuted", "│");
+		const separatorWidth = 3;
+		const logoWidth = Math.max(1, innerWidth - taskWidth - separatorWidth);
+		const taskRows = this.taskPanelRows(taskWidth);
+
+		return LOGO_LINES.map((line, index) => {
+			const logo = this.fit(theme.fg("accent", line), logoWidth);
+			const task = this.fit(taskRows[index] ?? "", taskWidth);
+			return this.boxedLine(`${logo} ${separator} ${task}`, width);
+		});
+	}
+
+	private taskPanelRows(width: number): string[] {
+		const rows = [
+			theme.bold(theme.fg("muted", "Recent tasks")),
+			...this.taskHistory.map((task) => this.formatTaskLine(task, width)),
+		];
+
+		while (rows.length < LOGO_LINES.length) {
+			rows.push("");
+		}
+
+		return rows;
+	}
+
+	private formatTaskLine(task: TaskHistoryItem, width: number): string {
+		const label = this.taskStatusLabel(task.status);
+		const summaryWidth = Math.max(1, width - visibleWidth(label) - 1);
+		const summary = truncateToWidth(task.summary, summaryWidth, "", true);
+		return `${label} ${summary}`;
+	}
+
+	private taskStatusLabel(status: TaskHistoryItem["status"]): string {
+		switch (status) {
+			case "accepted":
+			case "completed":
+				return theme.fg("success", "done");
+			case "started":
+			case "in_progress":
+				return theme.fg("accent", "run ");
+			case "failed":
+				return theme.fg("error", "fail");
+			case "rework":
+				return theme.fg("warning", "redo");
+			case "cancelled":
+				return theme.fg("muted", "stop");
+			case "assigned":
+				return theme.fg("muted", "asgn");
+			case "created":
+				return theme.fg("muted", "todo");
+		}
 	}
 
 	private renderBoxedCompact(width: number): string[] {

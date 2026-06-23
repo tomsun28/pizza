@@ -146,6 +146,11 @@ export class GoalProjection {
 		return [...this.tasks.values()].filter((t) => t.goal_id === goalId);
 	}
 
+	/** Get all tasks */
+	listTasks(): TaskDescriptor[] {
+		return [...this.tasks.values()];
+	}
+
 	/** Get a specific task */
 	getTask(taskId: string): TaskDescriptor | undefined {
 		return this.tasks.get(taskId);
@@ -215,7 +220,7 @@ export class GoalProjection {
 				this._onTaskProgress(event);
 				break;
 			case "TASK_COMPLETED":
-				this._onTaskStatusChange(event, "completed");
+				this._onTaskCompleted(event);
 				break;
 			case "TASK_FAILED":
 				this._onTaskFailed(event);
@@ -227,7 +232,7 @@ export class GoalProjection {
 				this._onTaskStatusChange(event, "accepted");
 				break;
 			case "TASK_CANCELLED":
-				this._onTaskStatusChange(event, "cancelled");
+				this._onTaskCancelled(event);
 				break;
 		}
 	}
@@ -339,6 +344,7 @@ export class GoalProjection {
 		const task = this.tasks.get(payload.task_id);
 		if (!task) return;
 		task.status = "failed";
+		task.failure_message = payload.error_message;
 		task.updated_at = event.timestamp;
 	}
 
@@ -351,8 +357,26 @@ export class GoalProjection {
 		task.updated_at = event.timestamp;
 	}
 
+	private _onTaskCompleted(event: EventBase): void {
+		const payload = event.payload as TaskCompletedPayload;
+		const task = this.tasks.get(payload.task_id);
+		if (!task) return;
+		task.status = "completed";
+		task.summary = payload.summary ?? task.summary;
+		task.updated_at = event.timestamp;
+	}
+
+	private _onTaskCancelled(event: EventBase): void {
+		const payload = event.payload as TaskCancelledPayload;
+		const task = this.tasks.get(payload.task_id);
+		if (!task) return;
+		task.status = "cancelled";
+		task.cancel_reason = payload.reason;
+		task.updated_at = event.timestamp;
+	}
+
 	private _onTaskStatusChange(event: EventBase, status: TaskStatus): void {
-		const payload = event.payload as TaskCompletedPayload | TaskAcceptedPayload | TaskCancelledPayload;
+		const payload = event.payload as TaskAcceptedPayload;
 		const task = this.tasks.get(payload.task_id);
 		if (!task) return;
 		task.status = status;

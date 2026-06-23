@@ -66,6 +66,8 @@ import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.j
 import { createCompactionSummaryMessage } from "../../core/messages.js";
 import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.js";
 import { DefaultPackageManager } from "../../core/package-manager.js";
+import { GoalProjection } from "../../core/projection/goal-projection.js";
+import { buildRecentTaskHistory, TASK_HISTORY_EVENT_TYPES } from "../../core/projection/task-history.js";
 import type { ResourceDiagnostic, ResourceLoader } from "../../core/resource-loader.js";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.js";
 import { type SessionEntry, type SessionTreeNode } from "../../core/types/session-types.js";
@@ -251,8 +253,10 @@ export class InteractiveMode {
 	private widgetContainerBelow!: Container;
 	private customFooter: (Component & { dispose?(): void }) | undefined = undefined;
 	private headerContainer!: Container;
-	private builtInHeader: Component | undefined = undefined;
+	private builtInHeader: BrandHeaderComponent | undefined = undefined;
 	private customHeader: (Component & { dispose?(): void }) | undefined = undefined;
+	private taskHistoryProjection: GoalProjection | undefined = undefined;
+	private taskHistoryUnsubscribe: (() => void) | undefined = undefined;
 
 	// ── Property accessors ──────────────────────────────────
 
@@ -756,6 +760,27 @@ export class InteractiveMode {
 		// Changelog display disabled
 	}
 
+	private initializeTaskHistoryHeader(): void {
+		this.taskHistoryUnsubscribe?.();
+		this.taskHistoryProjection?.stopLive();
+
+		const projection = new GoalProjection(this.facade.runtime.store);
+		projection.rebuild();
+		projection.startLive();
+		this.taskHistoryProjection = projection;
+		this.updateTaskHistoryHeader();
+
+		this.taskHistoryUnsubscribe = this.facade.subscribe(() => {
+			this.updateTaskHistoryHeader();
+			this.ui.requestRender();
+		}, { types: TASK_HISTORY_EVENT_TYPES });
+	}
+
+	private updateTaskHistoryHeader(): void {
+		if (!this.builtInHeader || !this.taskHistoryProjection) return;
+		this.builtInHeader.setTaskHistory(buildRecentTaskHistory(this.taskHistoryProjection, 3));
+	}
+
 	async init(): Promise<void> {
 		if (this.isInitialized) return;
 
@@ -771,6 +796,7 @@ export class InteractiveMode {
 
 		// Add branded startup header with compact and expanded shortcut states.
 		this.builtInHeader = new BrandHeaderComponent(APP_NAME, this.version, this.getStartupExpansionState());
+		this.initializeTaskHistoryHeader();
 
 		// Setup UI layout
 		this.headerContainer.addChild(new Spacer(1));
@@ -5111,6 +5137,10 @@ export class InteractiveMode {
 		if (this.unsubscribe) {
 			this.unsubscribe();
 		}
+		this.taskHistoryUnsubscribe?.();
+		this.taskHistoryUnsubscribe = undefined;
+		this.taskHistoryProjection?.stopLive();
+		this.taskHistoryProjection = undefined;
 		if (this.isInitialized) {
 			this.ui.stop();
 			this.isInitialized = false;
