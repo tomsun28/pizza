@@ -174,7 +174,7 @@ describe("IntentExecutor", () => {
 
 	it("should wait for approval on dangerous tools", async () => {
 		const toolRegistry = createMockToolRegistry({
-			bash: async (args) => ({
+			cli: async (args) => ({
 				content: [{ type: "text", text: `executed: ${args.command}` }],
 				is_error: false,
 			}),
@@ -186,7 +186,7 @@ describe("IntentExecutor", () => {
 		// Start execution (will block waiting for approval)
 		const resultPromise = executor.execute({
 			tool_call_id: "call_1",
-			tool_name: "bash",
+			tool_name: "cli",
 			arguments: { command: "rm -rf /tmp/test" },
 		});
 
@@ -216,7 +216,7 @@ describe("IntentExecutor", () => {
 
 	it("should reject tool execution on user rejection", async () => {
 		const toolRegistry = createMockToolRegistry({
-			bash: async (args) => ({
+			cli: async (args) => ({
 				content: [{ type: "text", text: `executed: ${args.command}` }],
 				is_error: false,
 			}),
@@ -228,7 +228,7 @@ describe("IntentExecutor", () => {
 		// Start execution (will block waiting for approval)
 		const resultPromise = executor.execute({
 			tool_call_id: "call_1",
-			tool_name: "bash",
+			tool_name: "cli",
 			arguments: { command: "rm -rf /tmp/test" },
 		});
 
@@ -252,7 +252,7 @@ describe("IntentExecutor", () => {
 
 	it("should cancel all pending approvals on dispose", async () => {
 		const toolRegistry = createMockToolRegistry({
-			bash: async (args) => ({
+			cli: async (args) => ({
 				content: [{ type: "text", text: "done" }],
 				is_error: false,
 			}),
@@ -264,7 +264,7 @@ describe("IntentExecutor", () => {
 		// Start a dangerous execution
 		const resultPromise = executor.execute({
 			tool_call_id: "call_1",
-			tool_name: "bash",
+			tool_name: "cli",
 			arguments: { command: "sudo rm -rf /" },
 		});
 

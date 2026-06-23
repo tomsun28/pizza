@@ -101,6 +101,7 @@ export class IntentClassifier {
 					description: `Edit ${args.path}`,
 				};
 
+			case "cli":
 			case "bash":
 				return this._classifyBashCommand(String(args.command ?? ""));
 

@@ -117,7 +117,7 @@ export class BashExecutionComponent extends Container {
 	}
 
 	private updateDisplay(): void {
-		// Apply truncation for LLM context limits (same limits as bash tool)
+		// Apply truncation for LLM context limits (same limits as cli tool)
 		const fullOutput = this.outputLines.join("\n");
 		const contextTruncation = truncateTail(fullOutput, {
 			maxLines: DEFAULT_MAX_LINES,

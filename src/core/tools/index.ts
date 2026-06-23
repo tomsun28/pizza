@@ -82,21 +82,23 @@ export type Tool = AgentTool<any>;
 export type ToolDef = ToolDefinition<any, any>;
 /**
  * Default tools exposed to LLM via function calls.
- * Only bash is exposed; read/write/edit are handled internally by the bash tool.
+ * Only cli is exposed; read/write/edit are handled internally by the cli tool.
  * Other commands (grep, find, ls, git, npm, etc.) are passed to the system shell.
  */
-export type ToolName = "bash" | "read" | "edit" | "write" | "grep" | "find" | "ls";
-export const allToolNames: Set<ToolName> = new Set(["read", "bash", "edit", "write", "grep", "find", "ls"]);
+export type ToolName = "cli" | "bash" | "read" | "edit" | "write" | "grep" | "find" | "ls";
+export const allToolNames: Set<ToolName> = new Set(["read", "cli", "bash", "edit", "write", "grep", "find", "ls"]);
 
 /**
  * Default tools exposed via function calls.
- * Only bash is exposed; read/write/edit are handled internally by the bash tool.
+ * Only cli is exposed; read/write/edit are handled internally by the cli tool.
  * Other commands (grep, find, ls, etc.) are passed to the system shell.
  */
-export const DEFAULT_LLM_TOOLS: ToolName[] = ["bash"];
+export const DEFAULT_LLM_TOOLS: ToolName[] = ["cli"];
 
 export interface ToolsOptions {
 	read?: ReadToolOptions;
+	cli?: BashToolOptions;
+	/** @deprecated Use cli. */
 	bash?: BashToolOptions;
 	write?: WriteToolOptions;
 	edit?: EditToolOptions;
@@ -109,8 +111,9 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 	switch (toolName) {
 		case "read":
 			return createReadToolDefinition(cwd, options?.read);
+		case "cli":
 		case "bash":
-			return createBashToolDefinition(cwd, options?.bash);
+			return createBashToolDefinition(cwd, options?.cli ?? options?.bash);
 		case "edit":
 			return createEditToolDefinition(cwd, options?.edit);
 		case "write":
@@ -130,8 +133,9 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 	switch (toolName) {
 		case "read":
 			return createReadTool(cwd, options?.read);
+		case "cli":
 		case "bash":
-			return createBashTool(cwd, options?.bash);
+			return createBashTool(cwd, options?.cli ?? options?.bash);
 		case "edit":
 			return createEditTool(cwd, options?.edit);
 		case "write":
@@ -149,29 +153,31 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 
 /**
  * Default coding tools exposed via function calls.
- * Only bash is exposed; read/write/edit are handled internally by the bash tool.
+ * Only cli is exposed; read/write/edit are handled internally by the cli tool.
  * Other commands (grep, find, ls, git, npm, etc.) are passed to the system shell.
  */
 export function createCodingToolDefinitions(cwd: string, options?: ToolsOptions): ToolDef[] {
 	return [
-		createBashToolDefinition(cwd, options?.bash),
+		createBashToolDefinition(cwd, options?.cli ?? options?.bash),
 	];
 }
 
 /**
  * Read-only tools for analysis mode.
- * Only bash is exposed; read is handled internally; grep/find/ls are passed to shell.
+ * Only cli is exposed; read is handled internally; grep/find/ls are passed to shell.
  */
 export function createReadOnlyToolDefinitions(cwd: string, options?: ToolsOptions): ToolDef[] {
 	return [
-		createBashToolDefinition(cwd, options?.bash),
+		createBashToolDefinition(cwd, options?.cli ?? options?.bash),
 	];
 }
 
 export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): Record<ToolName, ToolDef> {
+	const cliDefinition = createBashToolDefinition(cwd, options?.cli ?? options?.bash);
 	return {
 		read: createReadToolDefinition(cwd, options?.read),
-		bash: createBashToolDefinition(cwd, options?.bash),
+		cli: cliDefinition,
+		bash: cliDefinition,
 		edit: createEditToolDefinition(cwd, options?.edit),
 		write: createWriteToolDefinition(cwd, options?.write),
 		grep: createGrepToolDefinition(cwd, options?.grep),
@@ -182,29 +188,31 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 
 /**
  * Default coding tools exposed to LLM.
- * Only bash is exposed; read/write/edit are handled internally by the bash tool.
+ * Only cli is exposed; read/write/edit are handled internally by the cli tool.
  * Other commands (grep, find, ls, git, npm, etc.) are passed to the system shell.
  */
 export function createCodingTools(cwd: string, options?: ToolsOptions): Tool[] {
 	return [
-		createBashTool(cwd, options?.bash),
+		createBashTool(cwd, options?.cli ?? options?.bash),
 	];
 }
 
 /**
  * Read-only tools for analysis mode.
- * Only bash is exposed; read is handled internally; grep/find/ls are passed to shell.
+ * Only cli is exposed; read is handled internally; grep/find/ls are passed to shell.
  */
 export function createReadOnlyTools(cwd: string, options?: ToolsOptions): Tool[] {
 	return [
-		createBashTool(cwd, options?.bash),
+		createBashTool(cwd, options?.cli ?? options?.bash),
 	];
 }
 
 export function createAllTools(cwd: string, options?: ToolsOptions): Record<ToolName, Tool> {
+	const cliTool = createBashTool(cwd, options?.cli ?? options?.bash);
 	return {
 		read: createReadTool(cwd, options?.read),
-		bash: createBashTool(cwd, options?.bash),
+		cli: cliTool,
+		bash: cliTool,
 		edit: createEditTool(cwd, options?.edit),
 		write: createWriteTool(cwd, options?.write),
 		grep: createGrepTool(cwd, options?.grep),

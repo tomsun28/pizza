@@ -426,7 +426,7 @@ describe("Coding Agent Tools", () => {
 		});
 	});
 
-	describe("bash tool", () => {
+	describe("cli tool", () => {
 		it("should execute simple commands", async () => {
 			const result = await bashTool.execute("test-call-8", { command: "echo 'test output'" });
 

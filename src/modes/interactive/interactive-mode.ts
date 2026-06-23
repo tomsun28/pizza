@@ -1389,19 +1389,6 @@ export class InteractiveMode {
 				addLoadedSection("Context", contextCompactList, contextList);
 			}
 
-			const skills = skillsResult.skills;
-			if (skills.length > 0) {
-				const groups = this.buildScopeGroups(
-					skills.map((skill) => ({ path: skill.filePath, sourceInfo: skill.sourceInfo })),
-				);
-				const skillList = this.formatScopeGroups(groups, {
-					formatPath: (item) => this.formatDisplayPath(item.path),
-					formatPackagePath: (item) => this.getShortPath(item.path, item.sourceInfo),
-				});
-				const skillCompactList = formatCompactList(skills.map((skill) => skill.name));
-				addLoadedSection("Skills", skillCompactList, skillList);
-			}
-
 			const templates = this.promptTemplatesValue;
 			if (templates.length > 0) {
 				const groups = this.buildScopeGroups(

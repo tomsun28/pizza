@@ -57,21 +57,21 @@ describe("Reactor (event-driven core)", () => {
 		};
 	}
 
-	function makeBashRegistry(): ToolRegistry {
+	function makeCliRegistry(): ToolRegistry {
 		return {
 			get(name: string): ToolExecutor | undefined {
-				if (name !== "bash") return undefined;
+				if (name !== "cli") return undefined;
 				return {
 					async execute(args) {
 						return { content: [{ type: "text", text: String(args.command ?? "") }], is_error: false };
 					},
 					getMetadata() {
-						return { name: "bash", category: "shell_moderate", defaultRisk: "moderate" };
+						return { name: "cli", category: "shell_moderate", defaultRisk: "moderate" };
 					},
 				};
 			},
 			list() {
-				return ["bash"];
+				return ["cli"];
 			},
 		};
 	}
@@ -388,7 +388,7 @@ describe("Reactor (event-driven core)", () => {
 
 	it("executes dev-null redirected shell lookups in a parallel tool batch", async () => {
 		const cwd = makeTempDir();
-		const registry = makeBashRegistry();
+		const registry = makeCliRegistry();
 
 		let calls = 0;
 		const client: LLMClient = {
@@ -397,12 +397,12 @@ describe("Reactor (event-driven core)", () => {
 				if (calls === 1) {
 					return {
 						content: [
-							{ type: "tool_call", id: "c1", name: "bash", arguments: { command: "ls -la .claude/" } } as ContentBlock,
-							{ type: "tool_call", id: "c2", name: "bash", arguments: { command: "ls -la .crush/" } } as ContentBlock,
+							{ type: "tool_call", id: "c1", name: "cli", arguments: { command: "ls -la .claude/" } } as ContentBlock,
+							{ type: "tool_call", id: "c2", name: "cli", arguments: { command: "ls -la .crush/" } } as ContentBlock,
 							{
 								type: "tool_call",
 								id: "c3",
-								name: "bash",
+								name: "cli",
 								arguments: {
 									command: "which zai-cli 2>/dev/null; type zai-cli 2>/dev/null; npm list -g 2>/dev/null | grep -i zai",
 								},
@@ -450,7 +450,7 @@ describe("Reactor (event-driven core)", () => {
 
 	it("does not hang when approval is required without an approval handler", async () => {
 		const cwd = makeTempDir();
-		const registry = makeBashRegistry();
+		const registry = makeCliRegistry();
 
 		let calls = 0;
 		const client: LLMClient = {
@@ -459,7 +459,7 @@ describe("Reactor (event-driven core)", () => {
 				if (calls === 1) {
 					return {
 						content: [
-							{ type: "tool_call", id: "danger", name: "bash", arguments: { command: "sudo whoami" } } as ContentBlock,
+							{ type: "tool_call", id: "danger", name: "cli", arguments: { command: "sudo whoami" } } as ContentBlock,
 						],
 						provider: "test",
 						model: "test",

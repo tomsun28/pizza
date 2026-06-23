@@ -1,7 +1,7 @@
 /**
  * Built-in CLI commands for file operations.
- * These are exposed to the LLM via the bash tool.
- * 
+ * These are exposed to the LLM via the cli tool.
+ *
  * Supports heredoc syntax for multi-line content:
  *   write <path> <<EOF
  *   line1
@@ -324,7 +324,7 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"  Reads a text file or supported image file from the current working directory.",
 				"  Text output includes 2-hex hashline anchors by default: <line>#<hash> | content.",
 				"  Use those anchors as edit range values. Images are returned as image content",
-				"  when routed through the bash tool's built-in read implementation.",
+				"  when routed through the cli tool's built-in read implementation.",
 				"",
 				"Parameters:",
 				"  path              File path to read. Relative paths are resolved from the working directory.",

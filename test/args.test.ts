@@ -264,9 +264,9 @@ describe("parseArgs", () => {
 		});
 
 		test("parses --no-tools with explicit --tools flags", () => {
-			const result = parseArgs(["--no-tools", "--tools", "read,bash"]);
+			const result = parseArgs(["--no-tools", "--tools", "read,cli"]);
 			expect(result.noTools).toBe(true);
-			expect(result.tools).toEqual(["read", "bash"]);
+			expect(result.tools).toEqual(["read", "cli"]);
 		});
 	});
 

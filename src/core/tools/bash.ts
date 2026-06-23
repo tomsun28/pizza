@@ -71,7 +71,7 @@ export type BashBuiltinDetails =
 	  };
 
 /**
- * Pluggable operations for the bash tool.
+ * Pluggable operations for the cli tool's shell execution path.
  * Override these to delegate command execution to remote systems (for example SSH).
  */
 export interface BashOperations {
@@ -361,10 +361,10 @@ export function createBashToolDefinition(
 	const writeDefinition = createWriteToolDefinition(cwd, options?.write);
 	const editDefinition = createEditToolDefinition(cwd, options?.edit);
 	return {
-		name: "bash",
-		label: "bash",
-		description: `Execute a command in the current working directory. Built-in commands are routed internally: read <path> [offset] [limit] or read --path <path> --offset <n> --limit <n>; write <path> <content>, write --path <path> --content <content>, or write <path> <<EOF; edit <path> <op> <range> [new], edit --path <path> --op <op> --range <range> --new <new>, or edit --path <path> --edits '[{"op":"replace","range":"...","new":"..."}]'. Other commands execute as regular bash (ls, grep, git, npm, etc.). Truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB.`,
-		promptSnippet: "Execute commands: read/write/edit files, or bash (ls, git, npm, etc.)",
+		name: "cli",
+		label: "cli",
+		description: `Execute a CLI command in the current working directory. Built-in commands are routed internally: read <path> [offset] [limit] or read --path <path> --offset <n> --limit <n>; write <path> <content>, write --path <path> --content <content>, or write <path> <<EOF; edit <path> <op> <range> [new], edit --path <path> --op <op> --range <range> --new <new>, or edit --path <path> --edits '[{"op":"replace","range":"...","new":"..."}]'. Other commands execute through the system shell (ls, grep, git, npm, etc.). Truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB.`,
+		promptSnippet: "Execute CLI commands: read/write/edit files, or shell commands (ls, git, npm, etc.)",
 		parameters: bashSchema,
 		async execute(
 			toolCallId,

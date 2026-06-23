@@ -106,7 +106,7 @@ describe.skipIf(process.platform !== "win32")("Windows child-process close handl
 		}
 	});
 
-	it("bash tool resolves after the shell exits even if inherited stdio handles stay open", async () => {
+	it("cli tool resolves after the shell exits even if inherited stdio handles stay open", async () => {
 		const pidFile = join(testDir, "tool-grandchild.pid");
 		const command = createInheritedStdioCommand(pidFile);
 		const controller = new AbortController();

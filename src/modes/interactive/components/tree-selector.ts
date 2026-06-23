@@ -866,13 +866,14 @@ class TreeList implements Component {
 				const path = shortenPath(String(args.path || args.file_path || ""));
 				return `[edit: ${path}]`;
 			}
+			case "cli":
 			case "bash": {
 				const rawCmd = String(args.command || "");
 				const cmd = rawCmd
 					.replace(/[\n\t]/g, " ")
 					.trim()
 					.slice(0, 50);
-				return `[bash: ${cmd}${rawCmd.length > 50 ? "..." : ""}]`;
+				return `[${name}: ${cmd}${rawCmd.length > 50 ? "..." : ""}]`;
 			}
 			case "grep": {
 				const pattern = String(args.pattern || "");

@@ -66,7 +66,7 @@ export interface CreateSessionFacadeOptions {
 
 	/**
 	 * Allowlist of tool names to expose to the LLM.
-	 * Default: DEFAULT_LLM_TOOLS (["bash"]) plus custom/extension tools.
+	 * Default: DEFAULT_LLM_TOOLS (["cli"]) plus custom/extension tools.
 	 */
 	tools?: string[];
 	/** Custom tools to register (in addition to built-in and extension tools). */
@@ -305,7 +305,7 @@ export async function createSessionFacade(
 	const autoResizeImages = settingsManager.getImageAutoResize();
 	const toolOptions = {
 		read: { autoResizeImages },
-		bash: { commandPrefix: shellCommandPrefix, shellPath, read: { autoResizeImages } },
+		cli: { commandPrefix: shellCommandPrefix, shellPath, read: { autoResizeImages } },
 	};
 
 	let runtime: EventSourcedRuntime | undefined;
@@ -322,8 +322,8 @@ export async function createSessionFacade(
 		for (const name of requestedToolNames) {
 			if (!isBuiltInToolName(name) || !includeTool(name)) continue;
 			const definition = createToolDefinition(name, cwd, toolOptions);
-			definitions.set(name, definition);
-			sources.set(name, createSyntheticSourceInfo(`<builtin:${name}>`, { source: "builtin" }));
+			definitions.set(definition.name, definition);
+			sources.set(definition.name, createSyntheticSourceInfo(`<builtin:${definition.name}>`, { source: "builtin" }));
 		}
 
 		for (const tool of extensionRunner.getAllRegisteredTools()) {

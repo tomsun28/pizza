@@ -403,7 +403,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 		];
 	}
 
-	test("shows a compact resource listing by default", () => {
+	test("does not show skills in compact resource listing by default", () => {
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
 			skills: [{ filePath: "/tmp/skill/SKILL.md", name: "commit" }],
@@ -414,12 +414,12 @@ describe("InteractiveMode.showLoadedResources", () => {
 		});
 
 		const output = renderAll(fakeThis.chatContainer);
-		expect(output).toContain("[Skills]");
-		expect(output).toContain("commit");
+		expect(output).not.toContain("[Skills]");
+		expect(output).not.toContain("commit");
 		expect(output).not.toContain("resource-list");
 	});
 
-	test("shows full resource listing when expanded", () => {
+	test("does not show skills in expanded resource listing", () => {
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,
 			toolOutputExpanded: true,
@@ -431,12 +431,12 @@ describe("InteractiveMode.showLoadedResources", () => {
 		});
 
 		const output = renderAll(fakeThis.chatContainer);
-		expect(output).toContain("[Skills]");
-		expect(output).toContain("resource-list");
+		expect(output).not.toContain("[Skills]");
+		expect(output).not.toContain("resource-list");
 		expect(output).not.toContain("commit");
 	});
 
-	test("shows full resource listing on verbose startup even when tool output is collapsed", () => {
+	test("does not show skills on verbose startup", () => {
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: true,
 			verbose: true,
@@ -449,8 +449,8 @@ describe("InteractiveMode.showLoadedResources", () => {
 		});
 
 		const output = renderAll(fakeThis.chatContainer);
-		expect(output).toContain("[Skills]");
-		expect(output).toContain("resource-list");
+		expect(output).not.toContain("[Skills]");
+		expect(output).not.toContain("resource-list");
 		expect(output).not.toContain("commit");
 	});
 

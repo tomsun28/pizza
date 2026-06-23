@@ -105,7 +105,7 @@ describe("ToolExecutionComponent parity", () => {
 		expect(rendered).toContain("README.md");
 	});
 
-	test("bash execute emits an initial empty partial update before output arrives", async () => {
+	test("cli execute emits an initial empty partial update before output arrives", async () => {
 		const updates: Array<{ content: Array<{ type: string; text?: string }>; details?: unknown }> = [];
 		const operations: BashOperations = {
 			exec: async () => {
@@ -115,7 +115,7 @@ describe("ToolExecutionComponent parity", () => {
 		};
 		const tool = createBashToolDefinition(process.cwd(), { operations });
 		const promise = tool.execute(
-			"tool-bash-1",
+			"tool-cli-1",
 			{ command: "sleep 10" },
 			undefined,
 			(update) => updates.push(update as { content: Array<{ type: string; text?: string }>; details?: unknown }),
@@ -125,12 +125,12 @@ describe("ToolExecutionComponent parity", () => {
 		await promise;
 	});
 
-	test("bash built-in read executes through the read tool and returns structured details", async () => {
-		const testDir = await mkdtemp(join(tmpdir(), "pizza-bash-builtin-read-"));
+	test("cli built-in read executes through the read tool and returns structured details", async () => {
+		const testDir = await mkdtemp(join(tmpdir(), "pizza-cli-builtin-read-"));
 		try {
 			await writeFile(join(testDir, "sample.txt"), "hello\nworld\n", "utf-8");
 			const tool = createBashToolDefinition(testDir);
-			const result = await tool.execute("tool-bash-read", { command: "read sample.txt --offset 2 --limit 1" });
+			const result = await tool.execute("tool-cli-read", { command: "read sample.txt --offset 2 --limit 1" });
 
 			expect(result.content[0]?.type).toBe("text");
 			expect(result.content[0]?.text).toContain("world");
@@ -158,20 +158,20 @@ describe("ToolExecutionComponent parity", () => {
 		expect(fallbackRendered).toContain("\"command\"");
 
 		component.updateToolCall(
-			"bash",
+			"cli",
 			{ command: "ls -la /Users/gongchao/coding/" },
 			undefined,
 		);
 
-		const bashRendered = stripAnsi(component.render(120).join("\n"));
-		expect(bashRendered).toContain("$ ls -la /Users/gongchao/coding/");
-		expect(bashRendered).not.toContain("\"command\"");
+		const cliRendered = stripAnsi(component.render(120).join("\n"));
+		expect(cliRendered).toContain("$ ls -la /Users/gongchao/coding/");
+		expect(cliRendered).not.toContain("\"command\"");
 	});
 
-	test("bash built-in read call uses the read renderer", () => {
+	test("cli built-in read call uses the read renderer", () => {
 		const component = new ToolExecutionComponent(
-			"bash",
-			"tool-bash-read-render",
+			"cli",
+			"tool-cli-read-render",
 			{ command: "read README.md --offset 2 --limit 3" },
 			{},
 			createBashToolDefinition(process.cwd()),
@@ -184,10 +184,10 @@ describe("ToolExecutionComponent parity", () => {
 		expect(rendered).not.toContain("$ read README.md");
 	});
 
-	test("bash built-in edit result uses the edit diff renderer", () => {
+	test("cli built-in edit result uses the edit diff renderer", () => {
 		const component = new ToolExecutionComponent(
-			"bash",
-			"tool-bash-edit-render",
+			"cli",
+			"tool-cli-edit-render",
 			{ command: `edit --path README.md --op replace --range ${formatLineAnchor(1, "before")} --new after` },
 			{},
 			createBashToolDefinition(process.cwd()),

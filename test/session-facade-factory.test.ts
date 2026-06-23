@@ -89,9 +89,9 @@ describe("createSessionFacade", () => {
 		// Non-reasoning model is clamped to "off".
 		expect(thinkingLevel).toBe("off");
 
-		// Built-in bash tool is exposed to the LLM.
-		expect(facade.tools.map((t) => t.name)).toContain("bash");
-		expect(runtime.getTools().map((t) => t.name)).toContain("bash");
+		// Built-in cli tool is exposed to the LLM.
+		expect(facade.tools.map((t) => t.name)).toContain("cli");
+		expect(runtime.getTools().map((t) => t.name)).toContain("cli");
 
 		// System prompt is assembled and non-empty.
 		expect(facade.systemPrompt.length).toBeGreaterThan(0);

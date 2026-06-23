@@ -191,12 +191,12 @@ export function printHelp(extensionFlags?: ExtensionFlag[]): void {
 					})
 					.join("\n")}\n`
 			: "";
-	console.log(`${chalk.bold(APP_NAME)} - AI coding assistant with bash tool and built-in commands
+	console.log(`${chalk.bold(APP_NAME)} - AI coding assistant with cli tool and built-in commands
 
 ${chalk.bold("Usage:")}
   ${APP_NAME} [options] [@files...] [messages...]
 
-${chalk.bold("Built-in Commands (handled internally by the bash tool):")}
+${chalk.bold("Built-in Commands (handled internally by the cli tool):")}
   builtin read <path> [--offset N] [--limit N]  # Read file with 2-hex line anchors
   builtin write <path> <content>               # Write file
   builtin edit <path> <op> <range> [new]      # Edit anchored whole line(s)
@@ -332,7 +332,7 @@ ${chalk.bold("Environment Variables:")}
 
 ${chalk.bold("Built-in Tool Names:")}
   read   - Read file contents
-  bash   - Execute bash commands
+  cli    - Execute CLI commands
   edit   - Edit files with find/replace
   write  - Write files (creates/overwrites)
   grep   - Search file contents (read-only, off by default)

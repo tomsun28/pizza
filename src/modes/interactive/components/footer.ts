@@ -2,6 +2,7 @@ import { type Component, truncateToWidth, visibleWidth } from "@mariozechner/pi-
 import type { ContextUsage } from "../../../core/extensions/index.js";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.js";
 import { theme } from "../theme/theme.js";
+import type { ThemeColor } from "../theme/theme.js";
 
 /**
  * Sanitize text for display in a single-line status.
@@ -24,6 +25,35 @@ function formatTokens(count: number): string {
 	if (count < 1000000) return `${Math.round(count / 1000)}k`;
 	if (count < 10000000) return `${(count / 1000000).toFixed(1)}M`;
 	return `${Math.round(count / 1000000)}M`;
+}
+
+interface FooterSegment {
+	text: string;
+	color: ThemeColor;
+}
+
+function renderSegments(segments: FooterSegment[]): string {
+	return segments.map((segment) => theme.fg(segment.color, segment.text)).join("");
+}
+
+function renderRightSide(text: string, provider?: string): string {
+	if (!text) return "";
+	const providerPrefix = provider ? `(${provider}) ` : undefined;
+	if (providerPrefix && text.startsWith(providerPrefix)) {
+		return theme.fg("dim", providerPrefix) + renderRightSide(text.slice(providerPrefix.length));
+	}
+
+	const separator = " • ";
+	const separatorIndex = text.indexOf(separator);
+	if (separatorIndex === -1) {
+		return theme.fg("accent", text);
+	}
+
+	return (
+		theme.fg("accent", text.slice(0, separatorIndex)) +
+		theme.fg("dim", separator) +
+		theme.fg("muted", text.slice(separatorIndex + separator.length))
+	);
 }
 
 /**
@@ -109,47 +139,54 @@ export class FooterComponent implements Component {
 			displayPwd = `~${displayPwd.slice(home.length)}`;
 		}
 
+		const pathSegments: FooterSegment[] = [{ text: displayPwd, color: "muted" }];
+
 		// Add git branch if available
 		const branch = this.footerData.getGitBranch();
 		if (branch) {
 			displayPwd = `${displayPwd} (${branch})`;
+			pathSegments.push({ text: " (", color: "dim" });
+			pathSegments.push({ text: branch, color: "accent" });
+			pathSegments.push({ text: ")", color: "dim" });
 		}
 
 		// Add session name if set
 		if (sessionName) {
 			displayPwd = `${displayPwd} • ${sessionName}`;
+			pathSegments.push({ text: " • ", color: "dim" });
+			pathSegments.push({ text: sessionName, color: "mdHeading" });
 		}
 
 		// Build stats line
-		const statsParts = [];
-		if (tokenUsage.totalInput) statsParts.push(`↑${formatTokens(tokenUsage.totalInput)}`);
-		if (tokenUsage.totalOutput) statsParts.push(`↓${formatTokens(tokenUsage.totalOutput)}`);
-		if (tokenUsage.totalCacheRead) statsParts.push(`R${formatTokens(tokenUsage.totalCacheRead)}`);
-		if (tokenUsage.totalCacheWrite) statsParts.push(`W${formatTokens(tokenUsage.totalCacheWrite)}`);
+		const statsParts: FooterSegment[] = [];
+		if (tokenUsage.totalInput) statsParts.push({ text: `↑${formatTokens(tokenUsage.totalInput)}`, color: "accent" });
+		if (tokenUsage.totalOutput) statsParts.push({ text: `↓${formatTokens(tokenUsage.totalOutput)}`, color: "mdLink" });
+		if (tokenUsage.totalCacheRead) statsParts.push({ text: `R${formatTokens(tokenUsage.totalCacheRead)}`, color: "muted" });
+		if (tokenUsage.totalCacheWrite) statsParts.push({ text: `W${formatTokens(tokenUsage.totalCacheWrite)}`, color: "muted" });
 
 		// Show cost with "(sub)" indicator if using OAuth subscription
 		if (tokenUsage.totalCost || usingSubscription) {
 			const costStr = `$${tokenUsage.totalCost.toFixed(3)}${usingSubscription ? " (sub)" : ""}`;
-			statsParts.push(costStr);
+			statsParts.push({ text: costStr, color: "success" });
 		}
 
 		// Colorize context percentage based on usage
-		let contextPercentStr: string;
+		let contextColor: ThemeColor;
 		const autoIndicator = this.autoCompactEnabled ? " (auto)" : "";
 		const contextPercentDisplay =
 			contextPercent === "?"
 				? `?/${formatTokens(contextWindow)}${autoIndicator}`
 				: `${contextPercent}%/${formatTokens(contextWindow)}${autoIndicator}`;
 		if (contextPercentValue > 90) {
-			contextPercentStr = theme.fg("error", contextPercentDisplay);
+			contextColor = "error";
 		} else if (contextPercentValue > 70) {
-			contextPercentStr = theme.fg("warning", contextPercentDisplay);
+			contextColor = "warning";
 		} else {
-			contextPercentStr = contextPercentDisplay;
+			contextColor = "success";
 		}
-		statsParts.push(contextPercentStr);
+		statsParts.push({ text: contextPercentDisplay, color: contextColor });
 
-		let statsLeft = statsParts.join(" ");
+		let statsLeft = statsParts.map((part) => part.text).join(" ");
 
 		// Add model name on the right side, plus thinking level if model supports it
 		const modelName = modelInfo?.id || "no-model";
@@ -186,11 +223,18 @@ export class FooterComponent implements Component {
 		const rightSideWidth = visibleWidth(rightSide);
 		const totalNeeded = statsLeftWidth + minPadding + rightSideWidth;
 
+		let renderedStatsLeft: string;
+		if (visibleWidth(statsLeft) === statsParts.reduce((sum, part) => sum + visibleWidth(part.text), 0) + Math.max(0, statsParts.length - 1)) {
+			renderedStatsLeft = statsParts.map((part) => theme.fg(part.color, part.text)).join(theme.fg("dim", " "));
+		} else {
+			renderedStatsLeft = theme.fg("dim", statsLeft);
+		}
+
 		let statsLine: string;
 		if (totalNeeded <= width) {
 			// Both fit - add padding to right-align model
 			const padding = " ".repeat(width - statsLeftWidth - rightSideWidth);
-			statsLine = statsLeft + padding + rightSide;
+			statsLine = renderedStatsLeft + theme.fg("dim", padding) + renderRightSide(rightSide, modelInfo?.provider);
 		} else {
 			// Need to truncate right side
 			const availableForRight = width - statsLeftWidth - minPadding;
@@ -198,22 +242,15 @@ export class FooterComponent implements Component {
 				const truncatedRight = truncateToWidth(rightSide, availableForRight, "");
 				const truncatedRightWidth = visibleWidth(truncatedRight);
 				const padding = " ".repeat(Math.max(0, width - statsLeftWidth - truncatedRightWidth));
-				statsLine = statsLeft + padding + truncatedRight;
+				statsLine = renderedStatsLeft + theme.fg("dim", padding) + renderRightSide(truncatedRight, modelInfo?.provider);
 			} else {
 				// Not enough space for right side at all
-				statsLine = statsLeft;
+				statsLine = renderedStatsLeft;
 			}
 		}
 
-		// Apply dim to each part separately. statsLeft may contain color codes (for context %)
-		// that end with a reset, which would clear an outer dim wrapper. So we dim the parts
-		// before and after the colored section independently.
-		const dimStatsLeft = theme.fg("dim", statsLeft);
-		const remainder = statsLine.slice(statsLeft.length); // padding + rightSide
-		const dimRemainder = theme.fg("dim", remainder);
-
-		const pwdLine = truncateToWidth(theme.fg("dim", displayPwd), width, theme.fg("dim", "..."));
-		const lines = [pwdLine, dimStatsLeft + dimRemainder];
+		const pwdLine = truncateToWidth(renderSegments(pathSegments), width, theme.fg("dim", "..."));
+		const lines = [pwdLine, statsLine];
 
 		// Add extension statuses on a single line, sorted by key alphabetically
 		const extensionStatuses = this.footerData.getExtensionStatuses();
@@ -223,7 +260,7 @@ export class FooterComponent implements Component {
 				.map(([, text]) => sanitizeStatusText(text));
 			const statusLine = sortedStatuses.join(" ");
 			// Truncate to terminal width with dim ellipsis for consistency with footer style
-			lines.push(truncateToWidth(statusLine, width, theme.fg("dim", "...")));
+			lines.push(truncateToWidth(theme.fg("muted", statusLine), width, theme.fg("dim", "...")));
 		}
 
 		return lines;

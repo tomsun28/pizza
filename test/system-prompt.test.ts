@@ -33,7 +33,7 @@ describe("buildSystemPrompt", () => {
 			const prompt = buildSystemPrompt({
 				toolSnippets: {
 					read: "Read file contents",
-					bash: "Execute bash commands",
+					cli: "Execute CLI commands",
 					edit: "Make surgical edits",
 					write: "Create or overwrite files",
 				},
@@ -43,7 +43,7 @@ describe("buildSystemPrompt", () => {
 			});
 
 			expect(prompt).toContain("- read:");
-			expect(prompt).toContain("- bash:");
+			expect(prompt).toContain("- cli:");
 			expect(prompt).toContain("- edit:");
 			expect(prompt).toContain("- write:");
 		});

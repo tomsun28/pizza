@@ -119,11 +119,12 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		return prompt;
 	}
 
-	// Build tools list - only bash is exposed via function calls.
-	// read/write/edit are handled internally by the bash tool;
+	// Build tools list - only cli is exposed via function calls.
+	// read/write/edit are handled internally by the cli tool;
 	// grep/find/ls and other commands are passed to the system shell as-is.
-	const tools = selectedTools || (toolSnippets ? Object.keys(toolSnippets) : ["bash"]);
+	const tools = selectedTools || (toolSnippets ? Object.keys(toolSnippets) : ["cli"]);
 	const toolSnippetsMap: Record<string, string> = {
+		cli: "Execute CLI commands",
 		bash: "Execute shell commands",
 		...toolSnippets,
 	};
@@ -144,11 +145,11 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		guidelinesList.push(guideline);
 	};
 
-	const hasBash = tools.includes("bash");
+	const hasCli = tools.includes("cli") || tools.includes("bash");
 	const hasRead = tools.includes("read");
 
 	// File exploration guidelines
-	if (hasBash) {
+	if (hasCli) {
 		addGuideline("Use built-in commands for file operations: read, write, edit");
 		addGuideline("Use read line anchors as edit range values; edit accepts op/range/new edits");
 	}
@@ -168,9 +169,9 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 
 	// Native CLI commands documentation
 	const builtinCommandsSection = [
-		"## Built-in Commands (executed internally by the bash tool)",
+		"## Built-in Commands (executed internally by the cli tool)",
 		"",
-		"The bash tool recognizes the following built-in commands and executes them internally (no shell fork):",
+		"The cli tool recognizes the following built-in commands and executes them internally (no shell fork):",
 		"",
 		"  read <path> [offset] [limit]                Read file content with 2-hex line anchors",
 		"  write <path> <content>                       Write content to file",
@@ -180,14 +181,14 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		"All other commands (ls, grep, find, git, npm, etc.) are passed to the system shell as-is.",
 		"",
 		"Examples:",
-		'- bash("read src/main.ts") - Read a file; text lines include <line>#<2-hex-hash> anchors',
-		'- bash("read src/main.ts 10 50") - Read lines 10-60',
-		'- bash("write output.txt Hello World") - Write to a file',
-		'- bash("edit src/main.ts replace 12#ab \"const value = 2\"") - Replace an anchored line',
-		'- bash("edit src/main.ts insert_after 12#ab \"const next = 3\"") - Insert after an anchored line',
-		'- bash("edit src/main.ts delete 12#ab..14#de") - Delete an anchored range',
-		'- bash("ls -la") - List directory (passed to shell)',
-		'- bash("grep pattern src/") - Search files (passed to shell)',
+		'- cli("read src/main.ts") - Read a file; text lines include <line>#<2-hex-hash> anchors',
+		'- cli("read src/main.ts 10 50") - Read lines 10-60',
+		'- cli("write output.txt Hello World") - Write to a file',
+		'- cli("edit src/main.ts replace 12#ab \"const value = 2\"") - Replace an anchored line',
+		'- cli("edit src/main.ts insert_after 12#ab \"const next = 3\"") - Insert after an anchored line',
+		'- cli("edit src/main.ts delete 12#ab..14#de") - Delete an anchored range',
+		'- cli("ls -la") - List directory (passed to shell)',
+		'- cli("grep pattern src/") - Search files (passed to shell)',
 	].join("\n");
 
 	let prompt = [

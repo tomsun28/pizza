@@ -20,13 +20,13 @@ import type { BashToolDetails } from "../tools/bash.js";
 // ============================================================================
 
 /** Tools known to mutate files */
-const FILE_MUTATING_TOOLS = new Set(["edit", "edit_diff", "write", "bash"]);
+const FILE_MUTATING_TOOLS = new Set(["edit", "edit_diff", "write", "cli", "bash"]);
 
 /**
  * Infer file mutations from a tool execution.
  *
  * For write/edit tools, the path is in the arguments.
- * For bash, we cannot reliably detect mutations (best-effort).
+ * For cli/bash, we cannot reliably detect mutations (best-effort).
  */
 function inferFileMutations(
 	toolName: string,
@@ -47,6 +47,7 @@ function inferFileMutations(
 			if (path) return [{ path, operation: "create" }];
 			return undefined;
 		}
+		case "cli":
 		case "bash": {
 			const details = _result.details as BashToolDetails | undefined;
 			const builtin = details?.builtin;
@@ -80,6 +81,7 @@ function inferCategory(toolName: string): IntentCategory {
 		case "edit":
 		case "edit_diff":
 			return "file_write";
+		case "cli":
 		case "bash":
 			return "shell_moderate";
 		case "truncate":

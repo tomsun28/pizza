@@ -135,10 +135,10 @@ describe("AgentToolAdapter", () => {
 			defaultRisk: "moderate",
 		});
 
-		const bashTool = new AgentToolAdapter(createMockTool("bash"));
-		expect(bashTool.getMetadata()).toEqual({
-			name: "bash",
-			description: "Mock bash tool",
+		const cliTool = new AgentToolAdapter(createMockTool("cli"));
+		expect(cliTool.getMetadata()).toEqual({
+			name: "cli",
+			description: "Mock cli tool",
 			category: "shell_moderate",
 			defaultRisk: "moderate",
 		});
@@ -147,10 +147,10 @@ describe("AgentToolAdapter", () => {
 
 describe("createToolRegistry", () => {
 	it("creates a registry from AgentTool array", () => {
-		const tools = [createMockTool("read"), createMockTool("edit"), createMockTool("bash")];
+		const tools = [createMockTool("read"), createMockTool("edit"), createMockTool("cli")];
 		const registry = createToolRegistry(tools);
 
-		expect(registry.list()).toEqual(["read", "edit", "bash"]);
+		expect(registry.list()).toEqual(["read", "edit", "cli"]);
 		expect(registry.get("read")).toBeDefined();
 		expect(registry.get("edit")).toBeDefined();
 		expect(registry.get("nonexistent")).toBeUndefined();

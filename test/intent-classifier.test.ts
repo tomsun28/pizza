@@ -76,11 +76,11 @@ describe("IntentClassifier", () => {
 		});
 	});
 
-	describe("bash command classification", () => {
+	describe("cli command classification", () => {
 		it("should classify safe commands", () => {
 			const safeCmds = ["echo hello", "cat file.txt", "pwd", "ls -la", "git status", "git log", "npm list"];
 			for (const cmd of safeCmds) {
-				const result = classifier.classify("bash", { command: cmd });
+				const result = classifier.classify("cli", { command: cmd });
 				expect(result.risk).toBe("safe");
 				expect(result.requires_approval).toBe(false);
 				expect(result.category).toBe("shell_safe");
@@ -96,7 +96,7 @@ describe("IntentClassifier", () => {
 				"dd if=/dev/zero of=/dev/sda",
 			];
 			for (const cmd of dangerousCmds) {
-				const result = classifier.classify("bash", { command: cmd });
+				const result = classifier.classify("cli", { command: cmd });
 				expect(result.risk).toBe("dangerous");
 				expect(result.requires_approval).toBe(true);
 				expect(result.category).toBe("shell_dangerous");
@@ -106,14 +106,14 @@ describe("IntentClassifier", () => {
 		it("should classify moderate commands", () => {
 			const moderateCmds = ["npm install express", "git commit -m 'fix'", "mkdir -p /some/path"];
 			for (const cmd of moderateCmds) {
-				const result = classifier.classify("bash", { command: cmd });
+				const result = classifier.classify("cli", { command: cmd });
 				expect(result.risk).toBe("moderate");
 				expect(result.category).toBe("shell_moderate");
 			}
 		});
 
 		it("should not treat stderr redirection to /dev/null as dangerous", () => {
-			const result = classifier.classify("bash", {
+			const result = classifier.classify("cli", {
 				command: "which zai-cli 2>/dev/null; type zai-cli 2>/dev/null; npm list -g 2>/dev/null | grep -i zai",
 			});
 
@@ -122,8 +122,8 @@ describe("IntentClassifier", () => {
 			expect(result.category).toBe("shell_moderate");
 		});
 
-		it("should classify bash built-in writes as file writes", () => {
-			const result = classifier.classify("bash", { command: "write src/app.ts <<EOF\nhello\nEOF" });
+		it("should classify cli built-in writes as file writes", () => {
+			const result = classifier.classify("cli", { command: "write src/app.ts <<EOF\nhello\nEOF" });
 
 			expect(result.risk).toBe("moderate");
 			expect(result.requires_approval).toBe(true);
@@ -132,7 +132,7 @@ describe("IntentClassifier", () => {
 		});
 
 		it("should classify non-null shell redirection as file writes", () => {
-			const result = classifier.classify("bash", { command: "echo hello > output.txt" });
+			const result = classifier.classify("cli", { command: "echo hello > output.txt" });
 
 			expect(result.risk).toBe("moderate");
 			expect(result.requires_approval).toBe(true);
