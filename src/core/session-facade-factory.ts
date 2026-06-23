@@ -305,7 +305,7 @@ export async function createSessionFacade(
 	const autoResizeImages = settingsManager.getImageAutoResize();
 	const toolOptions = {
 		read: { autoResizeImages },
-		bash: { commandPrefix: shellCommandPrefix, shellPath },
+		bash: { commandPrefix: shellCommandPrefix, shellPath, read: { autoResizeImages } },
 	};
 
 	let runtime: EventSourcedRuntime | undefined;

@@ -16,7 +16,15 @@ export type ModeEvent =
 	| { type: "streaming_message_updated"; eventId: string; chunk: LLMChunk; delta?: string }
 	| { type: "tool_started"; eventId: string; toolCallId: string; toolName: string; args: Record<string, unknown> }
 	| { type: "tool_updated"; eventId: string; toolCallId: string; update: string; progress?: number }
-	| { type: "tool_finished"; eventId: string; toolCallId: string; toolName: string; result: unknown; isError: boolean }
+	| {
+			type: "tool_finished";
+			eventId: string;
+			toolCallId: string;
+			toolName: string;
+			result: unknown;
+			details?: unknown;
+			isError: boolean;
+	  }
 	| { type: "turn_started"; eventId: string; messageCount: number }
 	| { type: "turn_completed"; eventId: string; reason: string; errorMessage?: string }
 	| { type: "compaction_started"; eventId: string; tokenCount: number; targetTokens?: number }
@@ -98,6 +106,7 @@ export function mapTypedEventToModeEvents(event: EventBase): ModeEvent[] {
 				tool_call_id: string;
 				tool_name: string;
 				result: unknown;
+				details?: unknown;
 				is_error: boolean;
 			};
 			actions.push({
@@ -106,6 +115,7 @@ export function mapTypedEventToModeEvents(event: EventBase): ModeEvent[] {
 				toolCallId: payload.tool_call_id,
 				toolName: payload.tool_name,
 				result: payload.result,
+				details: payload.details,
 				isError: payload.is_error,
 			});
 			appendMessageCommit(actions, event);

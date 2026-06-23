@@ -141,8 +141,9 @@ export function eventToMessage(event: EventBase): AgentMessage | null {
 				toolName: payload.tool_name,
 				content,
 				isError: payload.is_error,
+				details: payload.details,
 				timestamp: event.timestamp,
-			};
+			} as AgentMessage;
 		}
 
 		case "COMPACTION_END": {

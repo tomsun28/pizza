@@ -29,6 +29,20 @@ export interface ParsedBuiltinCommand {
 	heredoc?: string;
 }
 
+export type ParsedBuiltinToolInput =
+	| {
+			command: "read";
+			input: { path: string; offset?: number; limit?: number };
+	  }
+	| {
+			command: "write";
+			input: { path: string; content: string };
+	  }
+	| {
+			command: "edit";
+			input: { path: string; edits: Array<{ oldText: string; newText: string }> };
+	  };
+
 /**
  * Parse builtin command with optional heredoc.
  * Supports:
@@ -47,13 +61,208 @@ export function parseBuiltinCommandWithHeredoc(input: string): ParsedBuiltinComm
 	}
 	
 	const [, prefix, delimiter, content] = heredocMatch;
-	const parts = prefix.trim().split(/\s+/);
+	const parts = splitShellWords(prefix.trim());
 	
 	return {
 		command: parts[0],
 		args: parts.slice(1),
 		heredoc: content,
 	};
+}
+
+export function parseBuiltinCommand(input: string): ParsedBuiltinCommand {
+	const parsedHeredoc = parseBuiltinCommandWithHeredoc(input);
+	if (parsedHeredoc) {
+		return parsedHeredoc;
+	}
+	const parts = splitShellWords(input.trim());
+	return {
+		command: parts[0] ?? "",
+		args: parts.slice(1),
+	};
+}
+
+export function parseBuiltinToolInput(
+	command: string,
+	args: string[],
+	heredoc?: string,
+): ParsedBuiltinToolInput | null {
+	const normalized = command.toLowerCase();
+	switch (normalized) {
+		case "read":
+			return { command: "read", input: parseReadInput(args) };
+		case "write":
+			return { command: "write", input: parseWriteInput(args, heredoc) };
+		case "edit":
+			return { command: "edit", input: parseEditInput(args) };
+		default:
+			return null;
+	}
+}
+
+function parseReadInput(args: string[]): { path: string; offset?: number; limit?: number } {
+	let path = "";
+	let offset: number | undefined;
+	let limit: number | undefined;
+
+	for (let i = 0; i < args.length; i++) {
+		const arg = args[i];
+		if (arg === "--path" || arg === "-p") {
+			path = args[++i] ?? "";
+		} else if (arg === "--offset" || arg === "-o") {
+			offset = parseOptionalInt(args[++i]);
+		} else if (arg === "--limit" || arg === "-l") {
+			limit = parseOptionalInt(args[++i]);
+		} else if (!path) {
+			path = arg;
+		} else if (offset === undefined) {
+			offset = parseOptionalInt(arg);
+		} else if (limit === undefined) {
+			limit = parseOptionalInt(arg);
+		}
+	}
+
+	return { path, offset, limit };
+}
+
+function parseWriteInput(args: string[], heredoc?: string): { path: string; content: string } {
+	let path = "";
+	let content: string | undefined = heredoc;
+	const positionalContent: string[] = [];
+
+	for (let i = 0; i < args.length; i++) {
+		const arg = args[i];
+		if (arg === "--path" || arg === "-p") {
+			path = args[++i] ?? "";
+		} else if (arg === "--content" || arg === "-c") {
+			content = args[++i] ?? "";
+		} else if (!path) {
+			path = arg;
+		} else if (content === undefined) {
+			positionalContent.push(arg);
+		}
+	}
+
+	if (content === undefined) {
+		content = positionalContent.join(" ");
+	}
+
+	return { path, content };
+}
+
+function parseEditInput(args: string[]): { path: string; edits: Array<{ oldText: string; newText: string }> } {
+	let path = "";
+	let editsJson: string | undefined;
+	const edits: Array<{ oldText: string; newText: string }> = [];
+	const positional: string[] = [];
+	let pendingOld: string | undefined;
+
+	for (let i = 0; i < args.length; i++) {
+		const arg = args[i];
+		if (arg === "--path" || arg === "-p") {
+			path = args[++i] ?? "";
+		} else if (arg === "--edits" || arg === "-e") {
+			editsJson = args[++i] ?? "[]";
+		} else if (arg === "--old" || arg === "-o") {
+			pendingOld = args[++i] ?? "";
+		} else if (arg === "--new" || arg === "-n") {
+			const newText = args[++i] ?? "";
+			if (pendingOld !== undefined) {
+				edits.push({ oldText: pendingOld, newText });
+				pendingOld = undefined;
+			}
+		} else if (!path) {
+			path = arg;
+		} else {
+			positional.push(arg);
+		}
+	}
+
+	if (editsJson !== undefined) {
+		const parsed = JSON.parse(editsJson) as unknown;
+		if (!Array.isArray(parsed)) {
+			throw new Error("edit --edits must be a JSON array");
+		}
+		for (const entry of parsed) {
+			if (
+				!entry ||
+				typeof entry !== "object" ||
+				typeof (entry as { oldText?: unknown }).oldText !== "string" ||
+				typeof (entry as { newText?: unknown }).newText !== "string"
+			) {
+				throw new Error("edit --edits entries must include string oldText and newText");
+			}
+			edits.push({
+				oldText: (entry as { oldText: string }).oldText,
+				newText: (entry as { newText: string }).newText,
+			});
+		}
+	}
+
+	if (pendingOld !== undefined) {
+		edits.push({ oldText: pendingOld, newText: "" });
+	}
+
+	if (edits.length === 0 && positional.length >= 2) {
+		edits.push({
+			oldText: positional[0] ?? "",
+			newText: positional.slice(1).join(" "),
+		});
+	}
+
+	return { path, edits };
+}
+
+function parseOptionalInt(value: string | undefined): number | undefined {
+	if (value === undefined) return undefined;
+	const parsed = parseInt(value, 10);
+	return Number.isNaN(parsed) ? undefined : parsed;
+}
+
+function splitShellWords(input: string): string[] {
+	const words: string[] = [];
+	let current = "";
+	let quote: "'" | "\"" | undefined;
+	let escaped = false;
+
+	for (const char of input) {
+		if (escaped) {
+			current += char;
+			escaped = false;
+			continue;
+		}
+		if (char === "\\") {
+			escaped = true;
+			continue;
+		}
+		if (quote) {
+			if (char === quote) {
+				quote = undefined;
+			} else {
+				current += char;
+			}
+			continue;
+		}
+		if (char === "'" || char === "\"") {
+			quote = char;
+			continue;
+		}
+		if (/\s/.test(char)) {
+			if (current.length > 0) {
+				words.push(current);
+				current = "";
+			}
+			continue;
+		}
+		current += char;
+	}
+	if (escaped) {
+		current += "\\";
+	}
+	if (current.length > 0) {
+		words.push(current);
+	}
+	return words;
 }
 
 /** @deprecated Use parseBuiltinCommandWithHeredoc */
@@ -209,78 +418,35 @@ export async function executeBuiltinCommand(
 	args: string[],
 	context: BuiltinCommandContext,
 ): Promise<BuiltinCommandResult> {
-	switch (command) {
+	let parsed: ParsedBuiltinToolInput | null;
+	try {
+		parsed = parseBuiltinToolInput(command, args);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		return {
+			stdout: "",
+			stderr: message,
+			exitCode: 1,
+		};
+	}
+
+	switch (parsed?.command) {
 		case "read": {
-			// Support: read <path> [offset] [limit]
-			// Or: read <path> --offset <n> --limit <n>
-			let path = args[0];
-			let offset: number | undefined;
-			let limit: number | undefined;
-
-			for (let i = 1; i < args.length; i++) {
-				const arg = args[i];
-				if (arg === "--offset" || arg === "-o") {
-					offset = parseInt(args[++i]);
-				} else if (arg === "--limit" || arg === "-l") {
-					limit = parseInt(args[++i]);
-				} else if (offset === undefined) {
-					offset = parseInt(arg);
-				} else if (limit === undefined) {
-					limit = parseInt(arg);
-				}
-			}
-
-			return executeRead({ path: path || "", offset, limit, cwd: context.cwd });
+			return executeRead({ ...parsed.input, cwd: context.cwd });
 		}
 
 		case "write": {
-			// Support:
-			//   write <path> <content>
-			//   write <path> --content <content>
-			let path: string | undefined;
-			let content: string | undefined;
-
-			for (let i = 0; i < args.length; i++) {
-				const arg = args[i];
-				if (arg === "--path" || arg === "-p") {
-					path = args[++i];
-				} else if (arg === "--content" || arg === "-c") {
-					content = args[++i];
-				} else if (!path) {
-					path = arg;
-				} else if (content === undefined) {
-					content = arg;
-				}
-			}
-
-			return executeWrite({ path: path || "", content: content || "", cwd: context.cwd });
+			return executeWrite({ ...parsed.input, cwd: context.cwd });
 		}
 
 		case "edit": {
-			// Support: edit <path> <oldText> <newText>
-			// Or: edit <path> --old <old> --new <new>
-			let path: string | undefined;
-			let oldText: string | undefined;
-			let newText: string | undefined;
-
-			for (let i = 0; i < args.length; i++) {
-				const arg = args[i];
-				if (arg === "--path" || arg === "-p") {
-					path = args[++i];
-				} else if (arg === "--old" || arg === "-o") {
-					oldText = args[++i];
-				} else if (arg === "--new" || arg === "-n") {
-					newText = args[++i];
-				} else if (!path) {
-					path = arg;
-				} else if (!oldText) {
-					oldText = arg;
-				} else if (!newText) {
-					newText = arg;
-				}
-			}
-
-			return executeEdit({ path: path || "", oldText: oldText || "", newText: newText || "", cwd: context.cwd });
+			const firstEdit = parsed.input.edits[0];
+			return executeEdit({
+				path: parsed.input.path,
+				oldText: firstEdit?.oldText ?? "",
+				newText: firstEdit?.newText ?? "",
+				cwd: context.cwd,
+			});
 		}
 
 		default:

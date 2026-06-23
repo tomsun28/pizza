@@ -728,6 +728,7 @@ export class Reactor {
 				tool_call_id,
 				tool_name,
 				result: result.content,
+				details: result.details,
 				is_error: result.is_error,
 				duration_ms: startTime !== undefined ? Date.now() - startTime : 0,
 				file_mutations: result.file_mutations,
@@ -743,6 +744,7 @@ export class Reactor {
 			tool_call_id: string;
 			tool_name: string;
 			result: unknown[];
+			details?: unknown;
 			is_error: boolean;
 			file_mutations?: Array<{ path: string; operation: string; diff?: string }>;
 		};

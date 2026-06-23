@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Text, type TUI } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import stripAnsi from "strip-ansi";
@@ -121,6 +124,24 @@ describe("ToolExecutionComponent parity", () => {
 		await promise;
 	});
 
+	test("bash built-in read executes through the read tool and returns structured details", async () => {
+		const testDir = await mkdtemp(join(tmpdir(), "pizza-bash-builtin-read-"));
+		try {
+			await writeFile(join(testDir, "sample.txt"), "hello\nworld\n", "utf-8");
+			const tool = createBashToolDefinition(testDir);
+			const result = await tool.execute("tool-bash-read", { command: "read sample.txt --offset 2 --limit 1" });
+
+			expect(result.content[0]?.type).toBe("text");
+			expect(result.content[0]?.text).toContain("world");
+			expect(result.details?.builtin).toMatchObject({
+				name: "read",
+				args: { path: "sample.txt", offset: 2, limit: 1 },
+			});
+		} finally {
+			await rm(testDir, { recursive: true, force: true });
+		}
+	});
+
 	test("rebases fallback call rendering when streaming later provides the built-in tool name", () => {
 		const component = new ToolExecutionComponent(
 			"",
@@ -144,6 +165,52 @@ describe("ToolExecutionComponent parity", () => {
 		const bashRendered = stripAnsi(component.render(120).join("\n"));
 		expect(bashRendered).toContain("$ ls -la /Users/gongchao/coding/");
 		expect(bashRendered).not.toContain("\"command\"");
+	});
+
+	test("bash built-in read call uses the read renderer", () => {
+		const component = new ToolExecutionComponent(
+			"bash",
+			"tool-bash-read-render",
+			{ command: "read README.md --offset 2 --limit 3" },
+			{},
+			createBashToolDefinition(process.cwd()),
+			createFakeTui(),
+			process.cwd(),
+		);
+		const rendered = stripAnsi(component.render(120).join("\n"));
+		expect(rendered).toContain("read");
+		expect(rendered).toContain("README.md:2-4");
+		expect(rendered).not.toContain("$ read README.md");
+	});
+
+	test("bash built-in edit result uses the edit diff renderer", () => {
+		const component = new ToolExecutionComponent(
+			"bash",
+			"tool-bash-edit-render",
+			{ command: "edit --path README.md --old before --new after" },
+			{},
+			createBashToolDefinition(process.cwd()),
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "Successfully replaced 1 block(s) in README.md." }],
+				details: {
+					builtin: {
+						name: "edit",
+						args: { path: "README.md", edits: [{ oldText: "before", newText: "after" }] },
+						details: { diff: "@@ -1 +1 @@\n-before\n+after", firstChangedLine: 1 },
+					},
+				},
+				isError: false,
+			},
+			false,
+		);
+		const rendered = stripAnsi(component.render(120).join("\n"));
+		expect(rendered).toContain("edit");
+		expect(rendered).toContain("README.md");
+		expect(rendered).toContain("+after");
 	});
 
 	test("does not duplicate built-in headers when passed the active built-in definition", () => {

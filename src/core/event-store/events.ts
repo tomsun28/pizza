@@ -220,6 +220,8 @@ export interface ToolExecutionEndEvent extends EventBase {
 		tool_call_id: string;
 		tool_name: string;
 		result: import("./types.js").ContentBlock[];
+		/** Optional structured payload for logs/UI. */
+		details?: unknown;
 		is_error: boolean;
 		duration_ms: number;
 		/** File mutations produced by this execution */

@@ -2839,7 +2839,10 @@ export class InteractiveMode {
 			case "tool_finished": {
 				const toolComponent = this.pendingTools.get(event.toolCallId);
 				if (toolComponent) {
-					toolComponent.updateResult({ content: [{ type: "text", text: String(event.result) }], isError: event.isError });
+					const content = Array.isArray(event.result)
+						? (event.result as Array<{ type: string; text?: string; data?: string; mimeType?: string }>)
+						: [{ type: "text", text: String(event.result) }];
+					toolComponent.updateResult({ content, details: event.details, isError: event.isError });
 					this.pendingTools.delete(event.toolCallId);
 					this.ui.requestRender();
 				}

@@ -13,6 +13,7 @@
 import type { AgentTool } from "../agent/types.js";
 import type { IntentCategory, IntentRisk, ToolExecutionOptions, ToolExecutionResult, ToolExecutor, ToolMetadata, ToolRegistry } from "./types.js";
 import type { FileMutation } from "../event-store/types.js";
+import type { BashToolDetails } from "../tools/bash.js";
 
 // ============================================================================
 // File Mutation Detection
@@ -44,6 +45,17 @@ function inferFileMutations(
 		case "write": {
 			const path = args.path as string | undefined;
 			if (path) return [{ path, operation: "create" }];
+			return undefined;
+		}
+		case "bash": {
+			const details = _result.details as BashToolDetails | undefined;
+			const builtin = details?.builtin;
+			if (builtin?.name === "write" && builtin.args.path) {
+				return [{ path: builtin.args.path, operation: "create" }];
+			}
+			if (builtin?.name === "edit" && builtin.args.path) {
+				return [{ path: builtin.args.path, operation: "modify" }];
+			}
 			return undefined;
 		}
 		default:
@@ -124,6 +136,7 @@ export class AgentToolAdapter implements ToolExecutor {
 
 			const executionResult: ToolExecutionResult = {
 				content: result.content.map((block) => ({ ...block })),
+				details: result.details,
 				is_error: false,
 			};
 

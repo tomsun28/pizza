@@ -54,7 +54,20 @@ export function buildLlmClientFromStreamFn(
 					messages: messages.filter(
 						(message) =>
 							message.role === "user" || message.role === "assistant" || message.role === "toolResult",
-					) as any,
+					).map((message) => {
+						if (message.role !== "toolResult") {
+							return message;
+						}
+						const toolResult = message as any;
+						return {
+							role: "toolResult",
+							toolCallId: toolResult.toolCallId,
+							toolName: toolResult.toolName,
+							content: toolResult.content,
+							isError: toolResult.isError,
+							timestamp: toolResult.timestamp,
+						};
+					}) as any,
 					tools: streamTools,
 				},
 				{

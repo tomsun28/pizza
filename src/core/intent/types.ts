@@ -43,6 +43,8 @@ export interface IntentClassification {
 /** Tool execution result */
 export interface ToolExecutionResult {
 	content: Array<{ type: string; [key: string]: unknown }>;
+	/** Optional structured payload for logs/UI. */
+	details?: unknown;
 	is_error: boolean;
 	/** File mutations produced by this execution */
 	file_mutations?: FileMutation[];

@@ -3,7 +3,7 @@ import { createWriteStream, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentTool } from "../agent/types.js";
-import { Container, Text, truncateToWidth } from "@mariozechner/pi-tui";
+import { Container, Text, truncateToWidth, type Component } from "@mariozechner/pi-tui";
 import { type Static, Type } from "@sinclair/typebox";
 import { spawn } from "child_process";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
@@ -21,7 +21,10 @@ import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/type
 import { getTextOutput, invalidArgText, str } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateTail } from "./truncate.js";
-import { executeBuiltinCommand, BUILTIN_COMMANDS, parseBuiltinCommandWithHeredoc } from "./builtin-commands.js";
+import { BUILTIN_COMMANDS, parseBuiltinCommand, parseBuiltinToolInput, type ParsedBuiltinToolInput } from "./builtin-commands.js";
+import { createEditToolDefinition, type EditToolDetails, type EditToolInput, type EditToolOptions } from "./edit.js";
+import { createReadToolDefinition, type ReadToolDetails, type ReadToolInput, type ReadToolOptions } from "./read.js";
+import { createWriteToolDefinition, type WriteToolInput, type WriteToolOptions } from "./write.js";
 
 /**
  * Generate a unique temp file path for bash output.
@@ -41,7 +44,25 @@ export type BashToolInput = Static<typeof bashSchema>;
 export interface BashToolDetails {
 	truncation?: TruncationResult;
 	fullOutputPath?: string;
+	builtin?: BashBuiltinDetails;
 }
+
+export type BashBuiltinDetails =
+	| {
+			name: "read";
+			args: ReadToolInput;
+			details?: ReadToolDetails;
+	  }
+	| {
+			name: "write";
+			args: WriteToolInput;
+			details?: undefined;
+	  }
+	| {
+			name: "edit";
+			args: EditToolInput;
+			details?: EditToolDetails;
+	  };
 
 /**
  * Pluggable operations for the bash tool.
@@ -153,6 +174,12 @@ function resolveSpawnContext(command: string, cwd: string, spawnHook?: BashSpawn
 export interface BashToolOptions {
 	/** Custom operations for command execution. Default: local shell */
 	operations?: BashOperations;
+	/** Options used when routing the built-in read command through the read tool. */
+	read?: ReadToolOptions;
+	/** Options used when routing the built-in write command through the write tool. */
+	write?: WriteToolOptions;
+	/** Options used when routing the built-in edit command through the edit tool. */
+	edit?: EditToolOptions;
 	/** Command prefix prepended to every command (for example shell setup commands) */
 	commandPrefix?: string;
 	/** Optional explicit shell path from settings */
@@ -167,6 +194,10 @@ type BashRenderState = {
 	startedAt: number | undefined;
 	endedAt: number | undefined;
 	interval: NodeJS.Timeout | undefined;
+	builtinKey?: string;
+	builtinCallComponent?: Component;
+	builtinResultComponent?: Component;
+	builtinRendererState?: any;
 };
 
 type BashResultRenderState = {
@@ -271,6 +302,45 @@ function rebuildBashResultRenderComponent(
 	}
 }
 
+function parseBashBuiltinCommand(command: string): ParsedBuiltinToolInput | null {
+	const parsed = parseBuiltinCommand(command);
+	const builtinName = parsed.command.toLowerCase();
+	if (!BUILTIN_COMMANDS.includes(builtinName as any)) {
+		return null;
+	}
+	return parseBuiltinToolInput(builtinName, parsed.args, parsed.heredoc);
+}
+
+function builtinKey(builtin: ParsedBuiltinToolInput | BashBuiltinDetails): string {
+	if ("command" in builtin) {
+		return JSON.stringify({ name: builtin.command, args: builtin.input });
+	}
+	return JSON.stringify({ name: builtin.name, args: builtin.args });
+}
+
+function resetBuiltinRendererStateIfNeeded(state: BashRenderState, key: string): void {
+	if (state.builtinKey === key) return;
+	state.builtinKey = key;
+	state.builtinCallComponent = undefined;
+	state.builtinResultComponent = undefined;
+	state.builtinRendererState = {};
+}
+
+function makeBuiltinRenderContext<TArgs>(
+	context: Parameters<NonNullable<ToolDefinition<any, any, BashRenderState>["renderCall"]>>[2],
+	args: TArgs,
+	lastComponent: Component | undefined,
+	state: BashRenderState,
+) {
+	state.builtinRendererState ??= {};
+	return {
+		...context,
+		args,
+		lastComponent,
+		state: state.builtinRendererState,
+	};
+}
+
 export function createBashToolDefinition(
 	cwd: string,
 	options?: BashToolOptions,
@@ -278,52 +348,52 @@ export function createBashToolDefinition(
 	const ops = options?.operations ?? createLocalBashOperations({ shellPath: options?.shellPath });
 	const commandPrefix = options?.commandPrefix;
 	const spawnHook = options?.spawnHook;
+	const readDefinition = createReadToolDefinition(cwd, options?.read);
+	const writeDefinition = createWriteToolDefinition(cwd, options?.write);
+	const editDefinition = createEditToolDefinition(cwd, options?.edit);
 	return {
 		name: "bash",
 		label: "bash",
-		description: `Execute a command in the current working directory. Built-in: read <path> [offset] [limit] - read file, write <path> <content> - write file, edit <path> <oldText> <newText> - edit file. Other commands execute as regular bash (ls, grep, git, npm, etc.). Truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB.`,
+		description: `Execute a command in the current working directory. Built-in commands are routed internally: read <path> [offset] [limit] or read --path <path> --offset <n> --limit <n>; write <path> <content>, write --path <path> --content <content>, or write <path> <<EOF; edit <path> <oldText> <newText>, edit --path <path> --old <old> --new <new>, or edit --path <path> --edits '[{"oldText":"...","newText":"..."}]'. Other commands execute as regular bash (ls, grep, git, npm, etc.). Truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB.`,
 		promptSnippet: "Execute commands: read/write/edit files, or bash (ls, git, npm, etc.)",
 		parameters: bashSchema,
 		async execute(
-			_toolCallId,
+			toolCallId,
 			{ command, timeout }: { command: string; timeout?: number },
 			signal?: AbortSignal,
 			onUpdate?,
-			_ctx?,
+			ctx?,
 		) {
 			// Direct command routing: if command starts with a built-in command name,
 			// execute it internally. Otherwise fall through to bash.
 			const trimmedCommand = command.trim();
-			const firstWord = trimmedCommand.split(/\s+/)[0].toLowerCase();
-			if (BUILTIN_COMMANDS.includes(firstWord as any)) {
-				// Parse heredoc if present
-				const parsed = parseBuiltinCommandWithHeredoc(trimmedCommand);
-				let builtinCommand: string;
-				let args: string[];
-				
-				if (parsed) {
-					builtinCommand = parsed.command;
-					// For write command, append heredoc content as the content argument
-					if (builtinCommand === "write" && parsed.heredoc !== undefined) {
-						args = [...parsed.args, parsed.heredoc];
-					} else {
-						args = parsed.args;
+			const builtin = parseBashBuiltinCommand(trimmedCommand);
+			if (builtin) {
+				switch (builtin.command) {
+					case "read": {
+						const result = await readDefinition.execute(toolCallId, builtin.input, signal, undefined, ctx as never);
+						return {
+							content: result.content,
+							details: { builtin: { name: "read", args: builtin.input, details: result.details } },
+						};
 					}
-				} else {
-					const parts = trimmedCommand.split(/\s+/);
-					builtinCommand = parts[0].toLowerCase();
-					args = parts.slice(1);
-				}
-				
-				try {
-					const result = await executeBuiltinCommand(builtinCommand, args, { cwd });
-					const output = result.stdout + (result.stderr ? `\n${result.stderr}` : "");
-					if (result.exitCode !== 0) {
-						throw new Error(output || `Command exited with code ${result.exitCode}`);
+					case "write": {
+						const result = await writeDefinition.execute(toolCallId, builtin.input, signal, undefined, ctx as never);
+						return {
+							content: result.content,
+							details: { builtin: { name: "write", args: builtin.input, details: result.details } },
+						};
 					}
-					return { content: [{ type: "text", text: output || "(no output)" }], details: undefined };
-				} catch (error) {
-					throw error instanceof Error ? error : new Error(String(error));
+					case "edit": {
+						const prepared = editDefinition.prepareArguments
+							? editDefinition.prepareArguments(builtin.input)
+							: builtin.input;
+						const result = await editDefinition.execute(toolCallId, prepared, signal, undefined, ctx as never);
+						return {
+							content: result.content,
+							details: { builtin: { name: "edit", args: prepared, details: result.details } },
+						};
+					}
 				}
 			}
 
@@ -442,17 +512,46 @@ export function createBashToolDefinition(
 					});
 			});
 		},
-		renderCall(args, _theme, context) {
+		renderCall(args, renderTheme, context) {
 			const state = context.state;
 			if (context.executionStarted && state.startedAt === undefined) {
 				state.startedAt = Date.now();
 				state.endedAt = undefined;
 			}
+			const command = str(args?.command);
+			if (command) {
+				try {
+					const builtin = parseBashBuiltinCommand(command);
+					if (builtin) {
+						const key = builtinKey(builtin);
+						resetBuiltinRendererStateIfNeeded(state, key);
+						const definition =
+							builtin.command === "read"
+								? readDefinition
+								: builtin.command === "write"
+									? writeDefinition
+									: editDefinition;
+						const renderContext = makeBuiltinRenderContext(
+							context,
+							builtin.input,
+							state.builtinCallComponent,
+							state,
+						);
+						const component = definition.renderCall?.(builtin.input as never, renderTheme, renderContext as never);
+						if (component) {
+							state.builtinCallComponent = component;
+							return component;
+						}
+					}
+				} catch {
+					// Fall back to the bash call renderer for malformed built-in commands.
+				}
+			}
 			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
 			text.setText(formatBashCall(args));
 			return text;
 		},
-		renderResult(result, options, _theme, context) {
+		renderResult(result, options, renderTheme, context) {
 			const state = context.state;
 			if (state.startedAt !== undefined && options.isPartial && !state.interval) {
 				state.interval = setInterval(() => context.invalidate(), 1000);
@@ -462,6 +561,42 @@ export function createBashToolDefinition(
 				if (state.interval) {
 					clearInterval(state.interval);
 					state.interval = undefined;
+				}
+			}
+			const builtin = result.details?.builtin;
+			if (builtin) {
+				const key = builtinKey(builtin);
+				resetBuiltinRendererStateIfNeeded(state, key);
+				const renderContext = makeBuiltinRenderContext(
+					context,
+					builtin.args,
+					state.builtinResultComponent,
+					state,
+				);
+				const component =
+					builtin.name === "read"
+						? readDefinition.renderResult?.(
+								{ content: result.content as never, details: builtin.details },
+								options,
+								renderTheme,
+								renderContext as never,
+							)
+						: builtin.name === "write"
+							? writeDefinition.renderResult?.(
+									{ content: result.content as never, details: builtin.details },
+									options,
+									renderTheme,
+									renderContext as never,
+								)
+							: editDefinition.renderResult?.(
+									{ content: result.content as never, details: builtin.details },
+									options,
+									renderTheme,
+									renderContext as never,
+								);
+				if (component) {
+					state.builtinResultComponent = component;
+					return component;
 				}
 			}
 			const component =
