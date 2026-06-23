@@ -3,6 +3,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeBashWithOperations } from "../src/core/bash-executor.js";
+import { executeBuiltinCommand } from "../src/core/tools/builtin-commands.js";
 import { createBashTool, createLocalBashOperations } from "../src/core/tools/bash.js";
 import {
 	createEditTool,
@@ -377,6 +378,29 @@ describe("Coding Agent Tools", () => {
 
 			expect(getTextOutput(result)).toContain("test output");
 			expect(result.details).toBeUndefined();
+		});
+
+		it("should show help for built-in file commands", async () => {
+			for (const command of ["read", "write", "edit"]) {
+				const result = await bashTool.execute(`test-help-${command}`, { command: `${command} -h` });
+				const output = getTextOutput(result);
+
+				expect(output).toContain(`${command} -`);
+				expect(output).toContain("Description:");
+				expect(output).toContain("Parameters:");
+				expect(output).toContain("Examples:");
+				expect(result.details).toBeUndefined();
+			}
+		});
+
+		it("should show help from the direct builtin command entry point", async () => {
+			const result = await executeBuiltinCommand("edit", ["--help"], { cwd: testDir });
+
+			expect(result.exitCode).toBe(0);
+			expect(result.stderr).toBe("");
+			expect(result.stdout).toContain("edit - Edit a file with exact text replacement");
+			expect(result.stdout).toContain("--edits, -e");
+			expect(result.stdout).toContain("Examples:");
 		});
 
 		it("should handle command errors", async () => {

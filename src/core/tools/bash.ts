@@ -21,7 +21,13 @@ import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/type
 import { getTextOutput, invalidArgText, str } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateTail } from "./truncate.js";
-import { BUILTIN_COMMANDS, parseBuiltinCommand, parseBuiltinToolInput, type ParsedBuiltinToolInput } from "./builtin-commands.js";
+import {
+	BUILTIN_COMMANDS,
+	getBuiltinCommandHelpForArgs,
+	parseBuiltinCommand,
+	parseBuiltinToolInput,
+	type ParsedBuiltinToolInput,
+} from "./builtin-commands.js";
 import { createEditToolDefinition, type EditToolDetails, type EditToolInput, type EditToolOptions } from "./edit.js";
 import { createReadToolDefinition, type ReadToolDetails, type ReadToolInput, type ReadToolOptions } from "./read.js";
 import { createWriteToolDefinition, type WriteToolInput, type WriteToolOptions } from "./write.js";
@@ -308,6 +314,9 @@ function parseBashBuiltinCommand(command: string): ParsedBuiltinToolInput | null
 	if (!BUILTIN_COMMANDS.includes(builtinName as any)) {
 		return null;
 	}
+	if (getBuiltinCommandHelpForArgs(builtinName, parsed.args)) {
+		return null;
+	}
 	return parseBuiltinToolInput(builtinName, parsed.args, parsed.heredoc);
 }
 
@@ -367,6 +376,11 @@ export function createBashToolDefinition(
 			// Direct command routing: if command starts with a built-in command name,
 			// execute it internally. Otherwise fall through to bash.
 			const trimmedCommand = command.trim();
+			const parsedCommand = parseBuiltinCommand(trimmedCommand);
+			const help = getBuiltinCommandHelpForArgs(parsedCommand.command, parsedCommand.args);
+			if (help) {
+				return { content: [{ type: "text", text: help }], details: undefined };
+			}
 			const builtin = parseBashBuiltinCommand(trimmedCommand);
 			if (builtin) {
 				switch (builtin.command) {

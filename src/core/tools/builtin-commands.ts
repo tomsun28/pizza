@@ -265,6 +265,98 @@ function splitShellWords(input: string): string[] {
 	return words;
 }
 
+function isHelpRequest(args: string[]): boolean {
+	if (args.length !== 1) return false;
+	const value = args[0]?.toLowerCase();
+	return value === "-h" || value === "--help" || value === "help";
+}
+
+export function getBuiltinCommandHelp(command: string): string | undefined {
+	switch (command.toLowerCase()) {
+		case "read":
+			return [
+				"read - Read a file",
+				"",
+				"Description:",
+				"  Reads a text file or supported image file from the current working directory.",
+				"  Text output supports line offsets and limits. Images are returned as image content when",
+				"  routed through the bash tool's built-in read implementation.",
+				"",
+				"Parameters:",
+				"  path              File path to read. Relative paths are resolved from the working directory.",
+				"  offset            Optional 1-based line number to start reading from.",
+				"  limit             Optional maximum number of lines to return.",
+				"  --path, -p        File path to read.",
+				"  --offset, -o      1-based line number to start reading from.",
+				"  --limit, -l       Maximum number of lines to return.",
+				"  -h, --help        Show this help.",
+				"",
+				"Examples:",
+				"  read src/main.ts",
+				"  read src/main.ts 20",
+				"  read src/main.ts 20 50",
+				"  read --path src/main.ts --offset 20 --limit 50",
+				"  read -p src/main.ts -o 20 -l 50",
+			].join("\n");
+		case "write":
+			return [
+				"write - Create or overwrite a file",
+				"",
+				"Description:",
+				"  Writes complete content to a file. Creates parent directories when needed.",
+				"  If the target file already exists, it is overwritten.",
+				"",
+				"Parameters:",
+				"  path              Target file path. Relative paths are resolved from the working directory.",
+				"  content           Complete file content to write.",
+				"  --path, -p        Target file path.",
+				"  --content, -c     Complete file content to write.",
+				"  <<EOF             Heredoc form for multi-line content.",
+				"  -h, --help        Show this help.",
+				"",
+				"Examples:",
+				"  write notes.txt hello",
+				"  write --path notes.txt --content \"hello world\"",
+				"  write -p notes.txt -c \"hello world\"",
+				"  write src/generated.ts <<EOF",
+				"  export const value = 1;",
+				"  EOF",
+			].join("\n");
+		case "edit":
+			return [
+				"edit - Edit a file with exact text replacement",
+				"",
+				"Description:",
+				"  Edits one existing file using exact text replacements. Each oldText must match a",
+				"  unique, non-overlapping region of the original file. Multiple replacement blocks",
+				"  can be supplied with --edits.",
+				"",
+				"Parameters:",
+				"  path              File path to edit. Relative paths are resolved from the working directory.",
+				"  oldText           Exact text to replace.",
+				"  newText           Replacement text.",
+				"  --path, -p        File path to edit.",
+				"  --old, -o         Exact text to replace. Can be paired with --new.",
+				"  --new, -n         Replacement text. Can be paired with --old.",
+				"  --edits, -e       JSON array of {\"oldText\":\"...\",\"newText\":\"...\"} replacements.",
+				"  -h, --help        Show this help.",
+				"",
+				"Examples:",
+				"  edit src/app.ts \"const a = 1\" \"const a = 2\"",
+				"  edit --path src/app.ts --old \"const a = 1\" --new \"const a = 2\"",
+				"  edit -p src/app.ts -o \"const a = 1\" -n \"const a = 2\"",
+				"  edit --path src/app.ts --edits '[{\"oldText\":\"const a = 1\",\"newText\":\"const a = 2\"}]'",
+			].join("\n");
+		default:
+			return undefined;
+	}
+}
+
+export function getBuiltinCommandHelpForArgs(command: string, args: string[]): string | undefined {
+	if (!isHelpRequest(args)) return undefined;
+	return getBuiltinCommandHelp(command);
+}
+
 /** @deprecated Use parseBuiltinCommandWithHeredoc */
 export const parseCommandWithHeredoc = parseBuiltinCommandWithHeredoc;
 
@@ -418,6 +510,15 @@ export async function executeBuiltinCommand(
 	args: string[],
 	context: BuiltinCommandContext,
 ): Promise<BuiltinCommandResult> {
+	const help = getBuiltinCommandHelpForArgs(command, args);
+	if (help) {
+		return {
+			stdout: help,
+			stderr: "",
+			exitCode: 0,
+		};
+	}
+
 	let parsed: ParsedBuiltinToolInput | null;
 	try {
 		parsed = parseBuiltinToolInput(command, args);
