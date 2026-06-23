@@ -63,8 +63,9 @@ function createLargeEdits(lines: string[]): Edit[] {
 	return targets
 		.filter((lineNumber) => lineNumber + 1 < lines.length)
 		.map((lineNumber) => ({
-			rangeId: `${formatLineAnchor(lineNumber, lines[lineNumber - 1])}..${formatLineAnchor(lineNumber + 2, lines[lineNumber + 1])}`,
-			newText: `${lines[lineNumber - 1]}\n${lines[lineNumber]} changed\n${lines[lineNumber + 1]}`,
+			op: "replace" as const,
+			range: `${formatLineAnchor(lineNumber, lines[lineNumber - 1])}..${formatLineAnchor(lineNumber + 2, lines[lineNumber + 1])}`,
+			new: `${lines[lineNumber - 1]}\n${lines[lineNumber]} changed\n${lines[lineNumber + 1]}`,
 		}));
 }
 
@@ -212,7 +213,7 @@ describe("edit tool TUI rendering", () => {
 		const component = new ToolExecutionComponent(
 			"edit",
 			"tool-call-2",
-			{ path: filePath, edits: [{ rangeId: formatLineAnchor(99, "does not exist"), newText: "replacement" }] },
+			{ path: filePath, edits: [{ op: "replace", range: formatLineAnchor(99, "does not exist"), new: "replacement" }] },
 			{},
 			createEditToolDefinition(process.cwd()),
 			tui,

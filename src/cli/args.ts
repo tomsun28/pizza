@@ -197,9 +197,9 @@ ${chalk.bold("Usage:")}
   ${APP_NAME} [options] [@files...] [messages...]
 
 ${chalk.bold("Built-in Commands (handled internally by the bash tool):")}
-  builtin read <path> [--offset N] [--limit N]  # Read file with line anchors
+  builtin read <path> [--offset N] [--limit N]  # Read file with 2-hex line anchors
   builtin write <path> <content>               # Write file
-  builtin edit <path> <rangeId> <newText>     # Edit anchored whole line(s)
+  builtin edit <path> <op> <range> [new]      # Edit anchored whole line(s)
 
 All other commands (ls, grep, find, git, npm, etc.) are passed to the system shell as-is.
 

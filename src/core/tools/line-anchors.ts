@@ -1,7 +1,7 @@
 import { createHash } from "crypto";
 
-const HASH_LENGTH = 8;
-const LINE_ANCHOR_PATTERN = /^L([1-9]\d*)#([0-9a-f]{8})$/;
+const HASH_LENGTH = 2;
+const LINE_ANCHOR_PATTERN = /^([1-9]\d*)#([0-9a-f]{2})$/;
 
 export interface LineAnchor {
 	line: number;
@@ -23,7 +23,7 @@ export interface LineRecord {
 }
 
 export interface ResolvedLineRange {
-	rangeId: string;
+	range: string;
 	startLine: number;
 	endLine: number;
 	startIndex: number;
@@ -37,37 +37,37 @@ export function hashLine(line: string): string {
 }
 
 export function formatLineAnchor(lineNumber: number, line: string): string {
-	return `L${lineNumber}#${hashLine(line)}`;
+	return `${lineNumber}#${hashLine(line)}`;
 }
 
-export function formatRangeId(start: LineAnchor, end: LineAnchor = start): string {
-	const startId = `L${start.line}#${start.hash}`;
-	const endId = `L${end.line}#${end.hash}`;
+export function formatRange(start: LineAnchor, end: LineAnchor = start): string {
+	const startId = `${start.line}#${start.hash}`;
+	const endId = `${end.line}#${end.hash}`;
 	return startId === endId ? startId : `${startId}..${endId}`;
 }
 
-export function looksLikeRangeId(value: string): boolean {
+export function looksLikeRange(value: string): boolean {
 	try {
-		parseRangeId(value);
+		parseRange(value);
 		return true;
 	} catch {
 		return false;
 	}
 }
 
-export function parseRangeId(rangeId: string): RangeAnchor {
-	const trimmed = rangeId.trim();
+export function parseRange(range: string): RangeAnchor {
+	const trimmed = range.trim();
 	if (!trimmed) {
-		throw new Error("rangeId must not be empty.");
+		throw new Error("range must not be empty.");
 	}
 	const parts = trimmed.split("..");
 	if (parts.length > 2) {
-		throw new Error(`Invalid rangeId "${rangeId}". Expected L<line>#<hash> or L<start>#<hash>..L<end>#<hash>.`);
+		throw new Error(`Invalid range "${range}". Expected <line>#<hash> or <start>#<hash>..<end>#<hash>.`);
 	}
-	const start = parseLineAnchor(parts[0], rangeId);
-	const end = parseLineAnchor(parts[1] ?? parts[0], rangeId);
+	const start = parseLineAnchor(parts[0], range);
+	const end = parseLineAnchor(parts[1] ?? parts[0], range);
 	if (start.line > end.line) {
-		throw new Error(`Invalid rangeId "${rangeId}". Start line must be before or equal to end line.`);
+		throw new Error(`Invalid range "${range}". Start line must be before or equal to end line.`);
 	}
 	return { start, end };
 }
@@ -130,14 +130,14 @@ export function annotateTextWithLineAnchors(text: string, startLine = 1): string
 	return lines.map((line, index) => `${formatLineAnchor(startLine + index, line)} | ${line}`).join("\n");
 }
 
-export function resolveRangeId(content: string, rangeId: string, path: string): ResolvedLineRange {
-	const anchor = parseRangeId(rangeId);
+export function resolveRange(content: string, range: string, path: string): ResolvedLineRange {
+	const anchor = parseRange(range);
 	const records = buildLineRecords(content);
 	const length = anchor.end.line - anchor.start.line + 1;
 
 	const direct = resolveByRecordIndex(records, anchor.start.line - 1, length, anchor);
 	if (direct) {
-		return buildResolvedRange(content, rangeId, records, direct.startIndex, direct.endIndex, false);
+		return buildResolvedRange(content, range, records, direct.startIndex, direct.endIndex, false);
 	}
 
 	const candidates: Array<{ startIndex: number; endIndex: number }> = [];
@@ -149,23 +149,21 @@ export function resolveRangeId(content: string, rangeId: string, path: string): 
 	}
 
 	if (candidates.length === 1) {
-		return buildResolvedRange(content, rangeId, records, candidates[0].startIndex, candidates[0].endIndex, true);
+		return buildResolvedRange(content, range, records, candidates[0].startIndex, candidates[0].endIndex, true);
 	}
 
 	if (candidates.length > 1) {
-		throw new Error(
-			`rangeId ${rangeId} is ambiguous in ${path}. Re-read a smaller region and use current line anchors.`,
-		);
+		throw new Error(`range ${range} is ambiguous in ${path}. Re-read a smaller region and use current line anchors.`);
 	}
 
-	throw new Error(`rangeId ${rangeId} is stale in ${path}. Re-read the file and use current line anchors.`);
+	throw new Error(`range ${range} is stale in ${path}. Re-read the file and use current line anchors.`);
 }
 
-function parseLineAnchor(value: string | undefined, originalRangeId: string): LineAnchor {
+function parseLineAnchor(value: string | undefined, originalRange: string): LineAnchor {
 	const match = value?.match(LINE_ANCHOR_PATTERN);
 	if (!match) {
 		throw new Error(
-			`Invalid rangeId "${originalRangeId}". Expected L<line>#<8-hex-hash> or L<start>#<hash>..L<end>#<hash>.`,
+			`Invalid range "${originalRange}". Expected <line>#<2-hex-hash> or <start>#<hash>..<end>#<hash>.`,
 		);
 	}
 	return {
@@ -191,7 +189,7 @@ function resolveByRecordIndex(
 
 function buildResolvedRange(
 	content: string,
-	rangeId: string,
+	range: string,
 	records: LineRecord[],
 	startRecordIndex: number,
 	endRecordIndex: number,
@@ -200,7 +198,7 @@ function buildResolvedRange(
 	const start = records[startRecordIndex];
 	const end = records[endRecordIndex];
 	return {
-		rangeId,
+		range,
 		startLine: start.lineNumber,
 		endLine: end.lineNumber,
 		startIndex: start.startIndex,

@@ -21,15 +21,15 @@ afterEach(async () => {
 describe("edit tool arguments", () => {
 	it("keeps top-level edit fields out of the public schema", () => {
 		const definition = createEditToolDefinition(process.cwd());
-		expect(definition.parameters.properties).not.toHaveProperty("rangeId");
-		expect(definition.parameters.properties).not.toHaveProperty("newText");
+		expect(definition.parameters.properties).not.toHaveProperty("range");
+		expect(definition.parameters.properties).not.toHaveProperty("new");
 	});
 
 	it("passes through valid range edits unchanged", () => {
 		const definition = createEditToolDefinition(process.cwd());
 		const input = {
 			path: "file.txt",
-			edits: [{ rangeId: "L1#aaaaaaaa", newText: "b" }],
+			edits: [{ op: "replace", range: "1#aa", new: "b" }],
 		};
 		const prepared = definition.prepareArguments!(input);
 		expect(prepared).toBe(input);
@@ -50,7 +50,7 @@ describe("edit tool arguments", () => {
 		const definition = createEditToolDefinition(dir);
 		const prepared = definition.prepareArguments!({
 			path: "range.txt",
-			edits: [{ rangeId: formatLineAnchor(1, "before"), newText: "after" }],
+			edits: [{ op: "replace", range: formatLineAnchor(1, "before"), new: "after" }],
 		});
 
 		const result = await definition.execute("tool-1", prepared, undefined, undefined, {} as ExtensionContext);
@@ -62,11 +62,11 @@ describe("edit tool arguments", () => {
 		const definition = createEditToolDefinition(process.cwd());
 		const prepared = definition.prepareArguments!({
 			path: "file.txt",
-			edits: JSON.stringify([{ rangeId: "L1#aaaaaaaa", newText: "b" }]),
+			edits: JSON.stringify([{ op: "replace", range: "1#aa", new: "b" }]),
 		});
 		expect(prepared).toEqual({
 			path: "file.txt",
-			edits: [{ rangeId: "L1#aaaaaaaa", newText: "b" }],
+			edits: [{ op: "replace", range: "1#aa", new: "b" }],
 		});
 	});
 

@@ -22,7 +22,7 @@ const readSchema = Type.Object({
 	anchors: Type.Optional(
 		Type.Union([Type.Literal("line"), Type.Literal("none")], {
 			description:
-				'Whether to include hashline anchors in text output. "line" prefixes each line with L<line>#<hash> for use with edit rangeId. Default: "line". Use "none" only when raw file text is required.',
+				'Whether to include hashline anchors in text output. "line" prefixes each line with <line>#<2-hex-hash> for use with edit range. Default: "line". Use "none" only when raw file text is required.',
 		}),
 	),
 });
@@ -142,11 +142,11 @@ export function createReadToolDefinition(
 	return {
 		name: "read",
 		label: "read",
-		description: `Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Text output includes hashline anchors by default (L<line>#<hash> | content); pass anchors="none" only when raw text is required. Use offset/limit for large files. When you need the full file, continue with offset until complete.`,
+		description: `Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Text output includes 2-hex hashline anchors by default (<line>#<hash> | content); pass anchors="none" only when raw text is required. Use offset/limit for large files. When you need the full file, continue with offset until complete.`,
 		promptSnippet: "Read file contents",
 		promptGuidelines: [
 			"Use read to examine files instead of cat or sed.",
-			"Use read line anchors as edit edits[].rangeId for whole-line replacements.",
+			"Use read line anchors as edit edits[].range for whole-line edits.",
 		],
 		parameters: readSchema,
 		async execute(

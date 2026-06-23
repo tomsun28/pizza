@@ -6,7 +6,7 @@
 import * as Diff from "diff";
 import { constants } from "fs";
 import { access, readFile } from "fs/promises";
-import { resolveRangeId } from "./line-anchors.js";
+import { resolveRange, type ResolvedLineRange } from "./line-anchors.js";
 import { resolveToCwd } from "./path-utils.js";
 
 export function detectLineEnding(content: string): "\r\n" | "\n" {
@@ -25,18 +25,17 @@ export function restoreLineEndings(text: string, ending: "\r\n" | "\n"): string 
 	return ending === "\r\n" ? text.replace(/\n/g, "\r\n") : text;
 }
 
-export interface RangeReplacementEdit {
-	rangeId: string;
-	newText: string;
-}
-
-export type Edit = RangeReplacementEdit;
+export type Edit =
+	| { op: "replace"; range: string; new: string }
+	| { op: "insert_before"; range: string; new: string }
+	| { op: "insert_after"; range: string; new: string }
+	| { op: "delete"; range: string };
 
 interface MatchedEdit {
 	editIndex: number;
 	matchIndex: number;
 	matchLength: number;
-	newText: string;
+	replacement: string;
 }
 
 export interface AppliedEditsResult {
@@ -51,21 +50,33 @@ export function stripBom(content: string): { bom: string; text: string } {
 
 function getNoChangeError(path: string, totalEdits: number): Error {
 	if (totalEdits === 1) {
-		return new Error(`No changes made to ${path}. The range replacement produced identical content.`);
+		return new Error(`No changes made to ${path}. The edit produced identical content.`);
 	}
-	return new Error(`No changes made to ${path}. The replacements produced identical content.`);
+	return new Error(`No changes made to ${path}. The edits produced identical content.`);
 }
 
-function normalizeRangeReplacementNewText(newText: string, existingText: string): string {
-	const normalized = normalizeToLF(newText);
+function normalizeReplacementText(newValue: string, existingText: string): string {
+	const normalized = normalizeToLF(newValue);
 	if (existingText.endsWith("\n") && normalized.length > 0 && !normalized.endsWith("\n")) {
 		return `${normalized}\n`;
 	}
 	return normalized;
 }
 
+function normalizeInsertionText(newValue: string, op: "insert_before" | "insert_after", range: ResolvedLineRange): string {
+	const normalized = normalizeToLF(newValue);
+	if (normalized.length === 0) {
+		return "";
+	}
+	const lineText = normalized.endsWith("\n") ? normalized : `${normalized}\n`;
+	if (op === "insert_after" && range.existingText.length > 0 && !range.existingText.endsWith("\n")) {
+		return `\n${lineText}`;
+	}
+	return lineText;
+}
+
 /**
- * Apply one or more range-id replacements to LF-normalized content.
+ * Apply one or more range edits to LF-normalized content.
  *
  * All edits are resolved against the same original content. Replacements are
  * then applied in reverse order so offsets remain stable.
@@ -75,28 +86,47 @@ export function applyEditsToNormalizedContent(
 	edits: Edit[],
 	path: string,
 ): AppliedEditsResult {
-	const normalizedEdits = edits.map((edit) => ({
-		rangeId: edit.rangeId,
-		newText: normalizeToLF(edit.newText),
-	}));
-
-	for (let i = 0; i < normalizedEdits.length; i++) {
-		const edit = normalizedEdits[i];
-		if (edit.rangeId.trim().length === 0) {
-			throw new Error(`edits[${i}].rangeId must not be empty in ${path}.`);
+	for (let i = 0; i < edits.length; i++) {
+		const edit = edits[i];
+		if (edit.range.trim().length === 0) {
+			throw new Error(`edits[${i}].range must not be empty in ${path}.`);
 		}
 	}
 
 	const baseContent = normalizedContent;
 	const matchedEdits: MatchedEdit[] = [];
-	for (let i = 0; i < normalizedEdits.length; i++) {
-		const edit = normalizedEdits[i];
-		const resolved = resolveRangeId(baseContent, edit.rangeId, path);
+	for (let i = 0; i < edits.length; i++) {
+		const edit = edits[i];
+		const resolved = resolveRange(baseContent, edit.range, path);
+		let matchIndex = resolved.startIndex;
+		let matchLength = resolved.endIndex - resolved.startIndex;
+		let replacement = "";
+
+		switch (edit.op) {
+			case "replace":
+				replacement = normalizeReplacementText(edit.new, resolved.existingText);
+				break;
+			case "insert_before":
+				matchLength = 0;
+				replacement = normalizeInsertionText(edit.new, edit.op, resolved);
+				break;
+			case "insert_after":
+				matchIndex = resolved.endIndex;
+				matchLength = 0;
+				replacement = normalizeInsertionText(edit.new, edit.op, resolved);
+				break;
+			case "delete":
+				replacement = "";
+				break;
+			default:
+				throw new Error(`edits[${i}].op is invalid in ${path}.`);
+		}
+
 		matchedEdits.push({
 			editIndex: i,
-			matchIndex: resolved.startIndex,
-			matchLength: resolved.endIndex - resolved.startIndex,
-			newText: normalizeRangeReplacementNewText(edit.newText, resolved.existingText),
+			matchIndex,
+			matchLength,
+			replacement,
 		});
 	}
 
@@ -116,12 +146,12 @@ export function applyEditsToNormalizedContent(
 		const edit = matchedEdits[i];
 		newContent =
 			newContent.substring(0, edit.matchIndex) +
-			edit.newText +
+			edit.replacement +
 			newContent.substring(edit.matchIndex + edit.matchLength);
 	}
 
 	if (baseContent === newContent) {
-		throw getNoChangeError(path, normalizedEdits.length);
+		throw getNoChangeError(path, edits.length);
 	}
 
 	return { baseContent, newContent };

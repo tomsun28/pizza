@@ -77,7 +77,7 @@ describe("ToolExecutionComponent parity", () => {
 		const component = new ToolExecutionComponent(
 			"edit",
 			"tool-2",
-			{ path: "README.md", edits: [{ rangeId: formatLineAnchor(1, "before"), newText: "after" }] },
+			{ path: "README.md", edits: [{ op: "replace", range: formatLineAnchor(1, "before"), new: "after" }] },
 			{},
 			overrideDefinition,
 			createFakeTui(),
@@ -188,7 +188,7 @@ describe("ToolExecutionComponent parity", () => {
 		const component = new ToolExecutionComponent(
 			"bash",
 			"tool-bash-edit-render",
-			{ command: `edit --path README.md --range-id ${formatLineAnchor(1, "before")} --new after` },
+			{ command: `edit --path README.md --op replace --range ${formatLineAnchor(1, "before")} --new after` },
 			{},
 			createBashToolDefinition(process.cwd()),
 			createFakeTui(),
@@ -200,7 +200,7 @@ describe("ToolExecutionComponent parity", () => {
 				details: {
 					builtin: {
 						name: "edit",
-						args: { path: "README.md", edits: [{ rangeId: formatLineAnchor(1, "before"), newText: "after" }] },
+						args: { path: "README.md", edits: [{ op: "replace", range: formatLineAnchor(1, "before"), new: "after" }] },
 						details: { diff: "@@ -1 +1 @@\n-before\n+after", firstChangedLine: 1 },
 					},
 				},

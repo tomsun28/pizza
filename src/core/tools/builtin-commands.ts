@@ -14,6 +14,7 @@ import { resolve, join } from "path";
 import {
 	applyEditsToNormalizedContent,
 	detectLineEnding,
+	type Edit,
 	normalizeToLF,
 	restoreLineEndings,
 	stripBom,
@@ -48,7 +49,7 @@ export type ParsedBuiltinToolInput =
 	  }
 	| {
 			command: "edit";
-			input: { path: string; edits: Array<{ rangeId: string; newText: string }> };
+			input: { path: string; edits: Edit[] };
 	  };
 
 /**
@@ -167,12 +168,14 @@ function parseWriteInput(args: string[], heredoc?: string): { path: string; cont
 	return { path, content };
 }
 
-function parseEditInput(args: string[]): { path: string; edits: Array<{ rangeId: string; newText: string }> } {
+function parseEditInput(args: string[]): { path: string; edits: Edit[] } {
 	let path = "";
 	let editsJson: string | undefined;
-	const edits: Array<{ rangeId: string; newText: string }> = [];
+	const edits: Edit[] = [];
 	const positional: string[] = [];
-	let pendingRangeId: string | undefined;
+	let op: Edit["op"] | undefined;
+	let range: string | undefined;
+	let newValue: string | undefined;
 
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i];
@@ -180,16 +183,16 @@ function parseEditInput(args: string[]): { path: string; edits: Array<{ rangeId:
 			path = args[++i] ?? "";
 		} else if (arg === "--edits" || arg === "-e") {
 			editsJson = args[++i] ?? "[]";
+		} else if (arg === "--op") {
+			op = parseEditOp(args[++i] ?? "");
 		} else if (arg === "--old" || arg === "-o") {
-			throw new Error("edit no longer supports --old. Read the file and use --range-id from the line anchors.");
-		} else if (arg === "--range-id" || arg === "--rangeId" || arg === "--range" || arg === "-r") {
-			pendingRangeId = args[++i] ?? "";
+			throw new Error("edit no longer supports --old. Read the file and use --range from the line anchors.");
+		} else if (arg === "--range-id" || arg === "--rangeId") {
+			throw new Error("edit no longer supports --range-id. Use --range.");
+		} else if (arg === "--range" || arg === "-r") {
+			range = args[++i] ?? "";
 		} else if (arg === "--new" || arg === "-n") {
-			const newText = args[++i] ?? "";
-			if (pendingRangeId !== undefined) {
-				edits.push({ rangeId: pendingRangeId, newText });
-				pendingRangeId = undefined;
-			}
+			newValue = args[++i] ?? "";
 		} else if (!path) {
 			path = arg;
 		} else {
@@ -203,33 +206,54 @@ function parseEditInput(args: string[]): { path: string; edits: Array<{ rangeId:
 			throw new Error("edit --edits must be a JSON array");
 		}
 		for (const entry of parsed) {
-			if (
-				!entry ||
-				typeof entry !== "object" ||
-				typeof (entry as { rangeId?: unknown }).rangeId !== "string" ||
-				typeof (entry as { newText?: unknown }).newText !== "string"
-			) {
-				throw new Error("edit --edits entries must include string rangeId and newText");
-			}
-			edits.push({
-				rangeId: (entry as { rangeId: string }).rangeId,
-				newText: (entry as { newText: string }).newText,
-			});
+			edits.push(parseEditEntry(entry));
 		}
 	}
 
-	if (pendingRangeId !== undefined) {
-		edits.push({ rangeId: pendingRangeId, newText: "" });
-	}
-
-	if (edits.length === 0 && positional.length >= 2) {
-		edits.push({
-			rangeId: positional[0] ?? "",
-			newText: positional.slice(1).join(" "),
-		});
+	if (edits.length === 0) {
+		if (op !== undefined || range !== undefined) {
+			edits.push(buildEditFromParts(op, range, newValue));
+		} else if (positional.length >= 2) {
+			edits.push(buildEditFromParts(parseEditOp(positional[0] ?? ""), positional[1], positional.slice(2).join(" ")));
+		}
 	}
 
 	return { path, edits };
+}
+
+function parseEditOp(value: string): Edit["op"] {
+	if (value === "replace" || value === "insert_before" || value === "insert_after" || value === "delete") {
+		return value;
+	}
+	throw new Error("edit op must be one of: replace, insert_before, insert_after, delete");
+}
+
+function parseEditEntry(entry: unknown): Edit {
+	if (!entry || typeof entry !== "object") {
+		throw new Error('edit --edits entries must be objects with op, range, and new (unless op is "delete")');
+	}
+	const record = entry as Record<string, unknown>;
+	return buildEditFromParts(
+		parseEditOp(String(record.op ?? "")),
+		typeof record.range === "string" ? record.range : undefined,
+		typeof record.new === "string" ? record.new : undefined,
+	);
+}
+
+function buildEditFromParts(op: Edit["op"] | undefined, range: string | undefined, newValue: string | undefined): Edit {
+	if (!op) {
+		throw new Error("edit requires --op");
+	}
+	if (typeof range !== "string") {
+		throw new Error("edit requires --range");
+	}
+	if (op === "delete") {
+		return { op, range };
+	}
+	if (typeof newValue !== "string") {
+		throw new Error('edit requires --new unless --op is "delete"');
+	}
+	return { op, range, new: newValue };
 }
 
 function parseOptionalInt(value: string | undefined): number | undefined {
@@ -298,8 +322,8 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"",
 				"Description:",
 				"  Reads a text file or supported image file from the current working directory.",
-				"  Text output includes hashline anchors by default: L<line>#<hash> | content.",
-				"  Use those anchors as edit rangeId values. Images are returned as image content",
+				"  Text output includes 2-hex hashline anchors by default: <line>#<hash> | content.",
+				"  Use those anchors as edit range values. Images are returned as image content",
 				"  when routed through the bash tool's built-in read implementation.",
 				"",
 				"Parameters:",
@@ -347,28 +371,32 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 			].join("\n");
 		case "edit":
 			return [
-				"edit - Edit a file with read rangeId anchors",
+				"edit - Edit a file with read range anchors",
 				"",
 				"Description:",
-				"  Edits one existing file using hashline range ids from read output. Each edit",
-				"  replaces one whole line or a continuous whole-line range. Range ids fail safely",
+				"  Edits one existing file using hashline ranges from read output. Each edit",
+				"  can replace, insert before, insert after, or delete one whole line or a",
+				"  continuous whole-line range. Ranges fail safely",
 				"  if the referenced lines changed or became ambiguous.",
 				"",
 				"Parameters:",
 				"  path              File path to edit. Relative paths are resolved from the working directory.",
-				"  rangeId           Line anchor or range from read output, e.g. L12#deadbeef or L12#deadbeef..L14#c0ffee00.",
-				"  newText           Replacement text.",
+				"  op                replace, insert_before, insert_after, or delete.",
+				"  range             Line anchor or range from read output, e.g. 12#ab or 12#ab..14#de.",
+				"  new               New text for replace and insert operations. Omit for delete.",
 				"  --path, -p        File path to edit.",
-				"  --range-id, -r    Line anchor or range from read output. Can be paired with --new.",
-				"  --new, -n         Replacement text. Can be paired with --range-id.",
-				"  --edits, -e       JSON array of {\"rangeId\":\"...\",\"newText\":\"...\"} replacements.",
+				"  --op              Edit operation.",
+				"  --range, -r       Line anchor or range from read output.",
+				"  --new, -n         New text for replace and insert operations.",
+				"  --edits, -e       JSON array of {\"op\":\"...\",\"range\":\"...\",\"new\":\"...\"} edits.",
 				"  -h, --help        Show this help.",
 				"",
 				"Examples:",
 				"  read src/app.ts",
-				"  edit src/app.ts L12#deadbeef \"const a = 2\"",
-				"  edit --path src/app.ts --range-id L12#deadbeef --new \"const a = 2\"",
-				"  edit --path src/app.ts --edits '[{\"rangeId\":\"L12#deadbeef\",\"newText\":\"const a = 2\"}]'",
+				"  edit src/app.ts replace 12#ab \"const a = 2\"",
+				"  edit --path src/app.ts --op insert_after --range 12#ab --new \"const b = 3\"",
+				"  edit --path src/app.ts --op delete --range 12#ab..14#de",
+				"  edit --path src/app.ts --edits '[{\"op\":\"replace\",\"range\":\"12#ab\",\"new\":\"const a = 2\"}]'",
 			].join("\n");
 		default:
 			return undefined;
@@ -488,7 +516,7 @@ async function executeWrite(options: WriteOptions): Promise<BuiltinCommandResult
 
 interface EditOptions {
 	path: string;
-	edits: Array<{ rangeId: string; newText: string }>;
+	edits: Edit[];
 	cwd: string;
 }
 

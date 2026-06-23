@@ -150,7 +150,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	// File exploration guidelines
 	if (hasBash) {
 		addGuideline("Use built-in commands for file operations: read, write, edit");
-		addGuideline("Use read line anchors as edit rangeId values; edit accepts only rangeId/newText replacements");
+		addGuideline("Use read line anchors as edit range values; edit accepts op/range/new edits");
 	}
 
 	for (const guideline of promptGuidelines ?? []) {
@@ -172,18 +172,20 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		"",
 		"The bash tool recognizes the following built-in commands and executes them internally (no shell fork):",
 		"",
-		"  read <path> [offset] [limit]                Read file content with line anchors",
+		"  read <path> [offset] [limit]                Read file content with 2-hex line anchors",
 		"  write <path> <content>                       Write content to file",
 		"  write <path> <<EOF\ncontent\nEOF             Write multi-line content (heredoc)",
-		"  edit <path> <rangeId> <newText>              Replace anchored whole line(s)",
+		"  edit <path> <op> <range> [new]               Edit anchored whole line(s)",
 		"",
 		"All other commands (ls, grep, find, git, npm, etc.) are passed to the system shell as-is.",
 		"",
 		"Examples:",
-		'- bash("read src/main.ts") - Read a file; text lines include L<line>#<hash> anchors',
+		'- bash("read src/main.ts") - Read a file; text lines include <line>#<2-hex-hash> anchors',
 		'- bash("read src/main.ts 10 50") - Read lines 10-60',
 		'- bash("write output.txt Hello World") - Write to a file',
-		'- bash("edit src/main.ts L12#deadbeef \"const value = 2\"") - Replace an anchored line',
+		'- bash("edit src/main.ts replace 12#ab \"const value = 2\"") - Replace an anchored line',
+		'- bash("edit src/main.ts insert_after 12#ab \"const next = 3\"") - Insert after an anchored line',
+		'- bash("edit src/main.ts delete 12#ab..14#de") - Delete an anchored range',
 		'- bash("ls -la") - List directory (passed to shell)',
 		'- bash("grep pattern src/") - Search files (passed to shell)',
 	].join("\n");

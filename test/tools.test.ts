@@ -259,7 +259,7 @@ describe("Coding Agent Tools", () => {
 
 			const result = await editTool.execute("test-call-5", {
 				path: testFile,
-				edits: [{ rangeId: lineAnchor(1, "Hello, world!"), newText: "Hello, testing!" }],
+				edits: [{ op: "replace", range: lineAnchor(1, "Hello, world!"), new: "Hello, testing!" }],
 			});
 
 			expect(getTextOutput(result)).toContain("Successfully applied 1 edit(s)");
@@ -270,7 +270,7 @@ describe("Coding Agent Tools", () => {
 			expect(result.details.diff).toContain("Hello, testing!");
 		});
 
-		it("should fail if the range id is stale", async () => {
+		it("should fail if the range is stale", async () => {
 			const testFile = join(testDir, "edit-test.txt");
 			const originalContent = "Hello, world!";
 			writeFileSync(testFile, originalContent);
@@ -278,12 +278,12 @@ describe("Coding Agent Tools", () => {
 			await expect(
 				editTool.execute("test-call-6", {
 					path: testFile,
-					edits: [{ rangeId: lineAnchor(1, "old content"), newText: "Hello, testing!" }],
+					edits: [{ op: "replace", range: lineAnchor(1, "old content"), new: "Hello, testing!" }],
 				}),
-			).rejects.toThrow(/rangeId .* is stale/);
+			).rejects.toThrow(/range .* is stale/);
 		});
 
-		it("should fail if a relocated range id is ambiguous", async () => {
+		it("should fail if a relocated range is ambiguous", async () => {
 			const testFile = join(testDir, "edit-test.txt");
 			const originalContent = "header\nfoo\nbar\nfoo\n";
 			writeFileSync(testFile, originalContent);
@@ -291,7 +291,7 @@ describe("Coding Agent Tools", () => {
 			await expect(
 				editTool.execute("test-call-7", {
 					path: testFile,
-					edits: [{ rangeId: lineAnchor(10, "foo"), newText: "FOO" }],
+					edits: [{ op: "replace", range: lineAnchor(10, "foo"), new: "FOO" }],
 				}),
 			).rejects.toThrow(/ambiguous/);
 		});
@@ -303,8 +303,8 @@ describe("Coding Agent Tools", () => {
 			const result = await editTool.execute("test-call-8", {
 				path: testFile,
 				edits: [
-					{ rangeId: lineAnchor(1, "alpha"), newText: "ALPHA" },
-					{ rangeId: lineAnchor(3, "gamma"), newText: "GAMMA" },
+					{ op: "replace", range: lineAnchor(1, "alpha"), new: "ALPHA" },
+					{ op: "replace", range: lineAnchor(3, "gamma"), new: "GAMMA" },
 				],
 			});
 
@@ -312,6 +312,34 @@ describe("Coding Agent Tools", () => {
 			expect(readFileSync(testFile, "utf-8")).toBe("ALPHA\nbeta\nGAMMA\ndelta\n");
 			expect(result.details?.diff).toContain("ALPHA");
 			expect(result.details?.diff).toContain("GAMMA");
+		});
+
+		it("should insert before and after anchored lines without repeating the anchor line", async () => {
+			const testFile = join(testDir, "edit-insert.txt");
+			writeFileSync(testFile, "alpha\nbeta\n");
+
+			const result = await editTool.execute("test-call-insert", {
+				path: testFile,
+				edits: [
+					{ op: "insert_before", range: lineAnchor(1, "alpha"), new: "before alpha" },
+					{ op: "insert_after", range: lineAnchor(2, "beta"), new: "after beta" },
+				],
+			});
+
+			expect(getTextOutput(result)).toContain("Successfully applied 2 edit(s)");
+			expect(readFileSync(testFile, "utf-8")).toBe("before alpha\nalpha\nbeta\nafter beta\n");
+		});
+
+		it("should delete an anchored range without new text", async () => {
+			const testFile = join(testDir, "edit-delete.txt");
+			writeFileSync(testFile, "alpha\nbeta\ngamma\ndelta\n");
+
+			await editTool.execute("test-call-delete", {
+				path: testFile,
+				edits: [{ op: "delete", range: lineRange(2, "beta", 3, "gamma") }],
+			});
+
+			expect(readFileSync(testFile, "utf-8")).toBe("alpha\ndelta\n");
 		});
 
 		it("should collapse large unchanged gaps in multi-edit diffs", async () => {
@@ -322,9 +350,9 @@ describe("Coding Agent Tools", () => {
 			const result = await editTool.execute("test-call-8b", {
 				path: testFile,
 				edits: [
-					{ rangeId: lineAnchor(100, "line 100"), newText: "LINE 100" },
-					{ rangeId: lineAnchor(300, "line 300"), newText: "LINE 300" },
-					{ rangeId: lineAnchor(500, "line 500"), newText: "LINE 500" },
+					{ op: "replace", range: lineAnchor(100, "line 100"), new: "LINE 100" },
+					{ op: "replace", range: lineAnchor(300, "line 300"), new: "LINE 300" },
+					{ op: "replace", range: lineAnchor(500, "line 500"), new: "LINE 500" },
 				],
 			});
 
@@ -344,8 +372,8 @@ describe("Coding Agent Tools", () => {
 			await editTool.execute("test-call-9", {
 				path: testFile,
 				edits: [
-					{ rangeId: lineAnchor(1, "foo"), newText: "foo bar" },
-					{ rangeId: lineAnchor(2, "bar"), newText: "BAR" },
+					{ op: "replace", range: lineAnchor(1, "foo"), new: "foo bar" },
+					{ op: "replace", range: lineAnchor(2, "bar"), new: "BAR" },
 				],
 			});
 
@@ -361,7 +389,7 @@ describe("Coding Agent Tools", () => {
 					path: testFile,
 					edits: [],
 				}),
-			).rejects.toThrow(/edits must contain at least one replacement/);
+			).rejects.toThrow(/edits must contain at least one edit/);
 		});
 
 		it("should fail when multi-edit regions overlap", async () => {
@@ -372,8 +400,8 @@ describe("Coding Agent Tools", () => {
 				editTool.execute("test-call-12", {
 					path: testFile,
 					edits: [
-						{ rangeId: lineRange(1, "one", 2, "two"), newText: "ONE\nTWO" },
-						{ rangeId: lineRange(2, "two", 3, "three"), newText: "TWO\nTHREE" },
+						{ op: "replace", range: lineRange(1, "one", 2, "two"), new: "ONE\nTWO" },
+						{ op: "replace", range: lineRange(2, "two", 3, "three"), new: "TWO\nTHREE" },
 					],
 				}),
 			).rejects.toThrow(/overlap/);
@@ -388,8 +416,8 @@ describe("Coding Agent Tools", () => {
 				editTool.execute("test-call-13", {
 					path: testFile,
 					edits: [
-						{ rangeId: lineAnchor(1, "alpha"), newText: "ALPHA" },
-						{ rangeId: lineAnchor(2, "missing"), newText: "MISSING" },
+						{ op: "replace", range: lineAnchor(1, "alpha"), new: "ALPHA" },
+						{ op: "replace", range: lineAnchor(2, "missing"), new: "MISSING" },
 					],
 				}),
 			).rejects.toThrow(/stale/);
@@ -424,9 +452,9 @@ describe("Coding Agent Tools", () => {
 
 			expect(result.exitCode).toBe(0);
 			expect(result.stderr).toBe("");
-			expect(result.stdout).toContain("edit - Edit a file with read rangeId anchors");
+			expect(result.stdout).toContain("edit - Edit a file with read range anchors");
 			expect(result.stdout).toContain("--edits, -e");
-			expect(result.stdout).toContain("--range-id, -r");
+			expect(result.stdout).toContain("--range, -r");
 			expect(result.stdout).toContain("Examples:");
 		});
 
@@ -684,14 +712,14 @@ describe("edit tool line ending handling", () => {
 		rmSync(testDir, { recursive: true, force: true });
 	});
 
-	it("should resolve LF range ids against CRLF file content", async () => {
+	it("should resolve LF ranges against CRLF file content", async () => {
 		const testFile = join(testDir, "crlf-test.txt");
 
 		writeFileSync(testFile, "line one\r\nline two\r\nline three\r\n");
 
 		const result = await editTool.execute("test-crlf-1", {
 			path: testFile,
-			edits: [{ rangeId: lineAnchor(2, "line two"), newText: "replaced line" }],
+			edits: [{ op: "replace", range: lineAnchor(2, "line two"), new: "replaced line" }],
 		});
 
 		expect(getTextOutput(result)).toContain("Successfully applied");
@@ -703,7 +731,7 @@ describe("edit tool line ending handling", () => {
 
 		await editTool.execute("test-crlf-2", {
 			path: testFile,
-			edits: [{ rangeId: lineAnchor(2, "second"), newText: "REPLACED" }],
+			edits: [{ op: "replace", range: lineAnchor(2, "second"), new: "REPLACED" }],
 		});
 
 		const content = readFileSync(testFile, "utf-8");
@@ -716,7 +744,7 @@ describe("edit tool line ending handling", () => {
 
 		await editTool.execute("test-lf-1", {
 			path: testFile,
-			edits: [{ rangeId: lineAnchor(2, "second"), newText: "REPLACED" }],
+			edits: [{ op: "replace", range: lineAnchor(2, "second"), new: "REPLACED" }],
 		});
 
 		const content = readFileSync(testFile, "utf-8");
@@ -731,7 +759,7 @@ describe("edit tool line ending handling", () => {
 		await expect(
 			editTool.execute("test-crlf-dup", {
 				path: testFile,
-				edits: [{ rangeId: lineRange(10, "hello", 11, "world"), newText: "replaced" }],
+				edits: [{ op: "replace", range: lineRange(10, "hello", 11, "world"), new: "replaced" }],
 			}),
 		).rejects.toThrow(/ambiguous/);
 	});
@@ -742,7 +770,7 @@ describe("edit tool line ending handling", () => {
 
 		await editTool.execute("test-bom", {
 			path: testFile,
-			edits: [{ rangeId: lineAnchor(2, "second"), newText: "REPLACED" }],
+			edits: [{ op: "replace", range: lineAnchor(2, "second"), new: "REPLACED" }],
 		});
 
 		const content = readFileSync(testFile, "utf-8");
@@ -756,8 +784,8 @@ describe("edit tool line ending handling", () => {
 		await editTool.execute("test-crlf-multi", {
 			path: testFile,
 			edits: [
-				{ rangeId: lineAnchor(2, "second"), newText: "SECOND" },
-				{ rangeId: lineAnchor(4, "fourth"), newText: "FOURTH" },
+				{ op: "replace", range: lineAnchor(2, "second"), new: "SECOND" },
+				{ op: "replace", range: lineAnchor(4, "fourth"), new: "FOURTH" },
 			],
 		});
 

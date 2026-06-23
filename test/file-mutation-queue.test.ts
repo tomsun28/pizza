@@ -111,11 +111,11 @@ describe("built-in edit and write tools", () => {
 		await Promise.all([
 			editTool.execute("call-1", {
 				path: filePath,
-				edits: [{ rangeId: formatLineAnchor(1, "alpha"), newText: "ALPHA" }],
+				edits: [{ op: "replace", range: formatLineAnchor(1, "alpha"), new: "ALPHA" }],
 			}),
 			editTool.execute("call-2", {
 				path: filePath,
-				edits: [{ rangeId: formatLineAnchor(2, "beta"), newText: "BETA" }],
+				edits: [{ op: "replace", range: formatLineAnchor(2, "beta"), new: "BETA" }],
 			}),
 		]);
 
@@ -154,7 +154,7 @@ describe("built-in edit and write tools", () => {
 
 		const editPromise = editTool.execute("call-1", {
 			path: filePath,
-			edits: [{ rangeId: formatLineAnchor(1, "original"), newText: "edited" }],
+			edits: [{ op: "replace", range: formatLineAnchor(1, "original"), new: "edited" }],
 		});
 		await delay(5);
 		const writePromise = writeTool.execute("call-2", {

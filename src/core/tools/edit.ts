@@ -30,14 +30,23 @@ type EditRenderState = {
 
 const rangeEditSchema = Type.Object(
 	{
-		rangeId: Type.String({
+		op: Type.Union(
+			[
+				Type.Literal("replace"),
+				Type.Literal("insert_before"),
+				Type.Literal("insert_after"),
+				Type.Literal("delete"),
+			],
+			{ description: "Edit operation to apply to the anchored range." },
+		),
+		range: Type.String({
 			description:
-				"Hashline range from read output for whole-line replacement. Use L<line>#<hash> for one line or L<start>#<hash>..L<end>#<hash> for a line range.",
+				"Hashline range from read output. Use <line>#<hash> for one line or <start>#<hash>..<end>#<hash> for a line range.",
 		}),
-		newText: Type.String({
+		new: Type.Optional(Type.String({
 			description:
-				"Replacement text for this whole-line range. If the original range ended with a newline, a missing trailing newline is preserved automatically.",
-		}),
+				'New text for replace, insert_before, and insert_after. Omit for op="delete". Missing trailing newlines are normalized for whole-line edits.',
+		})),
 	},
 	{ additionalProperties: false },
 );
@@ -47,7 +56,7 @@ const editSchema = Type.Object(
 		path: Type.String({ description: "Path to the file to edit (relative or absolute)" }),
 		edits: Type.Array(rangeEditSchema, {
 			description:
-				"One or more whole-line replacements using rangeId from read output. Each edit is resolved against the original file, not incrementally. Do not include overlapping or nested ranges. If two changes touch the same block or nearby lines, merge them into one range edit instead.",
+				"One or more edits using ranges from read output. Each edit is resolved against the original file, not incrementally. Do not include overlapping or nested ranges. If two changes touch the same block or nearby lines, merge them into one range edit instead.",
 		}),
 	},
 	{ additionalProperties: false },
@@ -109,15 +118,26 @@ function isValidEditEntry(edit: unknown): edit is Edit {
 		return false;
 	}
 	const record = edit as Record<string, unknown>;
-	return typeof record.rangeId === "string" && typeof record.newText === "string";
+	if (
+		record.op !== "replace" &&
+		record.op !== "insert_before" &&
+		record.op !== "insert_after" &&
+		record.op !== "delete"
+	) {
+		return false;
+	}
+	if (typeof record.range !== "string") {
+		return false;
+	}
+	return record.op === "delete" || typeof record.new === "string";
 }
 
 function validateEditInput(input: EditToolInput): { path: string; edits: Edit[] } {
 	if (!Array.isArray(input.edits) || input.edits.length === 0) {
-		throw new Error("Edit tool input is invalid. edits must contain at least one replacement.");
+		throw new Error("Edit tool input is invalid. edits must contain at least one edit.");
 	}
 	if (!input.edits.every(isValidEditEntry)) {
-		throw new Error("Edit tool input is invalid. Each edit must include rangeId and newText.");
+		throw new Error('Edit tool input is invalid. Each edit must include op and range, plus new unless op is "delete".');
 	}
 	return { path: input.path, edits: input.edits };
 }
@@ -126,8 +146,6 @@ type RenderableEditArgs = {
 	path?: string;
 	file_path?: string;
 	edits?: Edit[];
-	newText?: string;
-	rangeId?: string;
 };
 
 type EditToolResultLike = {
@@ -178,13 +196,9 @@ function getRenderablePreviewInput(args: RenderableEditArgs | undefined): { path
 	if (
 		Array.isArray(args.edits) &&
 		args.edits.length > 0 &&
-		args.edits.every((edit) => typeof edit?.rangeId === "string" && typeof edit?.newText === "string")
+		args.edits.every((edit) => isValidEditEntry(edit))
 	) {
 		return { path, edits: args.edits };
-	}
-
-	if (typeof args.rangeId === "string" && typeof args.newText === "string") {
-		return { path, edits: [{ rangeId: args.rangeId, newText: args.newText }] };
 	}
 
 	return null;
@@ -296,11 +310,12 @@ export function createEditToolDefinition(
 		name: "edit",
 		label: "edit",
 		description:
-			"Edit a single file using rangeId anchors from read output. Each edit replaces one whole line or a continuous whole-line range. Range ids fail safely if the referenced lines changed or became ambiguous. If two changes affect the same block or nearby lines, merge them into one range edit instead of emitting overlapping edits.",
-		promptSnippet: "Make precise file edits with read rangeId anchors, including multiple disjoint edits in one call",
+			"Edit a single file using range anchors from read output. Supports replace, insert_before, insert_after, and delete for one line or a continuous whole-line range. Ranges fail safely if the referenced lines changed or became ambiguous. If two changes affect the same block or nearby lines, merge them into one range edit instead of emitting overlapping edits.",
+		promptSnippet: "Make precise file edits with read range anchors, including multiple disjoint edits in one call",
 		promptGuidelines: [
-			"Use edits[].rangeId from read output for every edit.",
-			"Each edit replaces whole lines. For partial-line changes, replace the whole line with the updated line.",
+			"Use edits[].range from read output for every edit.",
+			"Use op=insert_after or op=insert_before instead of repeating the anchored line.",
+			"For partial-line changes, use op=replace and replace the whole line with the updated line.",
 			"When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls",
 			"Each edit is resolved against the original file, not after earlier edits are applied. Do not emit overlapping or nested ranges. Merge nearby changes into one edit.",
 		],
@@ -441,7 +456,7 @@ export function createEditToolDefinition(
 				});
 			}
 
-			return buildEditCallComponent(component, args, theme);
+			return buildEditCallComponent(component, args as RenderableEditArgs | undefined, theme);
 		},
 		renderResult(result, _options, theme, context) {
 			const callComponent = context.state.callComponent;
@@ -470,7 +485,13 @@ export function createEditToolDefinition(
 				}
 			}
 
-			const output = formatEditResult(context.args, callComponent?.preview, typedResult, theme, context.isError);
+			const output = formatEditResult(
+				context.args as RenderableEditArgs | undefined,
+				callComponent?.preview,
+				typedResult,
+				theme,
+				context.isError,
+			);
 			const component = (context.lastComponent as Container | undefined) ?? new Container();
 			component.clear();
 			if (!output) {
