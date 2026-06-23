@@ -28,13 +28,16 @@ type EditRenderState = {
 	callComponent?: EditCallRenderComponent;
 };
 
-const replaceEditSchema = Type.Object(
+const rangeEditSchema = Type.Object(
 	{
-		oldText: Type.String({
+		rangeId: Type.String({
 			description:
-				"Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call.",
+				"Hashline range from read output for whole-line replacement. Use L<line>#<hash> for one line or L<start>#<hash>..L<end>#<hash> for a line range.",
 		}),
-		newText: Type.String({ description: "Replacement text for this targeted edit." }),
+		newText: Type.String({
+			description:
+				"Replacement text for this whole-line range. If the original range ended with a newline, a missing trailing newline is preserved automatically.",
+		}),
 	},
 	{ additionalProperties: false },
 );
@@ -42,19 +45,15 @@ const replaceEditSchema = Type.Object(
 const editSchema = Type.Object(
 	{
 		path: Type.String({ description: "Path to the file to edit (relative or absolute)" }),
-		edits: Type.Array(replaceEditSchema, {
+		edits: Type.Array(rangeEditSchema, {
 			description:
-				"One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
+				"One or more whole-line replacements using rangeId from read output. Each edit is resolved against the original file, not incrementally. Do not include overlapping or nested ranges. If two changes touch the same block or nearby lines, merge them into one range edit instead.",
 		}),
 	},
 	{ additionalProperties: false },
 );
 
 export type EditToolInput = Static<typeof editSchema>;
-type LegacyEditToolInput = EditToolInput & {
-	oldText?: unknown;
-	newText?: unknown;
-};
 
 export interface EditToolDetails {
 	/** Unified diff of the changes made */
@@ -102,20 +101,23 @@ function prepareEditArguments(input: unknown): EditToolInput {
 		} catch {}
 	}
 
-	const legacy = args as LegacyEditToolInput;
-	if (typeof legacy.oldText !== "string" || typeof legacy.newText !== "string") {
-		return args as EditToolInput;
-	}
+	return args as EditToolInput;
+}
 
-	const edits = Array.isArray(legacy.edits) ? [...legacy.edits] : [];
-	edits.push({ oldText: legacy.oldText, newText: legacy.newText });
-	const { oldText: _oldText, newText: _newText, ...rest } = legacy;
-	return { ...rest, edits } as EditToolInput;
+function isValidEditEntry(edit: unknown): edit is Edit {
+	if (!edit || typeof edit !== "object") {
+		return false;
+	}
+	const record = edit as Record<string, unknown>;
+	return typeof record.rangeId === "string" && typeof record.newText === "string";
 }
 
 function validateEditInput(input: EditToolInput): { path: string; edits: Edit[] } {
 	if (!Array.isArray(input.edits) || input.edits.length === 0) {
 		throw new Error("Edit tool input is invalid. edits must contain at least one replacement.");
+	}
+	if (!input.edits.every(isValidEditEntry)) {
+		throw new Error("Edit tool input is invalid. Each edit must include rangeId and newText.");
 	}
 	return { path: input.path, edits: input.edits };
 }
@@ -124,8 +126,8 @@ type RenderableEditArgs = {
 	path?: string;
 	file_path?: string;
 	edits?: Edit[];
-	oldText?: string;
 	newText?: string;
+	rangeId?: string;
 };
 
 type EditToolResultLike = {
@@ -176,13 +178,13 @@ function getRenderablePreviewInput(args: RenderableEditArgs | undefined): { path
 	if (
 		Array.isArray(args.edits) &&
 		args.edits.length > 0 &&
-		args.edits.every((edit) => typeof edit?.oldText === "string" && typeof edit?.newText === "string")
+		args.edits.every((edit) => typeof edit?.rangeId === "string" && typeof edit?.newText === "string")
 	) {
 		return { path, edits: args.edits };
 	}
 
-	if (typeof args.oldText === "string" && typeof args.newText === "string") {
-		return { path, edits: [{ oldText: args.oldText, newText: args.newText }] };
+	if (typeof args.rangeId === "string" && typeof args.newText === "string") {
+		return { path, edits: [{ rangeId: args.rangeId, newText: args.newText }] };
 	}
 
 	return null;
@@ -294,14 +296,13 @@ export function createEditToolDefinition(
 		name: "edit",
 		label: "edit",
 		description:
-			"Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
-		promptSnippet:
-			"Make precise file edits with exact text replacement, including multiple disjoint edits in one call",
+			"Edit a single file using rangeId anchors from read output. Each edit replaces one whole line or a continuous whole-line range. Range ids fail safely if the referenced lines changed or became ambiguous. If two changes affect the same block or nearby lines, merge them into one range edit instead of emitting overlapping edits.",
+		promptSnippet: "Make precise file edits with read rangeId anchors, including multiple disjoint edits in one call",
 		promptGuidelines: [
-			"Use edit for precise changes (edits[].oldText must match exactly)",
+			"Use edits[].rangeId from read output for every edit.",
+			"Each edit replaces whole lines. For partial-line changes, replace the whole line with the updated line.",
 			"When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls",
-			"Each edits[].oldText is matched against the original file, not after earlier edits are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit.",
-			"Keep edits[].oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions.",
+			"Each edit is resolved against the original file, not after earlier edits are applied. Do not emit overlapping or nested ranges. Merge nearby changes into one edit.",
 		],
 		parameters: editSchema,
 		renderShell: "self",
@@ -363,7 +364,7 @@ export function createEditToolDefinition(
 									return;
 								}
 
-								// Strip BOM before matching. The model will not include an invisible BOM in oldText.
+								// Strip BOM before resolving line anchors.
 								const { bom, text: content } = stripBom(rawContent);
 								const originalEnding = detectLineEnding(content);
 								const normalizedContent = normalizeToLF(content);
@@ -396,7 +397,7 @@ export function createEditToolDefinition(
 									content: [
 										{
 											type: "text",
-											text: `Successfully replaced ${edits.length} block(s) in ${path}.`,
+											text: `Successfully applied ${edits.length} edit(s) in ${path}.`,
 										},
 									],
 									details: { diff: diffResult.diff, firstChangedLine: diffResult.firstChangedLine },

@@ -4,11 +4,12 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ExtensionContext } from "../src/core/extensions/types.js";
 import { createEditToolDefinition } from "../src/core/tools/edit.js";
+import { formatLineAnchor } from "../src/core/tools/line-anchors.js";
 
 const tempDirs: string[] = [];
 
 async function createTempDir(): Promise<string> {
-	const dir = await mkdtemp(join(tmpdir(), "pizza-edit-legacy-input-"));
+	const dir = await mkdtemp(join(tmpdir(), "pizza-edit-arguments-"));
 	tempDirs.push(dir);
 	return dir;
 }
@@ -17,48 +18,18 @@ afterEach(async () => {
 	await Promise.all(tempDirs.splice(0, tempDirs.length).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
-describe("edit tool prepareArguments", () => {
-	it("keeps legacy fields out of the public schema", () => {
+describe("edit tool arguments", () => {
+	it("keeps top-level edit fields out of the public schema", () => {
 		const definition = createEditToolDefinition(process.cwd());
-		expect(definition.parameters.properties).not.toHaveProperty("oldText");
+		expect(definition.parameters.properties).not.toHaveProperty("rangeId");
 		expect(definition.parameters.properties).not.toHaveProperty("newText");
 	});
 
-	it("folds top-level oldText/newText into edits", () => {
-		const definition = createEditToolDefinition(process.cwd());
-		const prepared = definition.prepareArguments!({
-			path: "file.txt",
-			oldText: "before",
-			newText: "after",
-		});
-		expect(prepared).toEqual({
-			path: "file.txt",
-			edits: [{ oldText: "before", newText: "after" }],
-		});
-	});
-
-	it("appends legacy replacement to existing edits", () => {
-		const definition = createEditToolDefinition(process.cwd());
-		const prepared = definition.prepareArguments!({
-			path: "file.txt",
-			edits: [{ oldText: "a", newText: "b" }],
-			oldText: "c",
-			newText: "d",
-		});
-		expect(prepared).toEqual({
-			path: "file.txt",
-			edits: [
-				{ oldText: "a", newText: "b" },
-				{ oldText: "c", newText: "d" },
-			],
-		});
-	});
-
-	it("passes through valid input unchanged", () => {
+	it("passes through valid range edits unchanged", () => {
 		const definition = createEditToolDefinition(process.cwd());
 		const input = {
 			path: "file.txt",
-			edits: [{ oldText: "a", newText: "b" }],
+			edits: [{ rangeId: "L1#aaaaaaaa", newText: "b" }],
 		};
 		const prepared = definition.prepareArguments!(input);
 		expect(prepared).toBe(input);
@@ -73,32 +44,29 @@ describe("edit tool prepareArguments", () => {
 
 	it("prepared args execute correctly", async () => {
 		const dir = await createTempDir();
-		const filePath = join(dir, "legacy.txt");
+		const filePath = join(dir, "range.txt");
 		await writeFile(filePath, "before\n", "utf8");
 
 		const definition = createEditToolDefinition(dir);
 		const prepared = definition.prepareArguments!({
-			path: "legacy.txt",
-			oldText: "before",
-			newText: "after",
+			path: "range.txt",
+			edits: [{ rangeId: formatLineAnchor(1, "before"), newText: "after" }],
 		});
 
 		const result = await definition.execute("tool-1", prepared, undefined, undefined, {} as ExtensionContext);
-		expect(result.content).toEqual([{ type: "text", text: "Successfully replaced 1 block(s) in legacy.txt." }]);
+		expect(result.content).toEqual([{ type: "text", text: "Successfully applied 1 edit(s) in range.txt." }]);
 		expect(await readFile(filePath, "utf8")).toBe("after\n");
 	});
-});
 
-describe("edit tool stringified edits", () => {
 	it("parses edits from a JSON string", () => {
 		const definition = createEditToolDefinition(process.cwd());
 		const prepared = definition.prepareArguments!({
 			path: "file.txt",
-			edits: JSON.stringify([{ oldText: "a", newText: "b" }]),
+			edits: JSON.stringify([{ rangeId: "L1#aaaaaaaa", newText: "b" }]),
 		});
 		expect(prepared).toEqual({
 			path: "file.txt",
-			edits: [{ oldText: "a", newText: "b" }],
+			edits: [{ rangeId: "L1#aaaaaaaa", newText: "b" }],
 		});
 	});
 

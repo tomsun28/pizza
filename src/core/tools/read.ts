@@ -9,6 +9,7 @@ import { getLanguageFromPath, highlightCode } from "../../modes/interactive/them
 import { formatDimensionNote, resizeImage } from "../../utils/image-resize.js";
 import { detectSupportedImageMimeTypeFromFile } from "../../utils/mime.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
+import { annotateTextWithLineAnchors } from "./line-anchors.js";
 import { resolveReadPath } from "./path-utils.js";
 import { getTextOutput, invalidArgText, replaceTabs, shortenPath, str } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
@@ -18,6 +19,12 @@ const readSchema = Type.Object({
 	path: Type.String({ description: "Path to the file to read (relative or absolute)" }),
 	offset: Type.Optional(Type.Number({ description: "Line number to start reading from (1-indexed)" })),
 	limit: Type.Optional(Type.Number({ description: "Maximum number of lines to read" })),
+	anchors: Type.Optional(
+		Type.Union([Type.Literal("line"), Type.Literal("none")], {
+			description:
+				'Whether to include hashline anchors in text output. "line" prefixes each line with L<line>#<hash> for use with edit rangeId. Default: "line". Use "none" only when raw file text is required.',
+		}),
+	),
 });
 
 export type ReadToolInput = Static<typeof readSchema>;
@@ -85,6 +92,14 @@ function getNonVisionImageNote(model: Model<Api> | undefined): string | undefine
 	return "[Current model does not support images. The image will be omitted from this request.]";
 }
 
+function formatTextReadOutput(text: string, startLine: number, anchors: "line" | "none"): string {
+	return anchors === "line" ? annotateTextWithLineAnchors(text, startLine) : text;
+}
+
+function normalizeTextForAnchors(text: string, anchors: "line" | "none"): string {
+	return anchors === "line" ? text.replace(/\r\n/g, "\n").replace(/\r/g, "\n") : text;
+}
+
 function formatReadResult(
 	args: { path?: string; file_path?: string; offset?: number; limit?: number } | undefined,
 	result: { content: (TextContent | ImageContent)[]; details?: ReadToolDetails },
@@ -127,13 +142,16 @@ export function createReadToolDefinition(
 	return {
 		name: "read",
 		label: "read",
-		description: `Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.`,
+		description: `Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Text output includes hashline anchors by default (L<line>#<hash> | content); pass anchors="none" only when raw text is required. Use offset/limit for large files. When you need the full file, continue with offset until complete.`,
 		promptSnippet: "Read file contents",
-		promptGuidelines: ["Use read to examine files instead of cat or sed."],
+		promptGuidelines: [
+			"Use read to examine files instead of cat or sed.",
+			"Use read line anchors as edit edits[].rangeId for whole-line replacements.",
+		],
 		parameters: readSchema,
 		async execute(
 			_toolCallId,
-			{ path, offset, limit }: { path: string; offset?: number; limit?: number },
+			{ path, offset, limit, anchors = "line" }: ReadToolInput,
 			signal?: AbortSignal,
 			_onUpdate?,
 			ctx?,
@@ -193,7 +211,7 @@ export function createReadToolDefinition(
 							} else {
 								// Read text content.
 								const buffer = await ops.readFile(absolutePath);
-								const textContent = buffer.toString("utf-8");
+								const textContent = normalizeTextForAnchors(buffer.toString("utf-8"), anchors);
 								const allLines = textContent.split("\n");
 								const totalFileLines = allLines.length;
 								// Apply offset if specified. Convert from 1-indexed input to 0-indexed array access.
@@ -225,7 +243,7 @@ export function createReadToolDefinition(
 									// Truncation occurred. Build an actionable continuation notice.
 									const endLineDisplay = startLineDisplay + truncation.outputLines - 1;
 									const nextOffset = endLineDisplay + 1;
-									outputText = truncation.content;
+									outputText = formatTextReadOutput(truncation.content, startLineDisplay, anchors);
 									if (truncation.truncatedBy === "lines") {
 										outputText += `\n\n[Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalFileLines}. Use offset=${nextOffset} to continue.]`;
 									} else {
@@ -236,10 +254,10 @@ export function createReadToolDefinition(
 									// User-specified limit stopped early, but the file still has more content.
 									const remaining = allLines.length - (startLine + userLimitedLines);
 									const nextOffset = startLine + userLimitedLines + 1;
-									outputText = `${truncation.content}\n\n[${remaining} more lines in file. Use offset=${nextOffset} to continue.]`;
+									outputText = `${formatTextReadOutput(truncation.content, startLineDisplay, anchors)}\n\n[${remaining} more lines in file. Use offset=${nextOffset} to continue.]`;
 								} else {
 									// No truncation and no remaining user-limited content.
-									outputText = truncation.content;
+									outputText = formatTextReadOutput(truncation.content, startLineDisplay, anchors);
 								}
 								content = [{ type: "text", text: outputText }];
 							}

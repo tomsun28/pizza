@@ -7,6 +7,7 @@ import stripAnsi from "strip-ansi";
 import { beforeAll, describe, expect, test } from "vitest";
 import type { ToolDefinition } from "../src/core/extensions/types.js";
 import { type BashOperations, createBashToolDefinition } from "../src/core/tools/bash.js";
+import { formatLineAnchor } from "../src/core/tools/line-anchors.js";
 import { createReadTool, createReadToolDefinition } from "../src/core/tools/read.js";
 import { createWriteToolDefinition } from "../src/core/tools/write.js";
 import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.js";
@@ -76,7 +77,7 @@ describe("ToolExecutionComponent parity", () => {
 		const component = new ToolExecutionComponent(
 			"edit",
 			"tool-2",
-			{ path: "README.md", oldText: "before", newText: "after" },
+			{ path: "README.md", edits: [{ rangeId: formatLineAnchor(1, "before"), newText: "after" }] },
 			{},
 			overrideDefinition,
 			createFakeTui(),
@@ -187,7 +188,7 @@ describe("ToolExecutionComponent parity", () => {
 		const component = new ToolExecutionComponent(
 			"bash",
 			"tool-bash-edit-render",
-			{ command: "edit --path README.md --old before --new after" },
+			{ command: `edit --path README.md --range-id ${formatLineAnchor(1, "before")} --new after` },
 			{},
 			createBashToolDefinition(process.cwd()),
 			createFakeTui(),
@@ -195,11 +196,11 @@ describe("ToolExecutionComponent parity", () => {
 		);
 		component.updateResult(
 			{
-				content: [{ type: "text", text: "Successfully replaced 1 block(s) in README.md." }],
+				content: [{ type: "text", text: "Successfully applied 1 edit(s) in README.md." }],
 				details: {
 					builtin: {
 						name: "edit",
-						args: { path: "README.md", edits: [{ oldText: "before", newText: "after" }] },
+						args: { path: "README.md", edits: [{ rangeId: formatLineAnchor(1, "before"), newText: "after" }] },
 						details: { diff: "@@ -1 +1 @@\n-before\n+after", firstChangedLine: 1 },
 					},
 				},

@@ -6,6 +6,7 @@
 import * as Diff from "diff";
 import { constants } from "fs";
 import { access, readFile } from "fs/promises";
+import { resolveRangeId } from "./line-anchors.js";
 import { resolveToCwd } from "./path-utils.js";
 
 export function detectLineEnding(content: string): "\r\n" | "\n" {
@@ -24,56 +25,12 @@ export function restoreLineEndings(text: string, ending: "\r\n" | "\n"): string 
 	return ending === "\r\n" ? text.replace(/\n/g, "\r\n") : text;
 }
 
-/**
- * Normalize text for fuzzy matching. Applies progressive transformations:
- * - Strip trailing whitespace from each line
- * - Normalize smart quotes to ASCII equivalents
- * - Normalize Unicode dashes/hyphens to ASCII hyphen
- * - Normalize special Unicode spaces to regular space
- */
-export function normalizeForFuzzyMatch(text: string): string {
-	return (
-		text
-			.normalize("NFKC")
-			// Strip trailing whitespace per line
-			.split("\n")
-			.map((line) => line.trimEnd())
-			.join("\n")
-			// Smart single quotes → '
-			.replace(/[\u2018\u2019\u201A\u201B]/g, "'")
-			// Smart double quotes → "
-			.replace(/[\u201C\u201D\u201E\u201F]/g, '"')
-			// Various dashes/hyphens → -
-			// U+2010 hyphen, U+2011 non-breaking hyphen, U+2012 figure dash,
-			// U+2013 en-dash, U+2014 em-dash, U+2015 horizontal bar, U+2212 minus
-			.replace(/[\u2010\u2011\u2012\u2013\u2014\u2015\u2212]/g, "-")
-			// Special spaces → regular space
-			// U+00A0 NBSP, U+2002-U+200A various spaces, U+202F narrow NBSP,
-			// U+205F medium math space, U+3000 ideographic space
-			.replace(/[\u00A0\u2002-\u200A\u202F\u205F\u3000]/g, " ")
-	);
-}
-
-export interface FuzzyMatchResult {
-	/** Whether a match was found */
-	found: boolean;
-	/** The index where the match starts (in the content that should be used for replacement) */
-	index: number;
-	/** Length of the matched text */
-	matchLength: number;
-	/** Whether fuzzy matching was used (false = exact match) */
-	usedFuzzyMatch: boolean;
-	/**
-	 * The content to use for replacement operations.
-	 * When exact match: original content. When fuzzy match: normalized content.
-	 */
-	contentForReplacement: string;
-}
-
-export interface Edit {
-	oldText: string;
+export interface RangeReplacementEdit {
+	rangeId: string;
 	newText: string;
 }
+
+export type Edit = RangeReplacementEdit;
 
 interface MatchedEdit {
 	editIndex: number;
@@ -87,108 +44,31 @@ export interface AppliedEditsResult {
 	newContent: string;
 }
 
-/**
- * Find oldText in content, trying exact match first, then fuzzy match.
- * When fuzzy matching is used, the returned contentForReplacement is the
- * fuzzy-normalized version of the content (trailing whitespace stripped,
- * Unicode quotes/dashes normalized to ASCII).
- */
-export function fuzzyFindText(content: string, oldText: string): FuzzyMatchResult {
-	// Try exact match first
-	const exactIndex = content.indexOf(oldText);
-	if (exactIndex !== -1) {
-		return {
-			found: true,
-			index: exactIndex,
-			matchLength: oldText.length,
-			usedFuzzyMatch: false,
-			contentForReplacement: content,
-		};
-	}
-
-	// Try fuzzy match - work entirely in normalized space
-	const fuzzyContent = normalizeForFuzzyMatch(content);
-	const fuzzyOldText = normalizeForFuzzyMatch(oldText);
-	const fuzzyIndex = fuzzyContent.indexOf(fuzzyOldText);
-
-	if (fuzzyIndex === -1) {
-		return {
-			found: false,
-			index: -1,
-			matchLength: 0,
-			usedFuzzyMatch: false,
-			contentForReplacement: content,
-		};
-	}
-
-	// When fuzzy matching, we work in the normalized space for replacement.
-	// This means the output will have normalized whitespace/quotes/dashes,
-	// which is acceptable since we're fixing minor formatting differences anyway.
-	return {
-		found: true,
-		index: fuzzyIndex,
-		matchLength: fuzzyOldText.length,
-		usedFuzzyMatch: true,
-		contentForReplacement: fuzzyContent,
-	};
-}
-
 /** Strip UTF-8 BOM if present, return both the BOM (if any) and the text without it */
 export function stripBom(content: string): { bom: string; text: string } {
 	return content.startsWith("\uFEFF") ? { bom: "\uFEFF", text: content.slice(1) } : { bom: "", text: content };
 }
 
-function countOccurrences(content: string, oldText: string): number {
-	const fuzzyContent = normalizeForFuzzyMatch(content);
-	const fuzzyOldText = normalizeForFuzzyMatch(oldText);
-	return fuzzyContent.split(fuzzyOldText).length - 1;
-}
-
-function getNotFoundError(path: string, editIndex: number, totalEdits: number): Error {
-	if (totalEdits === 1) {
-		return new Error(
-			`Could not find the exact text in ${path}. The old text must match exactly including all whitespace and newlines.`,
-		);
-	}
-	return new Error(
-		`Could not find edits[${editIndex}] in ${path}. The oldText must match exactly including all whitespace and newlines.`,
-	);
-}
-
-function getDuplicateError(path: string, editIndex: number, totalEdits: number, occurrences: number): Error {
-	if (totalEdits === 1) {
-		return new Error(
-			`Found ${occurrences} occurrences of the text in ${path}. The text must be unique. Please provide more context to make it unique.`,
-		);
-	}
-	return new Error(
-		`Found ${occurrences} occurrences of edits[${editIndex}] in ${path}. Each oldText must be unique. Please provide more context to make it unique.`,
-	);
-}
-
-function getEmptyOldTextError(path: string, editIndex: number, totalEdits: number): Error {
-	if (totalEdits === 1) {
-		return new Error(`oldText must not be empty in ${path}.`);
-	}
-	return new Error(`edits[${editIndex}].oldText must not be empty in ${path}.`);
-}
-
 function getNoChangeError(path: string, totalEdits: number): Error {
 	if (totalEdits === 1) {
-		return new Error(
-			`No changes made to ${path}. The replacement produced identical content. This might indicate an issue with special characters or the text not existing as expected.`,
-		);
+		return new Error(`No changes made to ${path}. The range replacement produced identical content.`);
 	}
 	return new Error(`No changes made to ${path}. The replacements produced identical content.`);
 }
 
+function normalizeRangeReplacementNewText(newText: string, existingText: string): string {
+	const normalized = normalizeToLF(newText);
+	if (existingText.endsWith("\n") && normalized.length > 0 && !normalized.endsWith("\n")) {
+		return `${normalized}\n`;
+	}
+	return normalized;
+}
+
 /**
- * Apply one or more exact-text replacements to LF-normalized content.
+ * Apply one or more range-id replacements to LF-normalized content.
  *
- * All edits are matched against the same original content. Replacements are
- * then applied in reverse order so offsets remain stable. If any edit needs
- * fuzzy matching, the operation runs in fuzzy-normalized content space to
- * preserve current single-edit behavior.
+ * All edits are resolved against the same original content. Replacements are
+ * then applied in reverse order so offsets remain stable.
  */
 export function applyEditsToNormalizedContent(
 	normalizedContent: string,
@@ -196,39 +76,27 @@ export function applyEditsToNormalizedContent(
 	path: string,
 ): AppliedEditsResult {
 	const normalizedEdits = edits.map((edit) => ({
-		oldText: normalizeToLF(edit.oldText),
+		rangeId: edit.rangeId,
 		newText: normalizeToLF(edit.newText),
 	}));
 
 	for (let i = 0; i < normalizedEdits.length; i++) {
-		if (normalizedEdits[i].oldText.length === 0) {
-			throw getEmptyOldTextError(path, i, normalizedEdits.length);
+		const edit = normalizedEdits[i];
+		if (edit.rangeId.trim().length === 0) {
+			throw new Error(`edits[${i}].rangeId must not be empty in ${path}.`);
 		}
 	}
 
-	const initialMatches = normalizedEdits.map((edit) => fuzzyFindText(normalizedContent, edit.oldText));
-	const baseContent = initialMatches.some((match) => match.usedFuzzyMatch)
-		? normalizeForFuzzyMatch(normalizedContent)
-		: normalizedContent;
-
+	const baseContent = normalizedContent;
 	const matchedEdits: MatchedEdit[] = [];
 	for (let i = 0; i < normalizedEdits.length; i++) {
 		const edit = normalizedEdits[i];
-		const matchResult = fuzzyFindText(baseContent, edit.oldText);
-		if (!matchResult.found) {
-			throw getNotFoundError(path, i, normalizedEdits.length);
-		}
-
-		const occurrences = countOccurrences(baseContent, edit.oldText);
-		if (occurrences > 1) {
-			throw getDuplicateError(path, i, normalizedEdits.length, occurrences);
-		}
-
+		const resolved = resolveRangeId(baseContent, edit.rangeId, path);
 		matchedEdits.push({
 			editIndex: i,
-			matchIndex: matchResult.index,
-			matchLength: matchResult.matchLength,
-			newText: edit.newText,
+			matchIndex: resolved.startIndex,
+			matchLength: resolved.endIndex - resolved.startIndex,
+			newText: normalizeRangeReplacementNewText(edit.newText, resolved.existingText),
 		});
 	}
 
@@ -419,7 +287,7 @@ export async function computeEditsDiff(
 		// Read the file
 		const rawContent = await readFile(absolutePath, "utf-8");
 
-		// Strip BOM before matching (LLM won't include invisible BOM in oldText)
+		// Strip BOM before resolving line anchors.
 		const { text: content } = stripBom(rawContent);
 		const normalizedContent = normalizeToLF(content);
 		const { baseContent, newContent } = applyEditsToNormalizedContent(normalizedContent, edits, path);
@@ -429,17 +297,4 @@ export async function computeEditsDiff(
 	} catch (err) {
 		return { error: err instanceof Error ? err.message : String(err) };
 	}
-}
-
-/**
- * Compute the diff for a single edit operation without applying it.
- * Kept as a convenience wrapper for single-edit callers.
- */
-export async function computeEditDiff(
-	path: string,
-	oldText: string,
-	newText: string,
-	cwd: string,
-): Promise<EditDiffResult | EditDiffError> {
-	return computeEditsDiff(path, [{ oldText, newText }], cwd);
 }

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createEditTool } from "../src/core/tools/edit.js";
 import { withFileMutationQueue } from "../src/core/tools/file-mutation-queue.js";
+import { formatLineAnchor } from "../src/core/tools/line-anchors.js";
 import { createWriteTool } from "../src/core/tools/write.js";
 
 function delay(ms: number): Promise<void> {
@@ -108,8 +109,14 @@ describe("built-in edit and write tools", () => {
 		});
 
 		await Promise.all([
-			editTool.execute("call-1", { path: filePath, edits: [{ oldText: "alpha", newText: "ALPHA" }] }),
-			editTool.execute("call-2", { path: filePath, edits: [{ oldText: "beta", newText: "BETA" }] }),
+			editTool.execute("call-1", {
+				path: filePath,
+				edits: [{ rangeId: formatLineAnchor(1, "alpha"), newText: "ALPHA" }],
+			}),
+			editTool.execute("call-2", {
+				path: filePath,
+				edits: [{ rangeId: formatLineAnchor(2, "beta"), newText: "BETA" }],
+			}),
 		]);
 
 		const content = await readFile(filePath, "utf8");
@@ -147,7 +154,7 @@ describe("built-in edit and write tools", () => {
 
 		const editPromise = editTool.execute("call-1", {
 			path: filePath,
-			edits: [{ oldText: "original", newText: "edited" }],
+			edits: [{ rangeId: formatLineAnchor(1, "original"), newText: "edited" }],
 		});
 		await delay(5);
 		const writePromise = writeTool.execute("call-2", {

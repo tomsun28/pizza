@@ -150,6 +150,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	// File exploration guidelines
 	if (hasBash) {
 		addGuideline("Use built-in commands for file operations: read, write, edit");
+		addGuideline("Use read line anchors as edit rangeId values; edit accepts only rangeId/newText replacements");
 	}
 
 	for (const guideline of promptGuidelines ?? []) {
@@ -171,18 +172,18 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		"",
 		"The bash tool recognizes the following built-in commands and executes them internally (no shell fork):",
 		"",
-		"  read <path> [offset] [limit]                Read file content",
+		"  read <path> [offset] [limit]                Read file content with line anchors",
 		"  write <path> <content>                       Write content to file",
 		"  write <path> <<EOF\ncontent\nEOF             Write multi-line content (heredoc)",
-		"  edit <path> <oldText> <newText>              Edit file content",
+		"  edit <path> <rangeId> <newText>              Replace anchored whole line(s)",
 		"",
 		"All other commands (ls, grep, find, git, npm, etc.) are passed to the system shell as-is.",
 		"",
 		"Examples:",
-		'- bash("read src/main.ts") - Read a file',
+		'- bash("read src/main.ts") - Read a file; text lines include L<line>#<hash> anchors',
 		'- bash("read src/main.ts 10 50") - Read lines 10-60',
 		'- bash("write output.txt Hello World") - Write to a file',
-		'- bash("edit src/main.ts oldText newText") - Replace text in file',
+		'- bash("edit src/main.ts L12#deadbeef \"const value = 2\"") - Replace an anchored line',
 		'- bash("ls -la") - List directory (passed to shell)',
 		'- bash("grep pattern src/") - Search files (passed to shell)',
 	].join("\n");

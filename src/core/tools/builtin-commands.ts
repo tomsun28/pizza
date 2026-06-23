@@ -11,6 +11,14 @@
 
 import { readFile, writeFile, mkdir } from "fs/promises";
 import { resolve, join } from "path";
+import {
+	applyEditsToNormalizedContent,
+	detectLineEnding,
+	normalizeToLF,
+	restoreLineEndings,
+	stripBom,
+} from "./edit-diff.js";
+import { annotateTextWithLineAnchors } from "./line-anchors.js";
 import { truncateHead } from "./truncate.js";
 
 export interface BuiltinCommandResult {
@@ -32,7 +40,7 @@ export interface ParsedBuiltinCommand {
 export type ParsedBuiltinToolInput =
 	| {
 			command: "read";
-			input: { path: string; offset?: number; limit?: number };
+			input: { path: string; offset?: number; limit?: number; anchors?: "line" | "none" };
 	  }
 	| {
 			command: "write";
@@ -40,7 +48,7 @@ export type ParsedBuiltinToolInput =
 	  }
 	| {
 			command: "edit";
-			input: { path: string; edits: Array<{ oldText: string; newText: string }> };
+			input: { path: string; edits: Array<{ rangeId: string; newText: string }> };
 	  };
 
 /**
@@ -100,10 +108,11 @@ export function parseBuiltinToolInput(
 	}
 }
 
-function parseReadInput(args: string[]): { path: string; offset?: number; limit?: number } {
+function parseReadInput(args: string[]): { path: string; offset?: number; limit?: number; anchors?: "line" | "none" } {
 	let path = "";
 	let offset: number | undefined;
 	let limit: number | undefined;
+	let anchors: "line" | "none" | undefined;
 
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i];
@@ -113,6 +122,14 @@ function parseReadInput(args: string[]): { path: string; offset?: number; limit?
 			offset = parseOptionalInt(args[++i]);
 		} else if (arg === "--limit" || arg === "-l") {
 			limit = parseOptionalInt(args[++i]);
+		} else if (arg === "--anchors") {
+			const value = args[++i];
+			if (value !== "line" && value !== "none") {
+				throw new Error('read --anchors must be "line" or "none"');
+			}
+			anchors = value;
+		} else if (arg === "--raw") {
+			anchors = "none";
 		} else if (!path) {
 			path = arg;
 		} else if (offset === undefined) {
@@ -122,7 +139,7 @@ function parseReadInput(args: string[]): { path: string; offset?: number; limit?
 		}
 	}
 
-	return { path, offset, limit };
+	return { path, offset, limit, anchors };
 }
 
 function parseWriteInput(args: string[], heredoc?: string): { path: string; content: string } {
@@ -150,12 +167,12 @@ function parseWriteInput(args: string[], heredoc?: string): { path: string; cont
 	return { path, content };
 }
 
-function parseEditInput(args: string[]): { path: string; edits: Array<{ oldText: string; newText: string }> } {
+function parseEditInput(args: string[]): { path: string; edits: Array<{ rangeId: string; newText: string }> } {
 	let path = "";
 	let editsJson: string | undefined;
-	const edits: Array<{ oldText: string; newText: string }> = [];
+	const edits: Array<{ rangeId: string; newText: string }> = [];
 	const positional: string[] = [];
-	let pendingOld: string | undefined;
+	let pendingRangeId: string | undefined;
 
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i];
@@ -164,12 +181,14 @@ function parseEditInput(args: string[]): { path: string; edits: Array<{ oldText:
 		} else if (arg === "--edits" || arg === "-e") {
 			editsJson = args[++i] ?? "[]";
 		} else if (arg === "--old" || arg === "-o") {
-			pendingOld = args[++i] ?? "";
+			throw new Error("edit no longer supports --old. Read the file and use --range-id from the line anchors.");
+		} else if (arg === "--range-id" || arg === "--rangeId" || arg === "--range" || arg === "-r") {
+			pendingRangeId = args[++i] ?? "";
 		} else if (arg === "--new" || arg === "-n") {
 			const newText = args[++i] ?? "";
-			if (pendingOld !== undefined) {
-				edits.push({ oldText: pendingOld, newText });
-				pendingOld = undefined;
+			if (pendingRangeId !== undefined) {
+				edits.push({ rangeId: pendingRangeId, newText });
+				pendingRangeId = undefined;
 			}
 		} else if (!path) {
 			path = arg;
@@ -187,25 +206,25 @@ function parseEditInput(args: string[]): { path: string; edits: Array<{ oldText:
 			if (
 				!entry ||
 				typeof entry !== "object" ||
-				typeof (entry as { oldText?: unknown }).oldText !== "string" ||
+				typeof (entry as { rangeId?: unknown }).rangeId !== "string" ||
 				typeof (entry as { newText?: unknown }).newText !== "string"
 			) {
-				throw new Error("edit --edits entries must include string oldText and newText");
+				throw new Error("edit --edits entries must include string rangeId and newText");
 			}
 			edits.push({
-				oldText: (entry as { oldText: string }).oldText,
+				rangeId: (entry as { rangeId: string }).rangeId,
 				newText: (entry as { newText: string }).newText,
 			});
 		}
 	}
 
-	if (pendingOld !== undefined) {
-		edits.push({ oldText: pendingOld, newText: "" });
+	if (pendingRangeId !== undefined) {
+		edits.push({ rangeId: pendingRangeId, newText: "" });
 	}
 
 	if (edits.length === 0 && positional.length >= 2) {
 		edits.push({
-			oldText: positional[0] ?? "",
+			rangeId: positional[0] ?? "",
 			newText: positional.slice(1).join(" "),
 		});
 	}
@@ -279,8 +298,9 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"",
 				"Description:",
 				"  Reads a text file or supported image file from the current working directory.",
-				"  Text output supports line offsets and limits. Images are returned as image content when",
-				"  routed through the bash tool's built-in read implementation.",
+				"  Text output includes hashline anchors by default: L<line>#<hash> | content.",
+				"  Use those anchors as edit rangeId values. Images are returned as image content",
+				"  when routed through the bash tool's built-in read implementation.",
 				"",
 				"Parameters:",
 				"  path              File path to read. Relative paths are resolved from the working directory.",
@@ -289,6 +309,8 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"  --path, -p        File path to read.",
 				"  --offset, -o      1-based line number to start reading from.",
 				"  --limit, -l       Maximum number of lines to return.",
+				"  --anchors         line or none. Defaults to line.",
+				"  --raw             Alias for --anchors none.",
 				"  -h, --help        Show this help.",
 				"",
 				"Examples:",
@@ -297,6 +319,7 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"  read src/main.ts 20 50",
 				"  read --path src/main.ts --offset 20 --limit 50",
 				"  read -p src/main.ts -o 20 -l 50",
+				"  read --path src/main.ts --anchors none",
 			].join("\n");
 		case "write":
 			return [
@@ -324,28 +347,28 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 			].join("\n");
 		case "edit":
 			return [
-				"edit - Edit a file with exact text replacement",
+				"edit - Edit a file with read rangeId anchors",
 				"",
 				"Description:",
-				"  Edits one existing file using exact text replacements. Each oldText must match a",
-				"  unique, non-overlapping region of the original file. Multiple replacement blocks",
-				"  can be supplied with --edits.",
+				"  Edits one existing file using hashline range ids from read output. Each edit",
+				"  replaces one whole line or a continuous whole-line range. Range ids fail safely",
+				"  if the referenced lines changed or became ambiguous.",
 				"",
 				"Parameters:",
 				"  path              File path to edit. Relative paths are resolved from the working directory.",
-				"  oldText           Exact text to replace.",
+				"  rangeId           Line anchor or range from read output, e.g. L12#deadbeef or L12#deadbeef..L14#c0ffee00.",
 				"  newText           Replacement text.",
 				"  --path, -p        File path to edit.",
-				"  --old, -o         Exact text to replace. Can be paired with --new.",
-				"  --new, -n         Replacement text. Can be paired with --old.",
-				"  --edits, -e       JSON array of {\"oldText\":\"...\",\"newText\":\"...\"} replacements.",
+				"  --range-id, -r    Line anchor or range from read output. Can be paired with --new.",
+				"  --new, -n         Replacement text. Can be paired with --range-id.",
+				"  --edits, -e       JSON array of {\"rangeId\":\"...\",\"newText\":\"...\"} replacements.",
 				"  -h, --help        Show this help.",
 				"",
 				"Examples:",
-				"  edit src/app.ts \"const a = 1\" \"const a = 2\"",
-				"  edit --path src/app.ts --old \"const a = 1\" --new \"const a = 2\"",
-				"  edit -p src/app.ts -o \"const a = 1\" -n \"const a = 2\"",
-				"  edit --path src/app.ts --edits '[{\"oldText\":\"const a = 1\",\"newText\":\"const a = 2\"}]'",
+				"  read src/app.ts",
+				"  edit src/app.ts L12#deadbeef \"const a = 2\"",
+				"  edit --path src/app.ts --range-id L12#deadbeef --new \"const a = 2\"",
+				"  edit --path src/app.ts --edits '[{\"rangeId\":\"L12#deadbeef\",\"newText\":\"const a = 2\"}]'",
 			].join("\n");
 		default:
 			return undefined;
@@ -368,13 +391,16 @@ interface ReadOptions {
 	path: string;
 	offset?: number;
 	limit?: number;
+	anchors?: "line" | "none";
 	cwd: string;
 }
 
 async function executeRead(options: ReadOptions): Promise<BuiltinCommandResult> {
 	try {
 		const filePath = resolve(options.cwd, options.path);
-		const content = await readFile(filePath, "utf-8");
+		const anchors = options.anchors ?? "line";
+		const rawContent = await readFile(filePath, "utf-8");
+		const content = anchors === "line" ? normalizeToLF(rawContent) : rawContent;
 		let lines = content.split("\n");
 		const totalLines = lines.length;
 
@@ -393,8 +419,9 @@ async function executeRead(options: ReadOptions): Promise<BuiltinCommandResult> 
 
 		// Apply truncation
 		const truncation = truncateHead(lines.join("\n"));
-		let output = truncation.content;
 		const startLineDisplay = startLine + 1;
+		let output =
+			anchors === "line" ? annotateTextWithLineAnchors(truncation.content, startLineDisplay) : truncation.content;
 
 		if (truncation.truncated) {
 			const endLine = startLineDisplay + truncation.outputLines - 1;
@@ -461,26 +488,19 @@ async function executeWrite(options: WriteOptions): Promise<BuiltinCommandResult
 
 interface EditOptions {
 	path: string;
-	newText: string;
-	oldText: string;
+	edits: Array<{ rangeId: string; newText: string }>;
 	cwd: string;
 }
 
 async function executeEdit(options: EditOptions): Promise<BuiltinCommandResult> {
 	try {
 		const filePath = resolve(options.cwd, options.path);
-		const content = await readFile(filePath, "utf-8");
-
-		if (!content.includes(options.oldText)) {
-			return {
-				stdout: "",
-				stderr: `Error: oldText not found in file`,
-				exitCode: 1,
-			};
-		}
-
-		const newContent = content.replace(options.oldText, options.newText);
-		await writeFile(filePath, newContent, "utf-8");
+		const rawContent = await readFile(filePath, "utf-8");
+		const { bom, text: content } = stripBom(rawContent);
+		const originalEnding = detectLineEnding(content);
+		const normalizedContent = normalizeToLF(content);
+		const { newContent } = applyEditsToNormalizedContent(normalizedContent, options.edits, options.path);
+		await writeFile(filePath, bom + restoreLineEndings(newContent, originalEnding), "utf-8");
 
 		return {
 			stdout: `File edited: ${options.path}`,
@@ -541,11 +561,9 @@ export async function executeBuiltinCommand(
 		}
 
 		case "edit": {
-			const firstEdit = parsed.input.edits[0];
 			return executeEdit({
 				path: parsed.input.path,
-				oldText: firstEdit?.oldText ?? "",
-				newText: firstEdit?.newText ?? "",
+				edits: parsed.input.edits,
 				cwd: context.cwd,
 			});
 		}

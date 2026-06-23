@@ -5,6 +5,7 @@ import { Container, type Terminal, Text, TUI } from "@mariozechner/pi-tui";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createEditToolDefinition } from "../src/core/tools/edit.js";
 import { computeEditsDiff, type Edit } from "../src/core/tools/edit-diff.js";
+import { formatLineAnchor } from "../src/core/tools/line-anchors.js";
 import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.js";
 import { initTheme } from "../src/modes/interactive/theme/theme.js";
 
@@ -59,10 +60,12 @@ async function waitForRenderedText(
 
 function createLargeEdits(lines: string[]): Edit[] {
 	const targets = [50, 150, 250, 350, 450, 550, 650, 750, 850, 950];
-	return targets.map((lineNumber) => ({
-		oldText: `${lines[lineNumber - 1]}\n${lines[lineNumber]}\n${lines[lineNumber + 1]}`,
-		newText: `${lines[lineNumber - 1]}\n${lines[lineNumber]} changed\n${lines[lineNumber + 1]}`,
-	}));
+	return targets
+		.filter((lineNumber) => lineNumber + 1 < lines.length)
+		.map((lineNumber) => ({
+			rangeId: `${formatLineAnchor(lineNumber, lines[lineNumber - 1])}..${formatLineAnchor(lineNumber + 2, lines[lineNumber + 1])}`,
+			newText: `${lines[lineNumber - 1]}\n${lines[lineNumber]} changed\n${lines[lineNumber + 1]}`,
+		}));
 }
 
 describe("edit tool TUI rendering", () => {
@@ -131,7 +134,7 @@ describe("edit tool TUI rendering", () => {
 		const clearsBeforeResult = terminal.fullClearCount;
 		component.updateResult(
 			{
-				content: [{ type: "text", text: `Successfully replaced ${edits.length} block(s) in ${filePath}.` }],
+				content: [{ type: "text", text: `Successfully applied ${edits.length} edit(s) in ${filePath}.` }],
 				details: diff,
 				isError: false,
 			},
@@ -146,7 +149,7 @@ describe("edit tool TUI rendering", () => {
 		const settledRender = component.render(80).join("\n");
 		expect(settledRender).toContain("line 50 changed");
 		expect(settledRender).toContain("line 950 changed");
-		expect(settledRender).not.toContain("Successfully replaced");
+		expect(settledRender).not.toContain("Successfully applied");
 	});
 
 	it("reconstructs the boxed preview from a settled result without argsComplete", async () => {
@@ -184,7 +187,7 @@ describe("edit tool TUI rendering", () => {
 
 		component.updateResult(
 			{
-				content: [{ type: "text", text: `Successfully replaced ${edits.length} block(s) in ${filePath}.` }],
+				content: [{ type: "text", text: `Successfully applied ${edits.length} edit(s) in ${filePath}.` }],
 				details: diff,
 				isError: false,
 			},
@@ -209,7 +212,7 @@ describe("edit tool TUI rendering", () => {
 		const component = new ToolExecutionComponent(
 			"edit",
 			"tool-call-2",
-			{ path: filePath, edits: [{ oldText: "does not exist", newText: "replacement" }] },
+			{ path: filePath, edits: [{ rangeId: formatLineAnchor(99, "does not exist"), newText: "replacement" }] },
 			{},
 			createEditToolDefinition(process.cwd()),
 			tui,
@@ -226,7 +229,7 @@ describe("edit tool TUI rendering", () => {
 
 		const rendered = await waitForRenderedText(
 			() => component.render(80).join("\n"),
-			"Could not find",
+			"stale",
 			() => tui.requestRender(true),
 		);
 		expect(rendered).not.toContain("+1 ");
