@@ -7,7 +7,7 @@ import chalk from "chalk";
 import { APP_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR } from "../config.js";
 import type { ExtensionFlag } from "../core/extensions/types.js";
 
-export type Mode = "text" | "json" | "rpc";
+export type Mode = "text" | "json" | "rpc" | "gui";
 
 export interface Args {
 	provider?: string;
@@ -66,13 +66,15 @@ export function parseArgs(args: string[]): Args {
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i];
 
-		if (arg === "--help" || arg === "-h") {
+		if (i === 0 && arg === "gui") {
+			result.mode = "gui";
+		} else if (arg === "--help" || arg === "-h") {
 			result.help = true;
 		} else if (arg === "--version" || arg === "-v") {
 			result.version = true;
 		} else if (arg === "--mode" && i + 1 < args.length) {
 			const mode = args[++i];
-			if (mode === "text" || mode === "json" || mode === "rpc") {
+			if (mode === "text" || mode === "json" || mode === "rpc" || mode === "gui") {
 				result.mode = mode;
 			}
 		} else if (arg === "--continue" || arg === "-c") {
@@ -204,6 +206,7 @@ ${chalk.bold("Built-in Commands (handled internally by the cli tool):")}
 All other commands (ls, grep, find, git, npm, etc.) are passed to the system shell as-is.
 
 ${chalk.bold("Commands:")}
+  ${APP_NAME} gui                      Open the local GUI workbench
   ${APP_NAME} install <source> [-l]     Install extension source and add to settings
   ${APP_NAME} remove <source> [-l]      Remove extension source from settings
   ${APP_NAME} uninstall <source> [-l]   Alias for remove
@@ -218,7 +221,7 @@ ${chalk.bold("Options:")}
   --api-key <key>                API key (defaults to env vars)
   --system-prompt <text>         System prompt (default: coding assistant prompt)
   --append-system-prompt <text>  Append text or file contents to the system prompt (can be used multiple times)
-  --mode <mode>                  Output mode: text (default), json, or rpc
+  --mode <mode>                  Output mode: text (default), json, rpc, or gui
   --print, -p                    Non-interactive mode: process prompt and exit
   --continue, -c                 Continue previous session
   --resume, -r                   Select a session to resume
@@ -253,6 +256,9 @@ Extensions can register additional flags (e.g., --plan from plan-mode extension)
 ${chalk.bold("Examples:")}
   # Interactive mode
   ${APP_NAME}
+
+  # Local GUI
+  ${APP_NAME} gui
 
   # Interactive mode with initial prompt
   ${APP_NAME} "List all .ts files in src/"

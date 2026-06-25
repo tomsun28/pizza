@@ -110,6 +110,23 @@ describe("parseArgs", () => {
 			expect(result.mode).toBe("rpc");
 		});
 
+		test("parses --mode gui", () => {
+			const result = parseArgs(["--mode", "gui"]);
+			expect(result.mode).toBe("gui");
+		});
+
+		test("parses gui command", () => {
+			const result = parseArgs(["gui"]);
+			expect(result.mode).toBe("gui");
+			expect(result.messages).toEqual([]);
+		});
+
+		test("parses gui command with initial message", () => {
+			const result = parseArgs(["gui", "Review this project"]);
+			expect(result.mode).toBe("gui");
+			expect(result.messages).toEqual(["Review this project"]);
+		});
+
 		test("parses --session", () => {
 			const result = parseArgs(["--session", "/path/to/session.jsonl"]);
 			expect(result.session).toBe("/path/to/session.jsonl");

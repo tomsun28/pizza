@@ -33,7 +33,7 @@ import { listWorkspaceSessions, listAllSessions, type SessionListInfo } from "./
 import { SettingsManager } from "./core/settings-manager.js";
 import { printTimings, resetTimings, time } from "./core/timings.js";
 
-import { InteractiveMode, runPrintModeWithFacade, runRpcModeWithFacade } from "./modes/index.js";
+import { InteractiveMode, runGuiModeWithFacade, runPrintModeWithFacade, runRpcModeWithFacade } from "./modes/index.js";
 import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.js";
 import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.js";
 import { isLocalPath } from "./utils/paths.js";
@@ -84,9 +84,12 @@ function isTruthyEnvFlag(value: string | undefined): boolean {
 	return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
 }
 
-type AppMode = "interactive" | "print" | "json" | "rpc";
+type AppMode = "interactive" | "print" | "json" | "rpc" | "gui";
 
 function resolveAppMode(parsed: Args, stdinIsTTY: boolean): AppMode {
+	if (parsed.mode === "gui") {
+		return "gui";
+	}
 	if (parsed.mode === "rpc") {
 		return "rpc";
 	}
@@ -99,7 +102,7 @@ function resolveAppMode(parsed: Args, stdinIsTTY: boolean): AppMode {
 	return "interactive";
 }
 
-function toPrintOutputMode(appMode: AppMode): Exclude<Mode, "rpc"> {
+function toPrintOutputMode(appMode: AppMode): Exclude<Mode, "rpc" | "gui"> {
 	return appMode === "json" ? "json" : "text";
 }
 
@@ -529,7 +532,7 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 	time("parseArgs");
 	let appMode = resolveAppMode(parsed, process.stdin.isTTY);
-	const shouldTakeOverStdout = appMode !== "interactive";
+	const shouldTakeOverStdout = appMode !== "interactive" && appMode !== "gui";
 	if (shouldTakeOverStdout) {
 		takeOverStdout();
 	}
@@ -745,6 +748,67 @@ export async function main(args: string[], options?: MainOptions) {
 
 		printTimings();
 		await interactiveMode.run();
+		return;
+	}
+
+	if (appMode === "gui") {
+		initTheme(settingsManager.getTheme(), false);
+		time("initTheme");
+
+		reportDiagnostics(setup.diagnostics);
+		if (setup.diagnostics.some((diagnostic) => diagnostic.type === "error")) {
+			process.exit(1);
+		}
+		time("createSessionFacade.setup");
+
+		const created = await createSessionFacade({
+			cwd: target.cwd,
+			agentDir: sessionStorageAgentDir,
+			authStorage,
+			settingsManager,
+			modelRegistry,
+			resourceLoader,
+			model: sessionOptions.model,
+			thinkingLevel: sessionOptions.thinkingLevel,
+			tools: sessionOptions.tools,
+			customTools: sessionOptions.customTools,
+			storagePath: parsed.noSession ? ":memory:" : undefined,
+			sessionIndexPath: parsed.noSession ? ":memory:" : undefined,
+			workspaceId: target.workspaceId,
+			sessionId: target.sessionId,
+			forkFrom: target.forkFrom
+				? {
+						...target.forkFrom,
+						agentDir: sessionStorageAgentDir,
+					}
+				: undefined,
+		});
+		applyCliThinkingClampToFacade(created, parsed.thinking !== undefined || cliThinkingFromModel);
+		time("createSessionFacade");
+
+		if (!created.model) {
+			console.error(chalk.red("No models available."));
+			console.error(chalk.yellow("\nSet an API key environment variable:"));
+			console.error("  ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, etc.");
+			console.error(chalk.yellow(`\nOr create ${getModelsPath()}`));
+			process.exit(1);
+		}
+
+		const stdinContent = await readPipedStdin();
+		time("readPipedStdin");
+		const { initialMessage, initialImages } = await prepareInitialMessage(
+			parsed,
+			settingsManager.getImageAutoResize(),
+			stdinContent,
+		);
+		time("prepareInitialMessage");
+
+		printTimings();
+		await runGuiModeWithFacade(created.facade, {
+			cwd: target.cwd,
+			initialMessage,
+			initialImages,
+		});
 		return;
 	}
 
