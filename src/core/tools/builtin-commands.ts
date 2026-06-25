@@ -599,7 +599,7 @@ export async function executeBuiltinCommand(
 		default:
 			return {
 				stdout: "",
-				stderr: `Unknown builtin command: ${command}. Available commands: read, write, edit`,
+				stderr: `Unknown builtin command: ${command}. Available commands: ${BUILTIN_COMMANDS.join(", ")}`,
 				exitCode: 1,
 			};
 	}

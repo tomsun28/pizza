@@ -150,7 +150,8 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 
 	// File exploration guidelines
 	if (hasCli) {
-		addGuideline("Use built-in commands for file operations: read, write, edit");
+		addGuideline("Use Pizza built-in file commands only for read, write, and edit");
+		addGuideline("Use shell commands such as grep, find, and ls normally; shell handles pipes, redirects, globs, &&, and ;");
 		addGuideline("Use read line anchors as edit range values; edit accepts op/range/new edits");
 	}
 
@@ -171,14 +172,15 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	const builtinCommandsSection = [
 		"## Built-in Commands (executed internally by the cli tool)",
 		"",
-		"The cli tool recognizes the following built-in commands and executes them internally (no shell fork):",
+		"The cli tool recognizes only the following Pizza built-in file commands and executes them internally (no shell fork):",
 		"",
 		"  read <path> [offset] [limit]                Read file content with 2-hex line anchors",
 		"  write <path> <content>                       Write content to file",
 		"  write <path> <<EOF\ncontent\nEOF             Write multi-line content (heredoc)",
 		"  edit <path> <op> <range> [new]               Edit anchored whole line(s)",
 		"",
-		"All other commands (ls, grep, find, git, npm, etc.) are passed to the system shell as-is.",
+		"grep, find, ls, git, npm, and all other commands are passed to the system shell as-is.",
+		"The shell handles native pipes, redirects, globs, command grouping, &&, and ;. If grep/find/ls are missing from PATH, Pizza injects temporary per-process shims for only those missing commands.",
 		"",
 		"Examples:",
 		'- cli("read src/main.ts") - Read a file; text lines include <line>#<2-hex-hash> anchors',
@@ -187,8 +189,9 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		'- cli("edit src/main.ts replace 12#ab \"const value = 2\"") - Replace an anchored line',
 		'- cli("edit src/main.ts insert_after 12#ab \"const next = 3\"") - Insert after an anchored line',
 		'- cli("edit src/main.ts delete 12#ab..14#de") - Delete an anchored range',
-		'- cli("ls -la") - List directory (passed to shell)',
-		'- cli("grep pattern src/") - Search files (passed to shell)',
+		'- cli("grep -rn \"foo\" . | head") - Search with native shell pipeline',
+		'- cli("find . -name \"*.py\" -maxdepth 2 | wc -l") - Find with native shell pipeline',
+		'- cli("ls -lah *.py") - List files with shell glob expansion',
 	].join("\n");
 
 	let prompt = [

@@ -1,9 +1,9 @@
 import chalk from "chalk";
 import { spawnSync } from "child_process";
 import { existsSync } from "fs";
-import { platform } from "os";
+import { arch, platform } from "os";
 import { join } from "path";
-import { getBinDir } from "../config.js";
+import { getBinDir, getBundledBinDir } from "../config.js";
 
 const TOOLS_DIR = getBinDir();
 
@@ -40,13 +40,38 @@ function commandExists(cmd: string): boolean {
 	}
 }
 
+function executableName(config: ToolConfig): string {
+	return config.binaryName + (platform() === "win32" ? ".exe" : "");
+}
+
+function platformArchKey(): string {
+	return `${platform()}-${arch()}`;
+}
+
+export function getBundledToolPath(tool: "fd" | "rg"): string | null {
+	const config = TOOLS[tool];
+	if (!config) return null;
+
+	const bundledPath = join(getBundledBinDir(), platformArchKey(), executableName(config));
+	if (existsSync(bundledPath)) {
+		return bundledPath;
+	}
+	return null;
+}
+
 // Get the path to a tool (system-wide or in our tools dir)
 export function getToolPath(tool: "fd" | "rg"): string | null {
 	const config = TOOLS[tool];
 	if (!config) return null;
 
+	// Check binaries shipped with the package first for stable installs.
+	const bundledPath = getBundledToolPath(tool);
+	if (bundledPath) {
+		return bundledPath;
+	}
+
 	// Check our tools directory first
-	const localPath = join(TOOLS_DIR, config.binaryName + (platform() === "win32" ? ".exe" : ""));
+	const localPath = join(TOOLS_DIR, executableName(config));
 	if (existsSync(localPath)) {
 		return localPath;
 	}

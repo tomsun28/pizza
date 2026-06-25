@@ -2,6 +2,7 @@ import type { AgentTool } from "../agent/types.js";
 import { Text } from "@mariozechner/pi-tui";
 import { type Static, Type } from "@sinclair/typebox";
 import { existsSync, readdirSync, statSync } from "fs";
+import { minimatch } from "minimatch";
 import nodePath from "path";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
@@ -18,6 +19,7 @@ const lsSchema = Type.Object({
 export type LsToolInput = Static<typeof lsSchema>;
 
 const DEFAULT_LIMIT = 500;
+const GLOB_PATTERN_RE = /[*?[\]{}]/;
 
 export interface LsToolDetails {
 	truncation?: TruncationResult;
@@ -42,6 +44,101 @@ const defaultLsOperations: LsOperations = {
 	stat: statSync,
 	readdir: readdirSync,
 };
+
+function toPosixPath(value: string): string {
+	return value.split(nodePath.sep).join("/");
+}
+
+function hasGlobPattern(value: string): boolean {
+	return GLOB_PATTERN_RE.test(value);
+}
+
+function splitGlobPath(rawPath: string): { root: string; pattern: string } {
+	let root = rawPath;
+	while (root && hasGlobPattern(root)) {
+		const parent = nodePath.dirname(root);
+		if (parent === root) break;
+		root = parent;
+	}
+	if (!root || root === rawPath) root = ".";
+	return {
+		root,
+		pattern: toPosixPath(nodePath.relative(root, rawPath)),
+	};
+}
+
+async function listGlobEntries(
+	rawPath: string,
+	cwd: string,
+	ops: LsOperations,
+	effectiveLimit: number,
+	signal?: AbortSignal,
+): Promise<{ results: string[]; entryLimitReached: boolean }> {
+	const { root, pattern } = splitGlobPath(rawPath);
+	const rootPath = resolveToCwd(root, cwd);
+
+	if (!(await ops.exists(rootPath))) {
+		throw new Error(`Path not found: ${rootPath}`);
+	}
+	const rootStat = await ops.stat(rootPath);
+	if (!rootStat.isDirectory()) {
+		throw new Error(`Not a directory: ${rootPath}`);
+	}
+
+	const results: string[] = [];
+	let entryLimitReached = false;
+	const isAbsoluteInput = nodePath.isAbsolute(rawPath);
+	const displayRoot = root === "." ? "" : root;
+
+	const walk = async (dirPath: string): Promise<void> => {
+		if (signal?.aborted) throw new Error("Operation aborted");
+		if (results.length >= effectiveLimit) {
+			entryLimitReached = true;
+			return;
+		}
+
+		let entries: string[];
+		try {
+			entries = await ops.readdir(dirPath);
+		} catch {
+			return;
+		}
+		entries.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+
+		for (const entry of entries) {
+			if (results.length >= effectiveLimit) {
+				entryLimitReached = true;
+				return;
+			}
+
+			const fullPath = nodePath.join(dirPath, entry);
+			let entryStat: { isDirectory: () => boolean };
+			try {
+				entryStat = await ops.stat(fullPath);
+			} catch {
+				continue;
+			}
+
+			const relativeFromRoot = toPosixPath(nodePath.relative(rootPath, fullPath));
+			if (minimatch(relativeFromRoot, pattern, { dot: true })) {
+				const suffix = entryStat.isDirectory() ? "/" : "";
+				if (isAbsoluteInput) {
+					results.push(toPosixPath(fullPath) + suffix);
+				} else {
+					const displayPath = displayRoot ? nodePath.join(displayRoot, relativeFromRoot) : relativeFromRoot;
+					results.push(toPosixPath(displayPath) + suffix);
+				}
+			}
+
+			if (entryStat.isDirectory()) {
+				await walk(fullPath);
+			}
+		}
+	};
+
+	await walk(rootPath);
+	return { results, entryLimitReached };
+}
 
 export interface LsToolOptions {
 	/** Custom operations for directory listing. Default: local filesystem */
@@ -127,57 +224,71 @@ export function createLsToolDefinition(
 					try {
 						const dirPath = resolveToCwd(path || ".", cwd);
 						const effectiveLimit = limit ?? DEFAULT_LIMIT;
-
-						// Check if path exists.
-						if (!(await ops.exists(dirPath))) {
-							reject(new Error(`Path not found: ${dirPath}`));
-							return;
-						}
-
-						// Check if path is a directory.
-						const stat = await ops.stat(dirPath);
-						if (!stat.isDirectory()) {
-							reject(new Error(`Not a directory: ${dirPath}`));
-							return;
-						}
-
-						// Read directory entries.
-						let entries: string[];
-						try {
-							entries = await ops.readdir(dirPath);
-						} catch (e: any) {
-							reject(new Error(`Cannot read directory: ${e.message}`));
-							return;
-						}
-
-						// Sort alphabetically, case-insensitive.
-						entries.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
-
-						// Format entries with directory indicators.
-						const results: string[] = [];
+						let results: string[] = [];
 						let entryLimitReached = false;
-						for (const entry of entries) {
-							if (results.length >= effectiveLimit) {
-								entryLimitReached = true;
-								break;
+
+						if (path && hasGlobPattern(path)) {
+							try {
+								const globResult = await listGlobEntries(path, cwd, ops, effectiveLimit, signal);
+								results = globResult.results;
+								entryLimitReached = globResult.entryLimitReached;
+							} catch (error) {
+								reject(error);
+								return;
+							}
+						} else {
+							// Check if path exists.
+							if (!(await ops.exists(dirPath))) {
+								reject(new Error(`Path not found: ${dirPath}`));
+								return;
 							}
 
-							const fullPath = nodePath.join(dirPath, entry);
-							let suffix = "";
-							try {
-								const entryStat = await ops.stat(fullPath);
-								if (entryStat.isDirectory()) suffix = "/";
-							} catch {
-								// Skip entries we cannot stat.
-								continue;
+							// Check if path is a directory.
+							const stat = await ops.stat(dirPath);
+							if (!stat.isDirectory()) {
+								reject(new Error(`Not a directory: ${dirPath}`));
+								return;
 							}
-							results.push(entry + suffix);
+
+							// Read directory entries.
+							let entries: string[];
+							try {
+								entries = await ops.readdir(dirPath);
+							} catch (e: any) {
+								reject(new Error(`Cannot read directory: ${e.message}`));
+								return;
+							}
+
+							// Sort alphabetically, case-insensitive.
+							entries.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+
+							// Format entries with directory indicators.
+							for (const entry of entries) {
+								if (results.length >= effectiveLimit) {
+									entryLimitReached = true;
+									break;
+								}
+
+								const fullPath = nodePath.join(dirPath, entry);
+								let suffix = "";
+								try {
+									const entryStat = await ops.stat(fullPath);
+									if (entryStat.isDirectory()) suffix = "/";
+								} catch {
+									// Skip entries we cannot stat.
+									continue;
+								}
+								results.push(entry + suffix);
+							}
 						}
 
 						signal?.removeEventListener("abort", onAbort);
 
 						if (results.length === 0) {
-							resolve({ content: [{ type: "text", text: "(empty directory)" }], details: undefined });
+							resolve({
+								content: [{ type: "text", text: path && hasGlobPattern(path) ? "No entries found matching pattern" : "(empty directory)" }],
+								details: undefined,
+							});
 							return;
 						}
 

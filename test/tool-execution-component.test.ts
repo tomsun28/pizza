@@ -143,7 +143,7 @@ describe("ToolExecutionComponent parity", () => {
 		}
 	});
 
-	test("rebases fallback call rendering when streaming later provides the built-in tool name", () => {
+	test("rebases fallback call rendering when streaming later provides the cli tool name", () => {
 		const component = new ToolExecutionComponent(
 			"",
 			"tool-streaming-name",
@@ -164,6 +164,7 @@ describe("ToolExecutionComponent parity", () => {
 		);
 
 		const cliRendered = stripAnsi(component.render(120).join("\n"));
+		expect(cliRendered).toContain("ls");
 		expect(cliRendered).toContain("$ ls -la /Users/gongchao/coding/");
 		expect(cliRendered).not.toContain("\"command\"");
 	});

@@ -458,6 +458,126 @@ describe("Coding Agent Tools", () => {
 			expect(result.stdout).toContain("Examples:");
 		});
 
+		it("should reject non-file commands from the direct builtin command entry point", async () => {
+			const result = await executeBuiltinCommand("grep", ["--help"], { cwd: testDir });
+
+			expect(result.exitCode).toBe(1);
+			expect(result.stdout).toBe("");
+			expect(result.stderr).toContain("Unknown builtin command: grep");
+			expect(result.stderr).toContain("read, write, edit");
+		});
+
+		it("should prefer bundled fd/rg binaries from the package", async () => {
+			const originalPackageDir = process.env.PIZZA_PACKAGE_DIR;
+			const packageDir = join(testDir, "package");
+			const platformKey = `${process.platform}-${process.arch}`;
+			const bundledBinDir = join(packageDir, "dist", "vendor", "bin", platformKey);
+			const rgName = process.platform === "win32" ? "rg.exe" : "rg";
+			const bundledRgPath = join(bundledBinDir, rgName);
+			mkdirSync(bundledBinDir, { recursive: true });
+			writeFileSync(bundledRgPath, "");
+
+			try {
+				process.env.PIZZA_PACKAGE_DIR = packageDir;
+				expect(getToolPath("rg")).toBe(bundledRgPath);
+			} finally {
+				if (originalPackageDir === undefined) {
+					delete process.env.PIZZA_PACKAGE_DIR;
+				} else {
+					process.env.PIZZA_PACKAGE_DIR = originalPackageDir;
+				}
+			}
+		});
+
+		it("should pass find, grep, and ls through the shell with native composition", async () => {
+			writeFileSync(join(testDir, "alpha.txt"), "hello alpha\n", "utf-8");
+			writeFileSync(join(testDir, "beta.md"), "hello beta\n", "utf-8");
+			writeFileSync(join(testDir, "server.py"), "WORKER = 2\n", "utf-8");
+			const localBashTool = createBashTool(testDir);
+
+			const findResult = await localBashTool.execute("test-shell-find-pipeline", {
+				command:
+					"find . -name '*.py' | while IFS= read -r line; do case \"$line\" in *server.py) printf '%s\\n' \"$line\";; esac; done",
+			});
+			expect(findResult.details?.builtin).toBeUndefined();
+			expect(getTextOutput(findResult)).toContain("server.py");
+
+			const grepResult = await localBashTool.execute("test-shell-grep-pipeline", {
+				command: "grep -rn 'WORKER' . | while IFS= read -r line; do printf '%s\\n' \"$line\"; break; done",
+			});
+			expect(grepResult.details?.builtin).toBeUndefined();
+			expect(getTextOutput(grepResult)).toContain("server.py:1");
+
+			const lsResult = await localBashTool.execute("test-shell-ls-glob", {
+				command: "ls -1 *.py | while IFS= read -r line; do case \"$line\" in *server.py) printf '%s\\n' \"$line\";; esac; done",
+			});
+			expect(lsResult.details?.builtin).toBeUndefined();
+			expect(getTextOutput(lsResult)).toContain("server.py");
+		});
+
+		it("should provide missing grep, find, and ls commands through temporary PATH shims", async () => {
+			writeFileSync(join(testDir, "alpha.txt"), "hello alpha\nother\n", "utf-8");
+			writeFileSync(join(testDir, "beta.md"), "hello beta\n", "utf-8");
+			writeFileSync(join(testDir, "server.py"), "WORKER = 2\n", "utf-8");
+			mkdirSync(join(testDir, "nested"));
+			writeFileSync(join(testDir, "nested", "BETA.PY"), "print('beta')\n", "utf-8");
+			writeFileSync(join(testDir, "nested", "empty.txt"), "", "utf-8");
+			const shimOnlyBashTool = createBashTool(testDir, {
+				spawnHook: (context) => ({
+					...context,
+					env: { ...context.env, PATH: "" },
+				}),
+			});
+
+			const grepResult = await shimOnlyBashTool.execute("test-shim-grep-pipeline", {
+				command: "printf 'foo\\nbar\\n' | grep foo",
+			});
+			expect(grepResult.details?.builtin).toBeUndefined();
+			expect(getTextOutput(grepResult).trim()).toBe("foo");
+
+			const findResult = await shimOnlyBashTool.execute("test-shim-find-pipeline", {
+				command:
+					"find . -name '*.py' | while IFS= read -r line; do case \"$line\" in *server.py) printf '%s\\n' \"$line\";; esac; done",
+			});
+			expect(findResult.details?.builtin).toBeUndefined();
+			expect(getTextOutput(findResult)).toContain("server.py");
+
+			const lsResult = await shimOnlyBashTool.execute("test-shim-ls-grep-pipeline", {
+				command: "ls -1 *.py | grep server.py",
+			});
+			expect(lsResult.details?.builtin).toBeUndefined();
+			expect(getTextOutput(lsResult).trim()).toBe("server.py");
+
+			const commonArgsResult = await shimOnlyBashTool.execute("test-shim-common-args", {
+				command: [
+					"fail() { printf '%s\\n' \"$1\"; exit 1; }",
+					"grep_count=$(grep -c -v alpha alpha.txt)",
+					"[ \"$grep_count\" = \"1\" ] || fail \"grep -c -v mismatch: $grep_count\"",
+					"grep_only=$(grep -oiw alpha alpha.txt)",
+					"[ \"$grep_only\" = \"alpha\" ] || fail \"grep -o -i -w mismatch: $grep_only\"",
+					"grep_files=$(grep -Rl --include '*.txt' alpha .)",
+					"case \"$grep_files\" in *alpha.txt*) ;; *) fail \"grep --include mismatch: $grep_files\";; esac",
+					"find_py=$(find . -maxdepth 2 -type f -iname '*.py')",
+					"case \"$find_py\" in *server.py*BETA.PY*|*BETA.PY*server.py*) ;; *) fail \"find -iname mismatch: $find_py\";; esac",
+					"find_not_md=$(find . -type f ! -name '*.md')",
+					"case \"$find_not_md\" in *beta.md*) fail \"find ! -name included md\";; *) ;; esac",
+					"find_or=$(find . -name '*.txt' -o -name '*.py')",
+					"case \"$find_or\" in *alpha.txt*server.py*) ;; *) fail \"find -o mismatch: $find_or\";; esac",
+					"find_empty=$(find . -type f -empty)",
+					"case \"$find_empty\" in *nested/empty.txt*) ;; *) fail \"find -empty mismatch: $find_empty\";; esac",
+					"ls_all=$(ls -1A)",
+					"case \"$ls_all\" in *alpha.txt*nested*) ;; *) fail \"ls -A mismatch: $ls_all\";; esac",
+					"ls_slash=$(ls -p .)",
+					"case \"$ls_slash\" in *nested/*) ;; *) fail \"ls -p mismatch: $ls_slash\";; esac",
+					"ls_recursive=$(ls -R nested)",
+					"case \"$ls_recursive\" in *BETA.PY*empty.txt*) ;; *) fail \"ls -R mismatch: $ls_recursive\";; esac",
+					"printf 'common-args-ok\\n'",
+				].join("\n"),
+			});
+			expect(commonArgsResult.details?.builtin).toBeUndefined();
+			expect(getTextOutput(commonArgsResult).trim()).toBe("common-args-ok");
+		});
+
 		it("should handle command errors", async () => {
 			await expect(bashTool.execute("test-call-9", { command: "exit 1" })).rejects.toThrow(
 				/(Command failed|code 1)/,

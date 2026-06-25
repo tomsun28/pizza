@@ -168,6 +168,19 @@ export function getBundledInteractiveAssetPath(name: string): string {
 	return join(getInteractiveAssetsDir(), name);
 }
 
+/**
+ * Get path to managed binaries shipped with the package.
+ * - For Bun binary: vendor/bin/ next to executable
+ * - For Node.js (dist/): dist/vendor/bin/
+ * - For tsx (src/): dist/vendor/bin/ when release assets have been built
+ */
+export function getBundledBinDir(): string {
+	if (isBunBinary) {
+		return join(getPackageDir(), "vendor", "bin");
+	}
+	return join(getPackageDir(), "dist", "vendor", "bin");
+}
+
 // =============================================================================
 // App Config (from package.json pizzaConfig)
 // =============================================================================

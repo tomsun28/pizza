@@ -203,7 +203,8 @@ ${chalk.bold("Built-in Commands (handled internally by the cli tool):")}
   builtin write <path> <content>               # Write file
   builtin edit <path> <op> <range> [new]      # Edit anchored whole line(s)
 
-All other commands (ls, grep, find, git, npm, etc.) are passed to the system shell as-is.
+All other commands (grep, find, ls, git, npm, etc.) are passed to the system shell as-is.
+If grep/find/ls are missing from PATH, Pizza injects temporary shims only for those missing commands.
 
 ${chalk.bold("Commands:")}
   ${APP_NAME} gui                      Open the local GUI workbench

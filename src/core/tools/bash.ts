@@ -10,6 +10,7 @@ import { keyHint } from "../../modes/interactive/components/keybinding-hints.js"
 import { truncateToVisualLines } from "../../modes/interactive/components/visual-truncate.js";
 import { theme } from "../../modes/interactive/theme/theme.js";
 import { waitForChildProcess } from "../../utils/child-process.js";
+import { injectPizzaPathShims } from "../../utils/path-shims.js";
 import {
 	getShellConfig,
 	getShellEnv,
@@ -109,10 +110,11 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
 					reject(new Error(`Working directory does not exist: ${cwd}\nCannot execute bash commands.`));
 					return;
 				}
+				const childEnv = injectPizzaPathShims(env ?? getShellEnv());
 				const child = spawn(shell, [...args, command], {
 					cwd,
 					detached: true,
-					env: env ?? getShellEnv(),
+					env: childEnv,
 					stdio: ["ignore", "pipe", "pipe"],
 				});
 				if (child.pid) trackDetachedChildPid(child.pid);
@@ -314,10 +316,49 @@ function parseBashBuiltinCommand(command: string): ParsedBuiltinToolInput | null
 	if (!BUILTIN_COMMANDS.includes(builtinName as any)) {
 		return null;
 	}
+	if (!canRouteAsBuiltin(command, parsed)) {
+		return null;
+	}
 	if (getBuiltinCommandHelpForArgs(builtinName, parsed.args)) {
 		return null;
 	}
 	return parseBuiltinToolInput(builtinName, parsed.args, parsed.heredoc);
+}
+
+function canRouteAsBuiltin(command: string, parsed: { command: string; heredoc?: string }): boolean {
+	if (parsed.heredoc !== undefined) {
+		return parsed.command.toLowerCase() === "write";
+	}
+	return !hasShellControlSyntax(command);
+}
+
+function hasShellControlSyntax(command: string): boolean {
+	let quote: "'" | "\"" | undefined;
+	let escaped = false;
+
+	for (let i = 0; i < command.length; i++) {
+		const char = command[i];
+		if (escaped) {
+			escaped = false;
+			continue;
+		}
+		if (char === "\\") {
+			escaped = true;
+			continue;
+		}
+		if (quote) {
+			if (char === quote) quote = undefined;
+			continue;
+		}
+		if (char === "'" || char === "\"") {
+			quote = char;
+			continue;
+		}
+		if (char === "|" || char === "&" || char === ";" || char === "<" || char === ">" || char === "\n") {
+			return true;
+		}
+	}
+	return false;
 }
 
 function builtinKey(builtin: ParsedBuiltinToolInput | BashBuiltinDetails): string {
@@ -363,8 +404,8 @@ export function createBashToolDefinition(
 	return {
 		name: "cli",
 		label: "cli",
-		description: `Execute a CLI command in the current working directory. Built-in commands are routed internally: read <path> [offset] [limit] or read --path <path> --offset <n> --limit <n>; write <path> <content>, write --path <path> --content <content>, or write <path> <<EOF; edit <path> <op> <range> [new], edit --path <path> --op <op> --range <range> --new <new>, or edit --path <path> --edits '[{"op":"replace","range":"...","new":"..."}]'. Other commands execute through the system shell (ls, grep, git, npm, etc.). Truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB.`,
-		promptSnippet: "Execute CLI commands: read/write/edit files, or shell commands (ls, git, npm, etc.)",
+		description: `Execute a CLI command in the current working directory. Built-in file commands are routed internally: read, write, and edit. Other commands execute through the system shell (grep, find, ls, git, npm, etc.). Truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB.`,
+		promptSnippet: "Execute CLI commands: read/write/edit built-ins, or shell commands (grep, find, ls, git, npm, etc.)",
 		parameters: bashSchema,
 		async execute(
 			toolCallId,
