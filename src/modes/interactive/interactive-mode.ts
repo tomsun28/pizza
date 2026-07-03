@@ -837,12 +837,7 @@ export class InteractiveMode {
 	 */
 	private updateTerminalTitle(): void {
 		const cwdBasename = path.basename(this.facadeCwd);
-		const sessionName = this.facade.getProjection().getDescriptor().name;
-		if (sessionName) {
-			this.ui.terminal.setTitle(`Pizza - ${sessionName} - ${cwdBasename}`);
-		} else {
-			this.ui.terminal.setTitle(`Pizza - ${cwdBasename}`);
-		}
+		this.ui.terminal.setTitle(`Pizza - ${cwdBasename}`);
 	}
 
 	/**
