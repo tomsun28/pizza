@@ -16,7 +16,6 @@ export interface GuiModeOptions {
 interface GuiState {
 	cwd: string;
 	sessionId: string;
-	sessionName?: string;
 	model: {
 		provider: string;
 		modelId: string;
@@ -190,7 +189,6 @@ function getGuiState(facade: SessionFacade, cwd: string): GuiState {
 	return {
 		cwd,
 		sessionId: descriptor.session_id,
-		sessionName: descriptor.name,
 		model: {
 			provider: modelConfig.provider,
 			modelId: modelConfig.model_id,
