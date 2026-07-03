@@ -2515,7 +2515,7 @@ export class InteractiveMode {
 				await this.handleCloneCommand();
 				return;
 			}
-			if (text === "/tree") {
+			if (text === "/history") {
 				this.showTreeSelector();
 				this.editor.setText("");
 				return;

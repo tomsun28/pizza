@@ -983,11 +983,6 @@ class TreeList implements Component {
 				this.foldedNodes.clear();
 				this.applyFilter();
 			}
-		} else if (kb.matches(keyData, "app.tree.editLabel")) {
-			const selected = this.filteredNodes[this.selectedIndex];
-			if (selected && this.onLabelEdit) {
-				this.onLabelEdit(selected.node.entry.id, selected.node.label);
-			}
 		} else if (kb.matches(keyData, "app.tree.toggleLabelTimestamp")) {
 			this.showLabelTimestamps = !this.showLabelTimestamps;
 		} else {
@@ -1190,7 +1185,7 @@ export class TreeSelectorComponent extends Container implements Focusable {
 			new TruncatedText(
 				theme.fg(
 					"muted",
-					`  ↑/↓: move. ←/→: page. ^←/^→ or Alt+←/Alt+→: fold/branch. ${keyText("app.tree.editLabel")}: label. ${filterKeys}: filters (${cycleKeys} cycle). ${keyText("app.tree.toggleLabelTimestamp")}: label time`,
+					`  ↑/↓: move. ←/→: page. ^←/^→ or Alt+←/Alt+→: fold/branch. ${filterKeys}: filters (${cycleKeys} cycle). ${keyText("app.tree.toggleLabelTimestamp")}: label time`,
 				),
 				0,
 				0,
