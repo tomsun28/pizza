@@ -13,7 +13,6 @@ import { type Args, type Mode, parseArgs, printHelp } from "./cli/args.js";
 import { processFileArguments } from "./cli/file-processor.js";
 import { buildInitialMessage } from "./cli/initial-message.js";
 import { listModels } from "./cli/list-models.js";
-import { selectSession } from "./cli/session-picker.js";
 import { getAgentDir, getModelsPath, VERSION } from "./config.js";
 import {
 	type SessionServices,
@@ -175,22 +174,6 @@ async function promptConfirm(message: string): Promise<boolean> {
 			resolve(answer.toLowerCase() === "y" || answer.toLowerCase() === "yes");
 		});
 	});
-}
-
-function validateForkFlags(parsed: Args): void {
-	if (!parsed.fork) return;
-
-	const conflictingFlags = [
-		parsed.session ? "--session" : undefined,
-		parsed.continue ? "--continue" : undefined,
-		parsed.resume ? "--resume" : undefined,
-		parsed.noSession ? "--no-session" : undefined,
-	].filter((flag): flag is string => flag !== undefined);
-
-	if (conflictingFlags.length > 0) {
-		console.error(chalk.red(`Error: --fork cannot be combined with ${conflictingFlags.join(", ")}`));
-		process.exit(1);
-	}
 }
 
 function buildSessionOptions(
@@ -393,10 +376,15 @@ async function resolveFacadePrintSessionTarget(
 	parsed: Args,
 	cwd: string,
 	agentDir: string,
-	settingsManager: SettingsManager,
 ): Promise<FacadePrintSessionTarget> {
-	if (parsed.fork) {
-		const resolved = await resolveSessionPath(parsed.fork, cwd, agentDir);
+	// --no-session: ephemeral in-memory mode
+	if (parsed.noSession) {
+		return { cwd, hasExistingSession: false };
+	}
+
+	// --rewind <id>: jump to a specific branch point
+	if (typeof parsed.rewind === "string") {
+		const resolved = await resolveSessionPath(parsed.rewind, cwd, agentDir);
 		switch (resolved.type) {
 			case "local":
 			case "global": {
@@ -419,85 +407,8 @@ async function resolveFacadePrintSessionTarget(
 		}
 	}
 
-	if (parsed.noSession) {
-		return {
-			cwd,
-			hasExistingSession: false,
-		};
-	}
-
-	if (parsed.resume) {
-		const sessionsByPath = new Map<string, SessionListInfo>();
-		const trackSessions = async (loader: () => Promise<SessionListInfo[]>): Promise<SessionListInfo[]> => {
-			const sessions = await loader();
-			for (const session of sessions) {
-				sessionsByPath.set(session.path, session);
-			}
-			return sessions;
-		};
-
-		initTheme(settingsManager.getTheme(), true);
-		try {
-			const selectedPath = await selectSession(
-				(onProgress) => trackSessions(() => listWorkspaceSessions(cwd, agentDir, onProgress)),
-				(onProgress) => trackSessions(() => listAllSessions(agentDir, onProgress)),
-			);
-			if (!selectedPath) {
-				console.log(chalk.dim("No session selected"));
-				process.exit(0);
-			}
-
-			const parsedRef = parseSessionRef(selectedPath);
-			let selectedCwd = sessionsByPath.get(selectedPath)?.cwd;
-			if (!selectedCwd) {
-				const resolved = await resolveSessionPath(selectedPath, cwd, agentDir);
-				if (resolved.type === "global") {
-					selectedCwd = resolved.cwd;
-				}
-			}
-
-			return {
-				cwd: selectedCwd ?? cwd,
-				workspaceId: parsedRef.workspaceId,
-				sessionId: parsedRef.sessionId,
-				hasExistingSession: true,
-			};
-		} finally {
-			stopThemeWatcher();
-		}
-	}
-
-	if (parsed.session) {
-		const resolved = await resolveSessionPath(parsed.session, cwd, agentDir);
-		switch (resolved.type) {
-			case "local": {
-				const parsedRef = parseSessionRef(resolved.path);
-				return {
-					cwd,
-					workspaceId: parsedRef.workspaceId,
-					sessionId: parsedRef.sessionId,
-					hasExistingSession: true,
-				};
-			}
-			case "global": {
-				const parsedRef = parseSessionRef(resolved.path);
-				return {
-					cwd: resolved.cwd,
-					workspaceId: parsedRef.workspaceId,
-					sessionId: parsedRef.sessionId,
-					hasExistingSession: true,
-				};
-			}
-			case "not_found":
-				console.error(chalk.red(`No session found matching '${resolved.arg}'`));
-				process.exit(1);
-		}
-	}
-
-	return {
-		cwd,
-		hasExistingSession: !!parsed.continue,
-	};
+	// Default: auto-resume the eternal conversation
+	return { cwd, hasExistingSession: true };
 }
 
 export interface MainOptions {
@@ -561,8 +472,6 @@ export async function main(args: string[], options?: MainOptions) {
 		process.exit(1);
 	}
 
-	validateForkFlags(parsed);
-
 	const cwd = process.cwd();
 	const agentDir = getAgentDir();
 	const startupSettingsManager = SettingsManager.create(cwd, agentDir);
@@ -577,7 +486,7 @@ export async function main(args: string[], options?: MainOptions) {
 	};
 	const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
 
-	const target = await resolveFacadePrintSessionTarget(parsed, cwd, agentDir, startupSettingsManager);
+	const target = await resolveFacadePrintSessionTarget(parsed, cwd, agentDir);
 	const setup = await createCliSessionSetup({
 		cwd: target.cwd,
 		agentDir,

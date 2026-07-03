@@ -45,27 +45,16 @@ describe("parseArgs", () => {
 		});
 	});
 
-	describe("--continue flag", () => {
-		test("parses --continue flag", () => {
-			const result = parseArgs(["--continue"]);
-			expect(result.continue).toBe(true);
+	describe("--rewind flag", () => {
+		test("parses --rewind without id", () => {
+			const result = parseArgs(["--rewind"]);
+			expect(result.rewind).toBe(true);
 		});
 
-		test("parses -c shorthand", () => {
-			const result = parseArgs(["-c"]);
-			expect(result.continue).toBe(true);
-		});
-	});
-
-	describe("--resume flag", () => {
-		test("parses --resume flag", () => {
-			const result = parseArgs(["--resume"]);
-			expect(result.resume).toBe(true);
-		});
-
-		test("parses -r shorthand", () => {
-			const result = parseArgs(["-r"]);
-			expect(result.resume).toBe(true);
+		test("parses --rewind with id", () => {
+			const result = parseArgs(["--rewind", "1234abcd"]);
+			expect(result.rewind).toBe("1234abcd");
+			expect(result.messages).toEqual([]);
 		});
 	});
 
@@ -127,16 +116,6 @@ describe("parseArgs", () => {
 			expect(result.messages).toEqual(["Review this project"]);
 		});
 
-		test("parses --session", () => {
-			const result = parseArgs(["--session", "/path/to/session.jsonl"]);
-			expect(result.session).toBe("/path/to/session.jsonl");
-		});
-
-		test("parses --fork", () => {
-			const result = parseArgs(["--fork", "1234abcd"]);
-			expect(result.fork).toBe("1234abcd");
-			expect(result.messages).toEqual([]);
-		});
 
 		test("parses --export", () => {
 			const result = parseArgs(["--export", "session.jsonl"]);

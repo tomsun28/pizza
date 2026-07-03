@@ -13,13 +13,7 @@ import { deriveWorkspaceId, getSessionIndexPath } from "../src/core/event-store/
 import type { ExtensionAPI } from "../src/core/extensions/types.js";
 import { makeSessionRef } from "../src/core/session-ref.js";
 
-const { selectSessionMock } = vi.hoisted(() => ({
-	selectSessionMock: vi.fn(),
-}));
 
-vi.mock("../src/cli/session-picker.js", () => ({
-	selectSession: selectSessionMock,
-}));
 
 import { main } from "../src/main.js";
 
@@ -66,7 +60,6 @@ describe("main print facade resume route", () => {
 	const originalEnvAgentDir = process.env[ENV_AGENT_DIR];
 	const originalOffline = process.env.PIZZA_OFFLINE;
 	const stdinIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-	let selectedSessionPath: string | null = null;
 
 	afterEach(() => {
 		process.chdir(originalCwd);
@@ -86,8 +79,6 @@ describe("main print facade resume route", () => {
 		for (const dir of tempDirs.splice(0)) {
 			if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
 		}
-		selectedSessionPath = null;
-		selectSessionMock.mockReset();
 		vi.restoreAllMocks();
 	});
 
@@ -160,7 +151,7 @@ describe("main print facade resume route", () => {
 		return makeSessionRef(workspaceId, index.sessions[0]!.session_id);
 	}
 
-	it("resumes the selected projection session in print/json facade mode", async () => {
+	it("auto-resumes the eternal conversation in print/json facade mode", async () => {
 		const { agentDir } = createProject();
 		const stdout = captureStdout();
 		const seenContexts: Context[] = [];
@@ -169,18 +160,15 @@ describe("main print facade resume route", () => {
 			extensionFactories: [createFacadeProviderExtension(["first response"], seenContexts)],
 		});
 
-		selectedSessionPath = readOnlySessionRef(agentDir);
+		// Verify the first run created a session
+		readOnlySessionRef(agentDir);
 		stdout.length = 0;
-		selectSessionMock.mockImplementation(async (currentSessionsLoader: () => Promise<unknown>) => {
-			await currentSessionsLoader();
-			return selectedSessionPath;
-		});
 
-		await main(["--mode", "json", "--resume", "--model", "facade-test/facade-model", "second"], {
+		// Second run with no flag: default auto-resumes the eternal conversation
+		await main(["--mode", "json", "--model", "facade-test/facade-model", "second"], {
 			extensionFactories: [createFacadeProviderExtension(["second response"], seenContexts)],
 		});
 
-		expect(selectSessionMock).toHaveBeenCalledOnce();
 		expect(seenContexts).toHaveLength(2);
 		expect(seenContexts[1]!.messages.map((message) => message.role)).toEqual(["user", "assistant", "user"]);
 		expect(seenContexts[1]!.messages[0]).toMatchObject({ role: "user", content: "first" });

@@ -176,7 +176,7 @@ describe("main print facade route", () => {
 		expect(events.some((event) => event.type === "session")).toBe(false);
 	});
 
-	it("opens an explicit projection session in print/json facade mode", async () => {
+	it("auto-resumes the projection session in print/json facade mode", async () => {
 		const { agentDir } = createProject();
 		const stdout = captureStdout();
 		const seenContexts: Context[] = [];
@@ -185,10 +185,9 @@ describe("main print facade route", () => {
 			extensionFactories: [createFacadeProviderExtension(["first response"], seenContexts)],
 		});
 
-		const sessionId = readOnlySessionId(agentDir);
 		stdout.length = 0;
 
-		await main(["--mode", "json", "--session", sessionId, "--model", "facade-test/facade-model", "second"], {
+		await main(["--mode", "json", "--model", "facade-test/facade-model", "second"], {
 			extensionFactories: [createFacadeProviderExtension(["second response"], seenContexts)],
 		});
 
@@ -214,7 +213,7 @@ describe("main print facade route", () => {
 
 		stdout.length = 0;
 
-		await main(["--mode", "json", "--continue", "--model", "facade-test/facade-model", "second"], {
+		await main(["--mode", "json", "--model", "facade-test/facade-model", "second"], {
 			extensionFactories: [createFacadeProviderExtension(["second response"], seenContexts)],
 		});
 
@@ -236,7 +235,7 @@ describe("main print facade route", () => {
 		const sessionId = readOnlySessionId(agentDir);
 		stdout.length = 0;
 
-		await main(["--mode", "json", "--fork", sessionId, "--model", "facade-test/facade-model", "fork prompt"], {
+		await main(["--mode", "json", "--rewind", sessionId, "--model", "facade-test/facade-model", "fork prompt"], {
 			extensionFactories: [createFacadeProviderExtension(["fork response"], seenContexts)],
 		});
 
@@ -268,7 +267,7 @@ describe("main print facade route", () => {
 		const targetProjectCwd = process.cwd();
 		stdout.length = 0;
 
-		await main(["--mode", "json", "--fork", sourceSessionId, "--model", "facade-test/facade-model", "fork prompt"], {
+		await main(["--mode", "json", "--rewind", sourceSessionId, "--model", "facade-test/facade-model", "fork prompt"], {
 			extensionFactories: [createFacadeProviderExtension(["fork response"], seenContexts)],
 		});
 
