@@ -103,7 +103,6 @@ import { LoginDialogComponent } from "./components/login-dialog.js";
 import { ModelSelectorComponent } from "./components/model-selector.js";
 import { OAuthSelectorComponent } from "./components/oauth-selector.js";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.js";
-import { SessionSelectorComponent } from "./components/session-selector.js";
 import { SettingsSelectorComponent } from "./components/settings-selector.js";
 import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.js";
 import { ToolExecutionComponent } from "./components/tool-execution.js";
