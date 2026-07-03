@@ -26,10 +26,6 @@ export interface AppKeybindings {
 	"app.message.followUp": true;
 	"app.message.dequeue": true;
 	"app.clipboard.pasteImage": true;
-	"app.session.new": true;
-	"app.session.tree": true;
-	"app.session.fork": true;
-	"app.session.resume": true;
 	"app.tree.foldOrUp": true;
 	"app.tree.unfoldOrDown": true;
 	"app.tree.toggleLabelTimestamp": true;
@@ -106,10 +102,6 @@ export const KEYBINDINGS = {
 		defaultKeys: process.platform === "win32" ? "alt+v" : "ctrl+v",
 		description: "Paste image from clipboard",
 	},
-	"app.session.new": { defaultKeys: [], description: "Start a new session" },
-	"app.session.tree": { defaultKeys: [], description: "Open session tree" },
-	"app.session.fork": { defaultKeys: [], description: "Fork current session" },
-	"app.session.resume": { defaultKeys: [], description: "Resume a session" },
 	"app.tree.foldOrUp": {
 		defaultKeys: ["ctrl+left", "alt+left"],
 		description: "Fold tree branch or move up",
@@ -243,10 +235,6 @@ const KEYBINDING_NAME_MIGRATIONS = {
 	followUp: "app.message.followUp",
 	dequeue: "app.message.dequeue",
 	pasteImage: "app.clipboard.pasteImage",
-	newSession: "app.session.new",
-	tree: "app.session.tree",
-	fork: "app.session.fork",
-	resume: "app.session.resume",
 	treeFoldOrUp: "app.tree.foldOrUp",
 	treeUnfoldOrDown: "app.tree.unfoldOrDown",
 	treeToggleLabelTimestamp: "app.tree.toggleLabelTimestamp",

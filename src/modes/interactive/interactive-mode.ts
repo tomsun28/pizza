@@ -474,10 +474,6 @@ export class InteractiveMode {
 	private get projectionSessionManager() {
 		return this.facade.runtime.sessionManager!;
 	}
-	/** Active session name from projection descriptor */
-	private get sessionName(): string | undefined {
-		return this.facade.getProjection().getDescriptor().name;
-	}
 	/** Session directory (workspace dir in agent storage) */
 	private get sessionDir(): string {
 		const agentDir = this.facade.runtime.agentDir;
@@ -2401,10 +2397,6 @@ export class InteractiveMode {
 		this.defaultEditor.onAction("app.editor.external", () => this.openExternalEditor());
 		this.defaultEditor.onAction("app.message.followUp", () => this.handleFollowUp());
 		this.defaultEditor.onAction("app.message.dequeue", () => this.handleDequeue());
-		this.defaultEditor.onAction("app.session.new", () => this.handleClearCommand());
-		this.defaultEditor.onAction("app.session.tree", () => this.showTreeSelector());
-		this.defaultEditor.onAction("app.session.fork", () => this.showRewindSelector());
-		this.defaultEditor.onAction("app.session.resume", () => this.showSessionSelector());
 
 		this.defaultEditor.onChange = (text: string) => {
 			const wasBashMode = this.isBashMode;
@@ -2489,11 +2481,6 @@ export class InteractiveMode {
 				this.editor.setText("");
 				return;
 			}
-			if (text === "/name" || text.startsWith("/name ")) {
-				this.handleNameCommand(text);
-				this.editor.setText("");
-				return;
-			}
 			if (text === "/hotkeys") {
 				this.handleHotkeysCommand();
 				this.editor.setText("");
@@ -2502,11 +2489,6 @@ export class InteractiveMode {
 			if (text === "/rewind") {
 				this.showRewindSelector();
 				this.editor.setText("");
-				return;
-			}
-			if (text === "/clone") {
-				this.editor.setText("");
-				await this.handleCloneCommand();
 				return;
 			}
 			if (text === "/history") {
@@ -2522,11 +2504,6 @@ export class InteractiveMode {
 			if (text === "/logout") {
 				this.showOAuthSelector("logout");
 				this.editor.setText("");
-				return;
-			}
-			if (text === "/new") {
-				this.editor.setText("");
-				await this.handleClearCommand();
 				return;
 			}
 			if (text === "/compact" || text.startsWith("/compact ")) {
@@ -2552,11 +2529,6 @@ export class InteractiveMode {
 			}
 			if (text === "/dementedelves") {
 				this.handleDementedDelves();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/resume") {
-				this.showSessionSelector();
 				this.editor.setText("");
 				return;
 			}
@@ -4068,23 +4040,6 @@ export class InteractiveMode {
 		});
 	}
 
-	private async handleCloneCommand(): Promise<void> {
-		const leafId = this.facade.runtime.store?.head;
-		if (!leafId) {
-			this.showStatus("Nothing to clone yet");
-			return;
-		}
-
-		try {
-			this.facade.runtime.fork(leafId);
-			this.renderCurrentSessionState();
-			this.editor.setText("");
-			this.showStatus("Cloned to new session");
-		} catch (error: unknown) {
-			this.showError(error instanceof Error ? error.message : String(error));
-		}
-	}
-
 	private showTreeSelector(initialSelectedId?: string): void {
 		const timeline = this.facade.getProjection().getTimeline();
 		const realLeafId = this.facade.runtime.store?.head ?? null;
@@ -4224,50 +4179,6 @@ export class InteractiveMode {
 				},
 				initialSelectedId,
 				initialFilterMode,
-			);
-			return { component: selector, focus: selector };
-		});
-	}
-
-	private showSessionSelector(): void {
-		this.showSelector((done) => {
-				const selector = new SessionSelectorComponent(
-					(onProgress) => {
-						const agentDir = this.facade.runtime.agentDir ?? getAgentDir();
-						return listWorkspaceSessions(this.facadeCwd, agentDir, onProgress);
-					},
-					(onProgress) => {
-						const agentDir = this.facade.runtime.agentDir ?? getAgentDir();
-						return listAllSessions(agentDir, onProgress);
-					},
-					async (sessionPath) => {
-					done();
-					await this.handleResumeSession(sessionPath);
-				},
-				() => {
-					done();
-					this.ui.requestRender();
-				},
-				() => {
-					void this.shutdown();
-				},
-				() => this.ui.requestRender(),
-				{
-					renameSession: async (sessionFilePath: string, nextName: string | undefined) => {
-						const next = (nextName ?? "").trim();
-						if (!next) return;
-						// Parse session ref to get session_id for rename
-						const ref = sessionFilePath.startsWith("event-session:") ? sessionFilePath.slice("event-session:".length) : sessionFilePath;
-						const [_, sessionId] = ref.split(":");
-						if (sessionId) {
-							this.projectionSessionManager.renameSession(sessionId, next);
-						}
-					},
-					showRenameHint: true,
-					keybindings: this.keybindings,
-				},
-
-				this.sessionFile,
 			);
 			return { component: selector, focus: selector };
 		});
@@ -4724,28 +4635,6 @@ export class InteractiveMode {
 		}
 	}
 
-	private handleNameCommand(text: string): void {
-		const name = text.replace(/^\/name\s*/, "").trim();
-		if (!name) {
-			const currentName = this.sessionName;
-			if (currentName) {
-				this.chatContainer.addChild(new Spacer(1));
-				this.chatContainer.addChild(new Text(theme.fg("dim", `Session name: ${currentName}`), 1, 0));
-			} else {
-				this.showWarning("Usage: /name <name>");
-			}
-			this.ui.requestRender();
-			return;
-		}
-
-		const desc = this.facade.getProjection().getDescriptor();
-		this.projectionSessionManager.renameSession(desc.session_id, name);
-		this.updateTerminalTitle();
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Text(theme.fg("dim", `Session name set: ${name}`), 1, 0));
-		this.ui.requestRender();
-	}
-
 	private handleStatsCommand(): void {
 		const messages = this.facade.getProjection().buildContext().messages;
 		const stats = computeMessageStats(messages);
@@ -4918,23 +4807,6 @@ export class InteractiveMode {
 		this.chatContainer.addChild(new Markdown(hotkeys.trim(), 1, 1, this.getMarkdownThemeWithSettings()));
 		this.chatContainer.addChild(new DynamicBorder());
 		this.ui.requestRender();
-	}
-
-	private async handleClearCommand(): Promise<void> {
-		if (this.loadingAnimation) {
-			this.loadingAnimation.stop();
-			this.loadingAnimation = undefined;
-		}
-		this.statusContainer.clear();
-		try {
-			this.facade.runtime.createSession();
-			this.renderCurrentSessionState();
-			this.chatContainer.addChild(new Spacer(1));
-			this.chatContainer.addChild(new Text(`${theme.fg("accent", "✓ New session started")}`, 1, 1));
-			this.ui.requestRender();
-		} catch (error: unknown) {
-			await this.handleFatalRuntimeError("Failed to create session", error);
-		}
 	}
 
 	private handleDebugCommand(): void {
