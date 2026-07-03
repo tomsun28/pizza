@@ -429,8 +429,12 @@ export class InteractiveMode {
 	private getUserMessagesForForkingFacade(): Array<{ entryId: string; text: string }> {
 		const messages = this.facade.getProjection().buildContext().messages;
 		return messages
-			.filter((m: any) => m.role === "user")
-			.map((m: any) => ({ entryId: (m as any).entryId ?? "", text: typeof m.content === "string" ? m.content : "" }));
+			.filter((m) => m.role === "user")
+			.map((m) => {
+				const entryId = "entryId" in m && typeof m.entryId === "string" ? m.entryId : "";
+				const content = m.content;
+				return { entryId, text: typeof content === "string" ? content : "" };
+			});
 	}
 	private getLastAssistantTextFacade(): string | undefined {
 		const messages = this.facade.getProjection().buildContext().messages;
@@ -2377,7 +2381,7 @@ export class InteractiveMode {
 						if (action === "tree") {
 							this.showTreeSelector();
 						} else {
-							this.showUserMessageSelector();
+							this.showRewindSelector();
 						}
 						this.lastEscapeTime = 0;
 					} else {
@@ -2405,7 +2409,7 @@ export class InteractiveMode {
 		this.defaultEditor.onAction("app.message.dequeue", () => this.handleDequeue());
 		this.defaultEditor.onAction("app.session.new", () => this.handleClearCommand());
 		this.defaultEditor.onAction("app.session.tree", () => this.showTreeSelector());
-		this.defaultEditor.onAction("app.session.fork", () => this.showUserMessageSelector());
+		this.defaultEditor.onAction("app.session.fork", () => this.showRewindSelector());
 		this.defaultEditor.onAction("app.session.resume", () => this.showSessionSelector());
 
 		this.defaultEditor.onChange = (text: string) => {
@@ -2501,8 +2505,8 @@ export class InteractiveMode {
 				this.editor.setText("");
 				return;
 			}
-			if (text === "/fork") {
-				this.showUserMessageSelector();
+			if (text === "/rewind") {
+				this.showRewindSelector();
 				this.editor.setText("");
 				return;
 			}
@@ -4035,11 +4039,11 @@ export class InteractiveMode {
 		});
 	}
 
-	private showUserMessageSelector(): void {
+	private showRewindSelector(): void {
 		const userMessages = this.getUserMessagesForForkingFacade();
 
 		if (userMessages.length === 0) {
-			this.showStatus("No messages to fork from");
+			this.showStatus("No messages to rewind from");
 			return;
 		}
 
@@ -4050,11 +4054,11 @@ export class InteractiveMode {
 				userMessages.map((m) => ({ id: m.entryId, text: m.text })),
 				async (entryId) => {
 					try {
-						const result = this.facade.runtime.fork(entryId);
+						this.facade.runtime.fork(entryId);
 						this.renderCurrentSessionState();
 						this.editor.setText("");
 						done();
-						this.showStatus("Forked to new session");
+						this.showStatus("Rewound to new branch");
 					} catch (error: unknown) {
 						done();
 						this.showError(error instanceof Error ? error.message : String(error));
