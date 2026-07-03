@@ -191,12 +191,11 @@ export class RpcClient {
 	}
 
 	/**
-	 * Start a new session, optionally with parent tracking.
-	 * @param parentSession - Optional parent session path for lineage tracking
-	 * @returns Object with `cancelled: true` if an extension cancelled the new session
+	 * Rewind to a branch point, or no-op to continue the eternal conversation.
+	 * @param targetEventId - Optional event id to fork from
 	 */
-	async newSession(parentSession?: string): Promise<{ cancelled: boolean }> {
-		const response = await this.send({ type: "new_session", parentSession });
+	async rewind(targetEventId?: string): Promise<{ cancelled: boolean }> {
+		const response = await this.send({ type: "rewind", targetEventId });
 		return this.getData(response);
 	}
 
@@ -368,12 +367,6 @@ export class RpcClient {
 		return this.getData<{ text: string | null }>(response).text;
 	}
 
-	/**
-	 * Set the session display name.
-	 */
-	async setSessionName(name: string): Promise<void> {
-		await this.send({ type: "set_session_name", name });
-	}
 
 	/**
 	 * Get all messages in the session.

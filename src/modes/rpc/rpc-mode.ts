@@ -138,7 +138,6 @@ function getFacadeSessionState(facade: SessionFacade): RpcSessionState {
 		isCompacting: false,
 		sessionFile: makeSessionRef(descriptor.workspace_id, descriptor.session_id),
 		sessionId: descriptor.session_id,
-		sessionName: descriptor.name,
 		autoCompactionEnabled: facade.settingsManager.getCompactionEnabled(),
 		messageCount: messages.length,
 		pendingMessageCount: 0,
@@ -314,27 +313,21 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 					text: getLastAssistantText(facade.getProjection().buildContext().messages),
 				});
 
-			case "set_session_name": {
-				const name = command.name.trim();
-				if (!name) {
-					return error(id, "set_session_name", "Session name cannot be empty");
-				}
-				const descriptor = facade.getProjection().getDescriptor();
-				facade.runtime.sessionManager?.renameSession(descriptor.session_id, name);
-				return success(id, "set_session_name");
-			}
-
-			case "new_session": {
+			case "rewind": {
 				const sessionManager = facade.runtime.sessionManager;
 				if (!sessionManager) {
-					return error(id, "new_session", "Projection session manager is not available");
+					return error(id, "rewind", "Projection session manager is not available");
 				}
-				if (command.parentSession) {
-					sessionManager.forkFromSession(resolveSessionId(facade, command.parentSession));
-				} else {
-					sessionManager.createSession("user_explicit");
+				if (command.targetEventId) {
+					const event = facade.runtime.store.get(command.targetEventId);
+					if (!event) {
+						return error(id, "rewind", `Event not found: ${command.targetEventId}`);
+					}
+					sessionManager.forkAt(command.targetEventId);
 				}
-				return success(id, "new_session", { cancelled: false });
+				// No target: no-op, eternal conversation auto-continues
+				const desc = facade.getProjection().getDescriptor();
+				return success(id, "rewind", { cancelled: false, sessionId: desc.session_id });
 			}
 
 			case "switch_session": {
