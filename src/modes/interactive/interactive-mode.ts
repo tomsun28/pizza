@@ -63,6 +63,7 @@ import type {
 } from "../../core/extensions/index.js";
 import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.js";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.js";
+import { computeMessageStats } from "../../core/session-stats.js";
 import { createCompactionSummaryMessage } from "../../core/messages.js";
 import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.js";
 import { DefaultPackageManager } from "../../core/package-manager.js";
@@ -431,31 +432,17 @@ export class InteractiveMode {
 			.filter((m: any) => m.role === "user")
 			.map((m: any) => ({ entryId: (m as any).entryId ?? "", text: typeof m.content === "string" ? m.content : "" }));
 	}
-	private getSessionStatsFacade(): any {
-		const messages = this.facade.getProjection().buildContext().messages;
-		let totalInput = 0, totalOutput = 0, totalCost = 0;
-		for (const msg of messages) {
-			if (msg.role === "assistant" && (msg as any).usage) {
-				const u = (msg as any).usage;
-				totalInput += u.input ?? 0;
-				totalOutput += u.output ?? 0;
-				totalCost += u.cost?.total ?? 0;
-			}
-		}
-		return {
-			totalMessages: messages.length,
-			totalInputTokens: totalInput,
-			totalOutputTokens: totalOutput,
-			totalCost,
-		};
-	}
 	private getLastAssistantTextFacade(): string | undefined {
 		const messages = this.facade.getProjection().buildContext().messages;
 		for (let i = messages.length - 1; i >= 0; i--) {
 			const msg = messages[i];
 			if (msg.role === "assistant") {
-				const content = (msg as any).content;
-				return typeof content === "string" ? content : Array.isArray(content) ? content.filter((c: any) => c.type === "text").map((c: any) => c.text).join("") : undefined;
+				const content = msg.content;
+				return typeof content === "string"
+					? content
+					: Array.isArray(content)
+						? content.filter((c) => c.type === "text").map((c) => c.text).join("")
+						: undefined;
 			}
 		}
 		return undefined;
@@ -2468,6 +2455,11 @@ export class InteractiveMode {
 				this.editor.setText("");
 				return;
 			}
+			if (text === "/stats") {
+				this.handleStatsCommand();
+				this.editor.setText("");
+				return;
+			}
 			if (text === "/scoped-models") {
 				this.editor.setText("");
 				await this.showModelsSelector();
@@ -2501,11 +2493,6 @@ export class InteractiveMode {
 			}
 			if (text === "/name" || text.startsWith("/name ")) {
 				this.handleNameCommand(text);
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/session") {
-				this.handleSessionCommand();
 				this.editor.setText("");
 				return;
 			}
@@ -4761,16 +4748,11 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
-	private handleSessionCommand(): void {
-		const stats = this.getSessionStatsFacade();
-		const sessionName = this.sessionName;
+	private handleStatsCommand(): void {
+		const messages = this.facade.getProjection().buildContext().messages;
+		const stats = computeMessageStats(messages);
 
-		let info = `${theme.bold("Session Info")}\n\n`;
-		if (sessionName) {
-			info += `${theme.fg("dim", "Name:")} ${sessionName}\n`;
-		}
-		info += `${theme.fg("dim", "File:")} ${stats.sessionFile ?? "In-memory"}\n`;
-		info += `${theme.fg("dim", "ID:")} ${stats.sessionId}\n\n`;
+		let info = `${theme.bold("Stats")}\n\n`;
 		info += `${theme.bold("Messages")}\n`;
 		info += `${theme.fg("dim", "User:")} ${stats.userMessages}\n`;
 		info += `${theme.fg("dim", "Assistant:")} ${stats.assistantMessages}\n`;
@@ -4787,12 +4769,10 @@ export class InteractiveMode {
 			info += `${theme.fg("dim", "Cache Write:")} ${stats.tokens.cacheWrite.toLocaleString()}\n`;
 		}
 		info += `${theme.fg("dim", "Total:")} ${stats.tokens.total.toLocaleString()}\n`;
-
 		if (stats.cost > 0) {
 			info += `\n${theme.bold("Cost")}\n`;
 			info += `${theme.fg("dim", "Total:")} ${stats.cost.toFixed(4)}`;
 		}
-
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(info, 1, 0));
 		this.ui.requestRender();

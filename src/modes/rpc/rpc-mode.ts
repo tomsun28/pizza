@@ -13,7 +13,7 @@
 
 import * as crypto from "node:crypto";
 import type { AgentMessage } from "../../core/agent/types.js";
-import type { SessionStats } from "../../core/session-stats.js";
+import { computeMessageStats, type SessionStats } from "../../core/session-stats.js";
 import type {
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
@@ -112,43 +112,10 @@ function getFacadeSessionStats(facade: SessionFacade): SessionStats {
 	const projection = facade.getProjection();
 	const descriptor = projection.getDescriptor();
 	const messages = projection.buildContext().messages;
-	const userMessages = messages.filter((message) => message.role === "user").length;
-	const assistantMessages = messages.filter((message) => message.role === "assistant").length;
-	const toolResults = messages.filter((message) => message.role === "toolResult").length;
-
-	let toolCalls = 0;
-	let totalInput = 0;
-	let totalOutput = 0;
-	let totalCacheRead = 0;
-	let totalCacheWrite = 0;
-	let totalCost = 0;
-
-	for (const message of messages) {
-		if (message.role !== "assistant") continue;
-		toolCalls += message.content.filter((block) => block.type === "toolCall").length;
-		totalInput += message.usage?.input ?? 0;
-		totalOutput += message.usage?.output ?? 0;
-		totalCacheRead += message.usage?.cacheRead ?? 0;
-		totalCacheWrite += message.usage?.cacheWrite ?? 0;
-		totalCost += message.usage?.cost?.total ?? 0;
-	}
-
 	return {
+		...computeMessageStats(messages),
 		sessionFile: makeSessionRef(descriptor.workspace_id, descriptor.session_id),
 		sessionId: descriptor.session_id,
-		userMessages,
-		assistantMessages,
-		toolCalls,
-		toolResults,
-		totalMessages: messages.length,
-		tokens: {
-			input: totalInput,
-			output: totalOutput,
-			cacheRead: totalCacheRead,
-			cacheWrite: totalCacheWrite,
-			total: totalInput + totalOutput + totalCacheRead + totalCacheWrite,
-		},
-		cost: totalCost,
 	};
 }
 
