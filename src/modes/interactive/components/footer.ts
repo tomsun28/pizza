@@ -77,8 +77,6 @@ export interface FooterSessionInfo {
 	getContextUsage(): ContextUsage | undefined;
 	/** Working directory */
 	getCwd(): string;
-	/** Session name (if set) */
-	getSessionName(): string | undefined;
 	/** Whether the current model uses OAuth subscription */
 	isUsingOAuthSubscription(): boolean;
 }
@@ -119,14 +117,13 @@ export class FooterComponent implements Component {
 	}
 
 	render(width: number): string[] {
-		// Extract session info via unified interface
-		const modelInfo = this.getFromSession("model");
-		const thinkingLevel = this.getFromSession("thinkingLevel");
-		const tokenUsage = this.getFromSession("tokenUsage");
-		const contextUsage = this.getFromSession("contextUsage");
-		const pwd = this.getFromSession("cwd");
-		const sessionName = this.getFromSession("sessionName");
-		const usingSubscription = this.getFromSession("usingOAuth");
+		// Extract session info
+		const modelInfo = this.session.getModel();
+		const thinkingLevel = this.session.getThinkingLevel();
+		const tokenUsage = this.session.getTokenUsage();
+		const contextUsage = this.session.getContextUsage();
+		const pwd = this.session.getCwd();
+		const usingSubscription = this.session.isUsingOAuthSubscription();
 
 		// Cyber-style prefix and content width (prefix takes 2 columns)
 		const prefix = theme.fg("accent", "❯ ");
@@ -152,13 +149,6 @@ export class FooterComponent implements Component {
 			pathSegments.push({ text: " (", color: "dim" });
 			pathSegments.push({ text: branch, color: "accent" });
 			pathSegments.push({ text: ")", color: "dim" });
-		}
-
-		// Add session name if set
-		if (sessionName) {
-			displayPwd = `${displayPwd} • ${sessionName}`;
-			pathSegments.push({ text: " • ", color: "dim" });
-			pathSegments.push({ text: sessionName, color: "mdHeading" });
 		}
 
 		// Build stats line
@@ -269,18 +259,4 @@ export class FooterComponent implements Component {
 		return lines;
 	}
 
-	/**
-	 * Accessor that reads from FooterSessionInfo.
-	 */
-	private getFromSession(field: "model" | "thinkingLevel" | "tokenUsage" | "contextUsage" | "cwd" | "sessionName" | "usingOAuth"): any {
-		switch (field) {
-			case "model": return this.session.getModel();
-			case "thinkingLevel": return this.session.getThinkingLevel();
-			case "tokenUsage": return this.session.getTokenUsage();
-			case "contextUsage": return this.session.getContextUsage();
-			case "cwd": return this.session.getCwd();
-			case "sessionName": return this.session.getSessionName();
-			case "usingOAuth": return this.session.isUsingOAuthSubscription();
-		}
-	}
 }

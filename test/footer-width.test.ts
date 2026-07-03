@@ -14,7 +14,6 @@ type AssistantUsage = {
 };
 
 function createSession(options: {
-	sessionName: string;
 	modelId?: string;
 	provider?: string;
 	reasoning?: boolean;
@@ -39,7 +38,6 @@ function createSession(options: {
 		}),
 		getContextUsage: () => ({ contextWindow: 200_000, percent: 12.3 }),
 		getCwd: () => "/tmp/project",
-		getSessionName: () => options.sessionName,
 		isUsingOAuthSubscription: () => false,
 	};
 }
@@ -63,9 +61,9 @@ describe("FooterComponent width handling", () => {
 		initTheme(undefined, false);
 	});
 
-	it("keeps all lines within width for wide session names", () => {
+	it("keeps all lines within width", () => {
 		const width = 93;
-		const session = createSession({ sessionName: "한글".repeat(30) });
+		const session = createSession({ modelId: "mod".repeat(30) });
 		const footer = new FooterComponent(session, createFooterData(1));
 
 		const lines = footer.render(width);
@@ -77,7 +75,6 @@ describe("FooterComponent width handling", () => {
 	it("keeps stats line within width for wide model and provider names", () => {
 		const width = 60;
 		const session = createSession({
-			sessionName: "",
 			modelId: "模".repeat(30),
 			provider: "공급자",
 			reasoning: true,

@@ -601,15 +601,14 @@ export class InteractiveMode {
 				if (contextWindow <= 0) return undefined;
 				const messages = facade.getProjection().buildContext().messages;
 				const tokens = messages.reduce((sum, msg) => {
-					const content = (msg as any).content;
+					const content = "content" in msg ? msg.content : undefined;
 					const text = typeof content === "string" ? content :
-						Array.isArray(content) ? content.filter((c: any) => c.type === "text").map((c: any) => c.text).join("") : "";
+						Array.isArray(content) ? content.filter((c) => c.type === "text").map((c) => c.text).join("") : "";
 					return sum + Math.ceil(text.length / 4);
 				}, 0);
 				return { tokens, contextWindow, percent: (tokens / contextWindow) * 100 };
 			},
 			getCwd: () => facade.runtime.cwd,
-			getSessionName: () => facade.getProjection().getDescriptor().name ?? undefined,
 			isUsingOAuthSubscription: () => {
 				const facadeModel = this.getCurrentModelFromFacade();
 				return facadeModel ? (facade.modelRegistry?.isUsingOAuth?.(facadeModel as any) ?? false) : false;
