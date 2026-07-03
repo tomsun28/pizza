@@ -21,7 +21,6 @@ export interface AppKeybindings {
 	"app.model.select": true;
 	"app.tools.expand": true;
 	"app.thinking.toggle": true;
-	"app.session.toggleNamedFilter": true;
 	"app.editor.external": true;
 	"app.message.followUp": true;
 	"app.message.dequeue": true;
@@ -29,11 +28,6 @@ export interface AppKeybindings {
 	"app.tree.foldOrUp": true;
 	"app.tree.unfoldOrDown": true;
 	"app.tree.toggleLabelTimestamp": true;
-	"app.session.togglePath": true;
-	"app.session.toggleSort": true;
-	"app.session.rename": true;
-	"app.session.delete": true;
-	"app.session.deleteNoninvasive": true;
 	"app.models.save": true;
 	"app.models.enableAll": true;
 	"app.models.clearAll": true;
@@ -82,10 +76,6 @@ export const KEYBINDINGS = {
 		defaultKeys: "ctrl+t",
 		description: "Toggle thinking blocks",
 	},
-	"app.session.toggleNamedFilter": {
-		defaultKeys: "ctrl+n",
-		description: "Toggle named session filter",
-	},
 	"app.editor.external": {
 		defaultKeys: "ctrl+g",
 		description: "Open external editor",
@@ -113,26 +103,6 @@ export const KEYBINDINGS = {
 	"app.tree.toggleLabelTimestamp": {
 		defaultKeys: "shift+t",
 		description: "Toggle tree label timestamps",
-	},
-	"app.session.togglePath": {
-		defaultKeys: "ctrl+p",
-		description: "Toggle session path display",
-	},
-	"app.session.toggleSort": {
-		defaultKeys: "ctrl+s",
-		description: "Toggle session sort mode",
-	},
-	"app.session.rename": {
-		defaultKeys: "ctrl+r",
-		description: "Rename session",
-	},
-	"app.session.delete": {
-		defaultKeys: "ctrl+d",
-		description: "Delete session",
-	},
-	"app.session.deleteNoninvasive": {
-		defaultKeys: "ctrl+backspace",
-		description: "Delete session when query is empty",
 	},
 	"app.models.save": {
 		defaultKeys: "ctrl+s",
@@ -230,7 +200,6 @@ const KEYBINDING_NAME_MIGRATIONS = {
 	selectModel: "app.model.select",
 	expandTools: "app.tools.expand",
 	toggleThinking: "app.thinking.toggle",
-	toggleSessionNamedFilter: "app.session.toggleNamedFilter",
 	externalEditor: "app.editor.external",
 	followUp: "app.message.followUp",
 	dequeue: "app.message.dequeue",
@@ -238,11 +207,6 @@ const KEYBINDING_NAME_MIGRATIONS = {
 	treeFoldOrUp: "app.tree.foldOrUp",
 	treeUnfoldOrDown: "app.tree.unfoldOrDown",
 	treeToggleLabelTimestamp: "app.tree.toggleLabelTimestamp",
-	toggleSessionPath: "app.session.togglePath",
-	toggleSessionSort: "app.session.toggleSort",
-	renameSession: "app.session.rename",
-	deleteSession: "app.session.delete",
-	deleteSessionNoninvasive: "app.session.deleteNoninvasive",
 } as const satisfies Record<string, Keybinding>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
