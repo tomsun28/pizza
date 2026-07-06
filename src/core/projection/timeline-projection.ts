@@ -64,8 +64,8 @@ export interface TimelineQueryOptions {
 	kinds?: TimelineEntryKind[];
 	/** Maximum number of entries */
 	limit?: number;
-	/** Session hint filter */
-	session_hint?: string;
+	/** Thread filter (isolation key) */
+	thread_id?: string;
 }
 
 // ============================================================================
@@ -120,7 +120,7 @@ export class TimelineProjection {
 	query(options?: TimelineQueryOptions): TimelineEntry[] {
 		const events = this.store.query({
 			types: TIMELINE_EVENT_TYPES,
-			session_hint: options?.session_hint,
+			thread_id: options?.thread_id,
 		});
 
 		// Also fetch TOOL_EXECUTION_START events for duration calculation

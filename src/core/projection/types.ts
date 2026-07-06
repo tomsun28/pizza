@@ -13,6 +13,7 @@ import type { EventBase } from "../event-store/types.js";
 /** Session definition - pure reference structure */
 export interface SessionDescriptor {
 	session_id: string;
+	thread_id: string;
 	workspace_id: string;
 	/** Event range covered by this session [start, end] (inclusive) */
 	event_range: {
@@ -33,8 +34,31 @@ export interface SessionDescriptor {
 	created_at: number;
 }
 
-/** Session list storage */
+// ============================================================================
+// Thread Descriptor
+// ============================================================================
+
+/**
+ * A conversation thread — the isolation unit.
+ *
+ * One thread = one `thread_id` on events. Threads are fixed once created;
+ * auto-splitting happens at session level (within a thread), never at thread level.
+ * A thread contains a tree of sessions (branches from rewind/fork).
+ */
+export interface ThreadDescriptor {
+	thread_id: string;
+	workspace_id: string;
+	/** User-defined name (e.g. "Q3 marketing") */
+	name?: string;
+	/** Creation timestamp */
+	created_at: number;
+	/** Lifecycle status. active = ongoing; closed = user-ended. */
+	status: "active" | "closed";
+}
+
+/** Session index storage (threads + their session branches) */
 export interface SessionIndex {
+	threads: ThreadDescriptor[];
 	sessions: SessionDescriptor[];
 }
 

@@ -12,6 +12,7 @@ import type { SessionDescriptor } from "../projection/types.js";
 import type { ToolRegistry, ApprovalHandler } from "../intent/types.js";
 import type { LLMClient, ModelConfig, ToolDefinition } from "./llm-types.js";
 import { SqliteEventStore } from "../event-store/sqlite-store.js";
+import { ThreadScopedStore } from "../event-store/thread-scoped-store.js";
 import { deriveWorkspaceId, getEventDatabasePath, getSessionIndexPath } from "../event-store/workspace.js";
 import { SessionManager } from "../projection/session-manager.js";
 import { SessionProjection } from "../projection/session-projection.js";
@@ -39,6 +40,8 @@ export interface EventSourcedRuntimeConfig {
 	sessionIndexPath?: string;
 	/** Pre-configured EventStore (optional, will create if not provided) */
 	store?: EventStore;
+	/** Thread ID for event isolation. When set, the runtime wraps its store so every appended event carries thread_id = threadId. */
+	threadId?: string;
 	/** Pre-configured SessionManager (optional, will create if not provided) */
 	sessionManager?: SessionManager;
 	/** Classifier configuration */
@@ -108,10 +111,11 @@ export class EventSourcedRuntime {
 
 		// 1. Create or use provided EventStore
 		const workspaceId = deriveWorkspaceId(config.cwd);
-		this.store = config.store ?? new SqliteEventStore(
+		const rawStore = config.store ?? new SqliteEventStore(
 			workspaceId,
 			config.storagePath ?? getEventDatabasePath(workspaceId, config.agentDir),
 		);
+		this.store = config.threadId ? new ThreadScopedStore(rawStore, config.threadId) : rawStore;
 
 		this.runtimeAdapter = config.runtimeAdapter ?? new LocalRuntimeAdapter({
 			workspace_id: this.store.workspace_id,
@@ -377,6 +381,7 @@ export class EventSourcedRuntime {
 	private _createDefaultProjection(): SessionProjection {
 		const desc: SessionDescriptor = {
 			session_id: "default",
+			thread_id: "default",
 			workspace_id: this.store.workspace_id,
 			event_range: { start_event_id: "ORIGIN", end_event_id: "HEAD" },
 			created_by: "user_explicit",

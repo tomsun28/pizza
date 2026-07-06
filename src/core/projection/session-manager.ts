@@ -8,13 +8,14 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { EventBase } from "../event-store/types.js";
 import type { EventQuery, EventStore } from "../event-store/store.js";
-import type { SessionDescriptor, SessionIndex } from "./types.js";
+import type { SessionDescriptor, SessionIndex, ThreadDescriptor } from "./types.js";
 import { SessionProjection } from "./session-projection.js";
 import { SessionBoundaryInferrer } from "./boundary-inferrer.js";
 import { getSessionIndexPath, deriveWorkspaceId } from "../event-store/workspace.js";
 
 export interface CreateProjectionSessionOptions {
 	parentSessionId?: string;
+	threadId?: string;
 	startEventId?: string;
 	summaryEventId?: string;
 	closeActive?: boolean;
@@ -32,7 +33,9 @@ export interface CreateProjectionSessionOptions {
  * Does NOT store messages. Tree structure emerges from EventStore's caused_by chain.
  */
 export class SessionManager {
+	private threads: Map<string, ThreadDescriptor> = new Map();
 	private sessions: Map<string, SessionDescriptor> = new Map();
+	private activeThreadId: string | undefined;
 	private activeSessionId: string | undefined;
 	private inferrer: SessionBoundaryInferrer;
 	private unsubscribe: (() => void) | undefined;
@@ -59,8 +62,11 @@ export class SessionManager {
 	 * Get or create the active session.
 	 */
 	getActiveSession(): SessionProjection {
+		if (!this.activeThreadId) {
+			this.createThread();
+		}
 		if (!this.activeSessionId) {
-			this.createSession("user_explicit");
+			this.createSession("user_explicit", undefined, { threadId: this.activeThreadId });
 		}
 		const desc = this.sessions.get(this.activeSessionId!)!;
 		return new SessionProjection(this.store, desc);
@@ -74,9 +80,11 @@ export class SessionManager {
 		name?: string,
 		options: CreateProjectionSessionOptions = {},
 	): SessionDescriptor {
+		const threadId = options.threadId ?? this.activeThreadId ?? this._createThreadRecord().thread_id;
 		const previousActiveId = options.closeActive !== false ? this.activeSessionId : undefined;
 		const desc: SessionDescriptor = {
 			session_id: this._generateSessionId(),
+			thread_id: threadId,
 			workspace_id: this.store.workspace_id,
 			event_range: {
 				start_event_id: options.startEventId ?? this.store.head ?? "ORIGIN",
@@ -97,10 +105,11 @@ export class SessionManager {
 			actor_id: "runtime",
 			type: "SESSION_CREATED",
 			payload: { session_id: desc.session_id, name, created_by },
+			thread_id: desc.thread_id,
 		});
 
 		const previousActive = previousActiveId ? this.sessions.get(previousActiveId) : undefined;
-		if (previousActive && previousActive.event_range.end_event_id === "HEAD") {
+		if (previousActive && previousActive.thread_id === threadId && previousActive.event_range.end_event_id === "HEAD") {
 			previousActive.event_range.end_event_id = createdEvent.event_id;
 		}
 		this._persistIndex();
@@ -126,6 +135,7 @@ export class SessionManager {
 				parent_session_id: forked.parent_session_id,
 				fork_at_event_id: event_id,
 			},
+			thread_id: forked.thread_id,
 		});
 
 		return forked;
@@ -166,6 +176,7 @@ export class SessionManager {
 				parent_session_id: source.session_id,
 				fork_at_event_id: forkAtEventId,
 			},
+			thread_id: forked.thread_id,
 		});
 
 		return forked;
@@ -222,6 +233,26 @@ export class SessionManager {
 		return this.activeSessionId;
 	}
 
+	getActiveThreadId(): string | undefined {
+		return this.activeThreadId;
+	}
+
+	getActiveThread(): ThreadDescriptor | undefined {
+		return this.activeThreadId ? this.threads.get(this.activeThreadId) : undefined;
+	}
+
+	/**
+	 * Create a new thread (conversation). Threads are the isolation unit —
+	 * events are tagged with thread_id. Creates the first session in the thread.
+	 * Threads are fixed once created; auto-splitting happens at session level.
+	 */
+	createThread(name?: string): ThreadDescriptor {
+		const thread = this._createThreadRecord(name);
+		this.createSession("user_explicit", name, { threadId: thread.thread_id });
+		this._persistIndex();
+		return thread;
+	}
+
 	/**
 	 * Dispose the session manager.
 	 */
@@ -266,15 +297,16 @@ export class SessionManager {
 				startEventId: lastEventBeforeSplit?.event_id ?? current.event_range.start_event_id,
 			});
 
-			this.store.append({
-				actor_id: "runtime",
-				type: "SESSION_BOUNDARY_INFERRED",
-				payload: {
-					reason: decision.reason,
-					new_session_id: this.activeSessionId,
-				},
-				caused_by: event.event_id,
-			});
+		this.store.append({
+			actor_id: "runtime",
+			type: "SESSION_BOUNDARY_INFERRED",
+			payload: {
+				reason: decision.reason,
+				new_session_id: this.activeSessionId,
+			},
+			caused_by: event.event_id,
+			thread_id: this.activeThreadId,
+		});
 		}
 	}
 
@@ -289,7 +321,7 @@ export class SessionManager {
 			query.after = current.event_range.start_event_id;
 		}
 
-		return this.store.query(query).reverse();
+		return this.store.query(query).filter((e) => !e.thread_id || e.thread_id === current.thread_id).reverse();
 	}
 
 	private _ensureStorageDir(): void {
@@ -307,9 +339,15 @@ export class SessionManager {
 		try {
 			const content = readFileSync(this.filePath, "utf8");
 			const index = JSON.parse(content) as SessionIndex;
+			for (const thread of index.threads ?? []) {
+				this.threads.set(thread.thread_id, thread);
+				if (thread.status === "active") {
+					this.activeThreadId = thread.thread_id;
+				}
+			}
 			for (const session of index.sessions) {
 				this.sessions.set(session.session_id, session);
-				if (session.event_range.end_event_id === "HEAD") {
+				if (session.event_range.end_event_id === "HEAD" && session.thread_id === this.activeThreadId) {
 					this.activeSessionId = session.session_id;
 				}
 			}
@@ -321,6 +359,7 @@ export class SessionManager {
 	private _persistIndex(): void {
 		if (!this.filePath) return;
 		const index: SessionIndex = {
+			threads: Array.from(this.threads.values()),
 			sessions: Array.from(this.sessions.values()),
 		};
 		writeFileSync(this.filePath, JSON.stringify(index, null, 2));
@@ -330,5 +369,25 @@ export class SessionManager {
 		const timestamp = Date.now().toString(36);
 		const random = Math.random().toString(36).slice(2, 10);
 		return `sess_${timestamp}_${random}`;
+	}
+
+	/** Create a thread record (no session). Used by createThread and createSession's auto-thread fallback. */
+	private _createThreadRecord(name?: string): ThreadDescriptor {
+		const thread: ThreadDescriptor = {
+			thread_id: this._generateThreadId(),
+			workspace_id: this.store.workspace_id,
+			name,
+			created_at: Date.now(),
+			status: "active",
+		};
+		this.threads.set(thread.thread_id, thread);
+		this.activeThreadId = thread.thread_id;
+		return thread;
+	}
+
+	private _generateThreadId(): string {
+		const timestamp = Date.now().toString(36);
+		const random = Math.random().toString(36).slice(2, 10);
+		return `thread_${timestamp}_${random}`;
 	}
 }

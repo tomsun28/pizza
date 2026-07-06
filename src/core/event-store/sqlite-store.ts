@@ -22,7 +22,7 @@ type EventRow = {
 	payload_json: string;
 	caused_by: string | null;
 	correlation_id: string | null;
-	session_hint: string | null;
+	thread_id: string | null;
 	schema_version: number;
 	idempotency_key: string | null;
 };
@@ -131,9 +131,9 @@ export class SqliteEventStore implements EventStore {
 			clauses.push(`actor_id in (${filter.actor_ids.map(() => "?").join(", ")})`);
 			params.push(...filter.actor_ids);
 		}
-		if (filter.session_hint) {
-			clauses.push("session_hint = ?");
-			params.push(filter.session_hint);
+		if (filter.thread_id) {
+			clauses.push("thread_id = ?");
+			params.push(filter.thread_id);
 		}
 		if (filter.caused_by) {
 			clauses.push(`event_id in (
@@ -224,7 +224,7 @@ export class SqliteEventStore implements EventStore {
 				payload_json text not null,
 				caused_by text,
 				correlation_id text,
-				session_hint text,
+				thread_id text,
 				schema_version integer not null default 1,
 				idempotency_key text
 			);
@@ -237,6 +237,14 @@ export class SqliteEventStore implements EventStore {
 				on events(workspace_id, idempotency_key)
 				where idempotency_key is not null;
 		`);
+
+		// Migrate legacy column name session_hint → thread_id.
+		// session_hint was always NULL in shipped code (isolation was never active),
+		// so this is a safe rename with no data loss.
+		const columns = this.db.prepare("pragma table_info(events)").all() as Array<{ name: string }>;
+		if (columns.some((c) => c.name === "session_hint") && !columns.some((c) => c.name === "thread_id")) {
+			this.db.exec("alter table events rename column session_hint to thread_id");
+		}
 	}
 
 	private _normalizeEvent(partial: EventAppendInput): EventBase {
@@ -255,7 +263,7 @@ export class SqliteEventStore implements EventStore {
 		this.db.prepare(`
 			insert into events (
 				sequence, event_id, workspace_id, runtime_id, actor_id, timestamp, type,
-				payload_json, caused_by, correlation_id, session_hint, schema_version, idempotency_key
+				payload_json, caused_by, correlation_id, thread_id, schema_version, idempotency_key
 			) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`).run(
 			event.sequence,
@@ -268,7 +276,7 @@ export class SqliteEventStore implements EventStore {
 			JSON.stringify(event.payload),
 			event.caused_by ?? null,
 			event.correlation_id ?? null,
-			event.session_hint ?? null,
+			event.thread_id ?? null,
 			event.schema_version,
 			event.idempotency_key ?? null,
 		);
@@ -302,7 +310,7 @@ function rowToEvent(row: EventRow): EventBase {
 		payload: JSON.parse(row.payload_json) as unknown,
 		caused_by: row.caused_by ?? undefined,
 		correlation_id: row.correlation_id ?? undefined,
-		session_hint: row.session_hint ?? undefined,
+		thread_id: row.thread_id ?? undefined,
 		schema_version: row.schema_version,
 		idempotency_key: row.idempotency_key ?? undefined,
 	};

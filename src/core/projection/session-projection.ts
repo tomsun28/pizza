@@ -55,12 +55,11 @@ export class SessionProjection {
 	 */
 	buildContext(options?: BuildContextOptions): BuiltContext {
 		const { start, end } = this._getEventRange();
-
 		const rawEvents = this.store.query({
 			after: start,
 			before: end,
 			types: CONTEXT_RELEVANT_EVENT_TYPES,
-		});
+		}).filter((e) => !e.thread_id || e.thread_id === this.descriptor.thread_id);
 		const events = this._applyCompactionBoundary(rawEvents);
 
 		let messages = eventsToMessages(events);
@@ -99,12 +98,11 @@ export class SessionProjection {
 	 */
 	getTimeline(): TimelineEntry[] {
 		const { start, end } = this._getEventRange();
-
 		const events = this.store.query({
 			after: start,
 			before: end,
 			reverse: false,
-		});
+		}).filter((e) => !e.thread_id || e.thread_id === this.descriptor.thread_id);
 
 		return events.map((e) => ({
 			event_id: e.event_id,
@@ -136,6 +134,7 @@ export class SessionProjection {
 	fork(at_event_id: string): SessionDescriptor {
 		return {
 			session_id: this._generateSessionId(),
+			thread_id: this.descriptor.thread_id,
 			workspace_id: this.store.workspace_id,
 			event_range: {
 				start_event_id: at_event_id,

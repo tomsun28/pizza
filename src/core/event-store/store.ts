@@ -25,8 +25,8 @@ export interface EventQuery {
 	actor_ids?: string[];
 	/** Filter by causal chain (return all descendants of this event) */
 	caused_by?: string;
-	/** Filter by session hint */
-	session_hint?: string;
+	/** Filter by thread (isolation key) */
+	thread_id?: string;
 	/** Maximum number of events to return */
 	limit?: number;
 	/** Return events in reverse order */

@@ -47,7 +47,7 @@ describe("SqliteEventStore", () => {
 			type: "AGENT_MESSAGE_END",
 			payload: { content: [{ type: "text", text: "hi" }], stop_reason: "stop" },
 			caused_by: first.event_id,
-			session_hint: "sess_1",
+			thread_id: "sess_1",
 		});
 
 		expect(first.sequence).toBe(1);
@@ -58,7 +58,7 @@ describe("SqliteEventStore", () => {
 		expect(store.head_sequence).toBe(2);
 		expect(store.query({ after_sequence: 1 })).toEqual([second]);
 		expect(store.query({ types: ["USER_MESSAGE"] })).toEqual([first]);
-		expect(store.query({ session_hint: "sess_1" })).toEqual([second]);
+		expect(store.query({ thread_id: "sess_1" })).toEqual([second]);
 		expect(store.latest(1)).toEqual([second]);
 	});
 

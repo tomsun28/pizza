@@ -41,8 +41,8 @@ export interface EventBase {
 	/** Trace identifier for a user turn, scheduled tick, webhook, or goal run */
 	correlation_id?: string;
 
-	/** Cognitive clustering hint (session boundary inference) */
-	session_hint?: string;
+	/** Thread this event belongs to (isolation key; one conversation = one thread_id). Events of a thread are visible only to that thread's sessions. */
+	thread_id?: string;
 
 	/** Event payload schema version */
 	schema_version: number;

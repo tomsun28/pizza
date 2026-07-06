@@ -30,6 +30,7 @@ describe("SessionProjection", () => {
 	function createDescriptor(overrides?: Partial<SessionDescriptor>): SessionDescriptor {
 		return {
 			session_id: "sess_test",
+			thread_id: "thread_test",
 			workspace_id: "test-ws",
 			event_range: { start_event_id: "ORIGIN", end_event_id: "HEAD" },
 			created_by: "user_explicit",

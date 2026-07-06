@@ -209,6 +209,7 @@ function prepareForkedSession(options: {
 				parent_session_id: source.sessionId,
 				fork_at_event_id: forkAtEventId,
 			},
+			thread_id: forked.thread_id,
 		});
 		store.appendBatch(sourceProjection.buildContext().events.map(cloneContextEventForFork));
 	} finally {
@@ -396,6 +397,7 @@ export async function createSessionFacade(
 		}));
 
 	const currentSessionId = (): string => sessionManager.getActiveSessionId() ?? projection.getDescriptor().session_id;
+	const currentThreadId = (): string => sessionManager.getActiveThreadId() ?? projection.getDescriptor().thread_id;
 	const appendSessionEntry = (entry: { type: string; [key: string]: unknown }): void => {
 		store.append({
 			actor_id: "runtime",
@@ -410,6 +412,7 @@ export async function createSessionFacade(
 				},
 				leaf_id: store.head ?? null,
 			},
+			thread_id: currentThreadId(),
 		});
 	};
 
@@ -418,16 +421,17 @@ export async function createSessionFacade(
 	extensionRunner.bindCore(
 		{
 			sendMessage: (message, options) => {
-				store.append({
-					actor_id: "runtime",
-					type: "CUSTOM_MESSAGE",
-					payload: {
-						extension_id: "sdk",
-						kind: message.customType,
-						data: message.details ?? message.content,
-						display: message.display,
-					},
-				});
+			store.append({
+				actor_id: "runtime",
+				type: "CUSTOM_MESSAGE",
+				payload: {
+					extension_id: "sdk",
+					kind: message.customType,
+					data: message.details ?? message.content,
+					display: message.display,
+				},
+				thread_id: currentThreadId(),
+			});
 
 				if (!runtime || (!options?.triggerTurn && !options?.deliverAs)) return;
 				const text = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
@@ -559,6 +563,7 @@ export async function createSessionFacade(
 		agentDir,
 		store,
 		sessionManager,
+		threadId: currentThreadId(),
 		toolRegistry: createToolRegistry(tools),
 		llmClient: llmClient as NonNullable<typeof llmClient>,
 		systemPrompt,
