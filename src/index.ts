@@ -30,7 +30,6 @@ export {
 	findTurnStartIndex,
 	type GenerateBranchSummaryOptions,
 	generateBranchSummary,
-	generateSummary,
 	getLastAssistantUsage,
 	prepareBranchEntries,
 	serializeConversation,

@@ -19,7 +19,6 @@ import { GoalScheduler } from "../src/core/goal/scheduler.js";
 import { TimelineProjection } from "../src/core/projection/timeline-projection.js";
 import { Reactor } from "../src/core/runtime/reactor.js";
 import { IntentClassifier } from "../src/core/intent/classifier.js";
-import { IntentExecutor } from "../src/core/intent/executor.js";
 import { SessionProjection } from "../src/core/projection/session-projection.js";
 import type { SessionDescriptor } from "../src/core/projection/types.js";
 import type { EventBase } from "../src/core/event-store/types.js";
@@ -216,7 +215,6 @@ describe("Headless Integration", () => {
 			const toolRegistry = createMockToolRegistry();
 			const classifier = new IntentClassifier();
 			const runtimeAdapter = createMockRuntimeAdapter(toolRegistry);
-			const executor = new IntentExecutor(store, classifier, toolRegistry, undefined, runtimeAdapter);
 
 			// Mock LLM that returns a tool call on first call, then stops
 			let callCount = 0;

@@ -112,9 +112,9 @@ Append-only 事件存储，按 workspace 分库。
 | 文件 | 行数 | 用途 |
 |---|---|---|
 | `types.ts` | 173 | EventBase、EventType（65 种事件类型）、支持类型 |
-| `events.ts` | 583 | 每种事件的具体 payload 接口 |
+| `events.ts` | 585 | 每种事件的具体 payload 接口 |
 | `store.ts` | 117 | EventStore 接口（append/subscribe/query/getCausalChain） |
-| `sqlite-store.ts` | 330 | SQLite 实现，UUIDv7 event_id，同步通知 subscriber |
+| `sqlite-store.ts` | 338 | SQLite 实现，UUIDv7 event_id，同步通知 subscriber |
 | `workspace.ts` | 85 | workspace ID 推导、路径计算 |
 
 **事件类型分类（65 种）**：
@@ -132,7 +132,7 @@ Append-only 事件存储，按 workspace 分库。
 | Goal (7) | GOAL_CREATED, GOAL_CLASSIFIED, GOAL_PLANNED, GOAL_PAUSED, GOAL_RESUMED, GOAL_COMPLETED, GOAL_CANCELLED |
 | Task (9) | TASK_CREATED, TASK_ASSIGNED, TASK_STARTED, TASK_PROGRESS, TASK_COMPLETED, TASK_FAILED, TASK_REWORK_REQUESTED, TASK_ACCEPTED, TASK_CANCELLED |
 
-### 3.2 Reactor (`src/core/runtime/reactor.ts`, 1117 行)
+### 3.2 Reactor (`src/core/runtime/reactor.ts`, 1159 行)
 
 事件驱动 turn 循环引擎。14 个 handler 函数替代传统 while-loop。
 
@@ -143,7 +143,7 @@ Append-only 事件存储，按 workspace 分库。
 - **因果链遍历** — 通过 `store.getCausalChain()` 追溯重试次数、定位 assistant message
 - **并发 guard** — `EventSourcedRuntime._isProcessing` 防止并发 prompt，steer/followUp 是唯一允许的排队操作
 
-### 3.3 EventSourcedRuntime (`src/core/runtime/runtime.ts`, 589 行)
+### 3.3 EventSourcedRuntime (`src/core/runtime/runtime.ts`, 572 行)
 
 组装 store + reactor + projection 的运行时容器。
 
@@ -164,29 +164,23 @@ Append-only 事件存储，按 workspace 分库。
 
 | 文件 | 行数 | 用途 |
 |---|---|---|
-| `session-projection.ts` | 303 | 从事件查询构建 LLM 上下文（`buildContext()`） |
-| `event-to-message.ts` | 305 | 8 种事件 → `AgentMessage[]` 转换 |
+| `session-projection.ts` | 302 | 从事件查询构建 LLM 上下文（`buildContext()`） |
+| `event-to-message.ts` | 306 | 8 种事件 → `AgentMessage[]` 转换 |
 | `timeline-projection.ts` | 363 | 时间线视图，支持分页查询 |
-| `session-manager.ts` | 317 | 会话描述 CRUD（create/fork/switch/list） |
-| `goal-projection.ts` | 361 | 目标/任务状态追踪 |
+| `session-manager.ts` | 393 | 会话描述 CRUD（create/fork/switch/list） |
+| `goal-projection.ts` | 385 | 目标/任务状态追踪 |
 | `boundary-inferrer.ts` | 168 | 会话边界推断 |
 
 **Compaction 语义**：`COMPACTION_END.first_kept_event_id` 标记裁剪点。旧事件不删除，投影查询时跳过。
 
 ### 3.5 IntentSystem (`src/core/intent/`)
 
-工具分类与执行的安全门。
-
-> **注意**：Reactor 已将 classify → approval → execute 逻辑内联到 `_onIntentToolCall` handler 中，
-> 工具执行实际走 `Reactor → classifier → approvalHandler → RuntimeAdapter.executeTool() → ToolRegistry → tool.execute()`。
-> `IntentExecutor` 是遗留的并行实现（`runtime.ts` 注释标注 "legacy direct execution path"），Reactor 路径不经过它。
-> `IntentClassifier` 和 `ApprovalHandler` 在两条路径间共享。
+工具分类与执行的安全门。Reactor 在 `_onIntentToolCall` handler（`reactor.ts:622`）中内联完整的 classify → approval → execute 流程：`classifier.classify()` → `approvalHandler.requestApproval()` → `runtimeAdapter.executeTool()` → `ToolRegistry` → `tool.execute()`。不存在独立的 executor 组件（历史的 `IntentExecutor` 已移除）。
 
 | 文件 | 行数 | 用途 |
 |---|---|---|
-| `classifier.ts` | 264 | 按工具名/参数分类风险等级（file_read→file_delete, shell_safe→shell_dangerous） |
-| `executor.ts` | 326 | 遗留执行路径，内含审批门 → 执行 → 记录文件变更（Reactor 已内联等效逻辑） |
-| `tool-adapter.ts` | 180 | AgentTool 桥接到 ToolExecutor 接口 |
+| `classifier.ts` | 421 | 按工具名/参数分类风险等级（file_read→file_delete, shell_safe→shell_dangerous） |
+| `tool-adapter.ts` | 193 | AgentTool 桥接到 ToolExecutor 接口（`createToolRegistry()`） |
 
 ### 3.6 SessionFacade (`src/core/session-facade.ts`, 141 行)
 
@@ -194,7 +188,7 @@ Append-only 事件存储，按 workspace 分库。
 
 **持有**：EventSourcedRuntime, SettingsManager, ExtensionRunner（可选）, ModelRegistry（可选）, ResourceLoader（可选）
 
-**工厂**：`createSessionFacade()` (`session-facade-factory.ts`, 586 行) 组装所有组件。
+**工厂**：`createSessionFacade()` (`session-facade-factory.ts`, 597 行) 组装所有组件。
 
 ### 3.7 CompactionEngine (`src/core/compaction/compaction-engine.ts`, 356 行)
 
@@ -218,19 +212,19 @@ Append-only 事件存储，按 workspace 分库。
 
 ## 4. 运行模式
 
-### 4.1 InteractiveMode (`src/modes/interactive/interactive-mode.ts`, 5153 行)
+### 4.1 InteractiveMode (`src/modes/interactive/interactive-mode.ts`, 4998 行)
 
 TUI 界面，基于 `@mariozechner/pi-tui`。通过 `SessionFacade.subscribe()` + `ModeEventMapper` 订阅事件。
 
-### 4.2 RPC Mode (`src/modes/rpc/`, 519+521 行)
+### 4.2 RPC Mode (`src/modes/rpc/`)
 
-JSON-RPC over stdio。支持 prompt/abort/compact/bash/export_html 等命令。
+JSON-RPC over stdio（`rpc-mode.ts` 479 行 + `rpc-client.ts` 514 行 + `rpc-types.ts` 259 行 + `jsonl.ts` 58 行）。支持 prompt/abort/compact/bash/export_html 等命令。
 
 ### 4.3 Print Mode (`src/modes/print-mode.ts`, 133 行)
 
 单次执行。text 模式输出最终 assistant 文本，json 模式输出事件流 JSON。
 
-### 4.4 ModeEventMapper (`src/modes/event-mapper.ts`, 248 行)
+### 4.4 ModeEventMapper (`src/modes/event-mapper.ts`, 258 行)
 
 TypedEvent → 17 种 ModeEvent 的映射层，替代旧的 AgentEvent switch-case。
 
@@ -238,19 +232,23 @@ TypedEvent → 17 种 ModeEvent 的映射层，替代旧的 AgentEvent switch-ca
 
 ## 5. 工具系统 (`src/core/tools/`)
 
-7 个内置工具定义，每个包含 LLM schema + 执行逻辑：
+采用**单一 `cli` 网关**架构：默认仅向 LLM 暴露 1 个 `cli` 工具（`DEFAULT_LLM_TOOLS = ["cli"]`，见 `tools/index.ts`），由 `createBashTool()` 实现。`read`/`write`/`edit` 是 `cli` 的内建子命令（`builtin-commands.ts`）；其余命令（grep/find/ls/git/npm 等）透传系统 shell，当系统缺少 grep/find/ls 时注入纯 TS 兼容 shim（`compat-commands.ts`）。
 
-| 工具 | 文件 | 行数 |
+`createCodingTools()` / `createCodingToolDefinitions()` 只返回 `cli` 工具，经 `createToolRegistry()`（`tool-adapter.ts`）注册，Reactor 通过 RuntimeAdapter 执行。
+
+| 文件 | 行数 | 用途 |
 |---|---|---|
-| bash | `bash.ts` | 485 |
-| edit | `edit.ts` | 487 |
-| find | `find.ts` | 545 |
-| grep | `grep.ts` | 384 |
-| ls | `ls.ts` | 229 |
-| read | `read.ts` | 273 |
-| write | `write.ts` | 281 |
+| `bash.ts` | 675 | `cli` 工具主体（命令解析 + 路由 read/write/edit + shell 透传） |
+| `builtin-commands.ts` | 627 | `cli` 内建子命令 read/write/edit 实现 + heredoc 解析 |
+| `compat-commands.ts` | 1380 | grep/find/ls 纯 TS 兼容 shim（系统缺失时兜底） |
+| `edit.ts` | 509 | edit 工具定义（LLM schema + 执行） |
+| `find.ts` | 545 | find 工具定义 |
+| `grep.ts` | 510 | grep 工具定义 |
+| `ls.ts` | 340 | ls 工具定义 |
+| `read.ts` | 291 | read 工具定义 |
+| `write.ts` | 281 | write 工具定义 |
 
-通过 `createToolRegistry()` 注册到 Reactor（经 RuntimeAdapter 执行）。
+> 注：edit/find/grep/ls/read/write 的工具定义仍保留（供 `createAllTools()` 等显式启用场景），但默认编码会话只注册 `cli`。支持库：`edit-diff.ts`、`line-anchors.ts`、`truncate.ts`、`path-utils.ts`、`render-utils.ts`、`tool-definition-wrapper.ts`、`file-mutation-queue.ts`。
 
 ---
 
@@ -279,7 +277,6 @@ TypedEvent → 17 种 ModeEvent 的映射层，替代旧的 AgentEvent switch-ca
 | `src/core/event-store/events.ts` | 事件 payload 定义 |
 | `src/core/projection/session-projection.ts` | LLM 上下文构建 |
 | `src/core/projection/event-to-message.ts` | 事件 → 消息转换 |
-| `src/core/intent/executor.ts` | IntentExecutor（遗留执行路径，Reactor 已内联等效逻辑） |
 | `src/core/compaction/compaction-engine.ts` | CompactionEngine |
 | `src/core/extensions/runner.ts` | ExtensionRunner |
 | `src/modes/event-mapper.ts` | TypedEvent → ModeEvent 映射 |

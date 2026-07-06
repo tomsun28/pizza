@@ -1,7 +1,7 @@
 /**
  * Event-Sourced Runtime
  *
- * Top-level runtime that assembles EventStore + SessionManager + IntentExecutor + AgentLoop.
+ * Top-level runtime that assembles EventStore + SessionManager + Reactor.
  * Provides unified interface for UI layers.
  */
 
@@ -17,7 +17,6 @@ import { deriveWorkspaceId, getEventDatabasePath, getSessionIndexPath } from "..
 import { SessionManager } from "../projection/session-manager.js";
 import { SessionProjection } from "../projection/session-projection.js";
 import { TimelineProjection, type TimelineQueryOptions } from "../projection/timeline-projection.js";
-import { IntentExecutor } from "../intent/executor.js";
 import { IntentClassifier, type ClassifierConfig } from "../intent/classifier.js";
 import { Reactor } from "./reactor.js";
 import type { CheckpointRef, RuntimeAdapter, RuntimeStatus } from "./types.js";
@@ -84,13 +83,12 @@ export interface RuntimeCompactOptions {
 /**
  * EventSourcedRuntime - the primary LLM execution engine.
  *
- * Assembles EventStore + SessionManager + IntentExecutor + AgentLoop.
+ * Assembles EventStore + SessionManager + Reactor.
  * Provides unified interface for UI layers.
  */
 export class EventSourcedRuntime {
 	readonly store: EventStore;
 	readonly sessionManager: SessionManager | undefined;
-	readonly intentExecutor: IntentExecutor;
 	readonly runtimeAdapter: RuntimeAdapter;
 	readonly classifier: IntentClassifier;
 	private reactor: Reactor | null = null;
@@ -132,15 +130,6 @@ export class EventSourcedRuntime {
 
 		// 3. Create IntentClassifier
 		this.classifier = new IntentClassifier(config.classifierConfig);
-
-		// 4. Create IntentExecutor (still used for the legacy direct execution path)
-		this.intentExecutor = new IntentExecutor(
-			this.store,
-			this.classifier,
-			config.toolRegistry,
-			config.approvalHandler,
-			this.runtimeAdapter,
-		);
 
 		this.store.append({
 			actor_id: "runtime",
@@ -539,7 +528,6 @@ export class EventSourcedRuntime {
 	 */
 	dispose(): void {
 		this.sessionManager?.dispose();
-		this.intentExecutor.dispose();
 		if (this.ownsStore) {
 			(this.store as { close?: () => void }).close?.();
 		}

@@ -151,7 +151,11 @@ describe("createSessionFacade", () => {
 		expect(facade.tools.map((tool) => tool.name)).toContain("custom_echo");
 		expect(facade.systemPrompt).toContain("custom_echo");
 
-		const result = await runtime.intentExecutor.executeDirect("custom_echo", { text: "hello" });
+		const result = await runtime.runtimeAdapter.executeTool({
+			tool_call_id: "test_direct",
+			tool_name: "custom_echo",
+			arguments: { text: "hello" },
+		});
 		expect(result.is_error).toBe(false);
 		expect(result.content[0]).toMatchObject({ type: "text", text: "echo:hello" });
 		expect(sawEventBackedContext).toBe(true);
