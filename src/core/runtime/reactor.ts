@@ -47,6 +47,7 @@ import type { LLMChunk, LLMClient, LLMResponse, ToolDefinition } from "./llm-typ
 import type { RuntimeAdapter } from "./types.js";
 import { extractToolCalls } from "../projection/event-to-message.js";
 import type { SessionProjection } from "../projection/session-projection.js";
+import type { SessionManager } from "../projection/session-manager.js";
 import type { CompactionPolicy, RetryPolicy } from "./policies.js";
 import { DefaultRetryPolicy, NoopCompactionPolicy } from "./policies.js";
 // ============================================================================
@@ -73,6 +74,8 @@ export interface ReactorConfig {
 	retryAssistantErrorCompletions?: boolean;
 	/** Compaction policy (default: NoopCompactionPolicy). */
 	compactionPolicy?: CompactionPolicy;
+	/** SessionManager for refreshing projection after session splits. */
+	sessionManager?: SessionManager;
 }
 
 /** A single event handler. Returns void or void Promise. */
@@ -82,6 +85,14 @@ export type EventHandler = (event: EventBase) => void | Promise<void>;
 export type EventHandlerMap = Partial<Record<EventType, EventHandler>>;
 
 type RetryScheduleResult = "scheduled" | "not_retryable" | "max_attempts" | "backoff_exhausted";
+
+/**
+ * Safety limit: if the model calls the exact same set of tools (by name) in this
+ * many consecutive turns, the reactor assumes it is stuck in an unproductive loop
+ * and completes the turn instead of requesting another. Prevents runaway loops
+ * (e.g. a model repeatedly calling a control tool like session_split).
+ */
+const MAX_CONSECUTIVE_IDENTICAL_TOOL_ROUNDS = 6;
 
 // ============================================================================
 // Tool Call Tracking (join-pattern for parallel tool execution)
@@ -124,6 +135,8 @@ export class Reactor {
 	}>();
 	/** Set when abort() is called with no new content — next turn completion should discard queued follow-ups. */
 	private _abortedByUser = false;
+	/** Tool names called in each consecutive tool-use round within the current prompt cycle. */
+	private _toolRoundSignatures: string[][] = [];
 	constructor(config: ReactorConfig) {
 		this.config = config;
 		this.retryPolicy = config.retryPolicy ?? new DefaultRetryPolicy();
@@ -263,6 +276,7 @@ export class Reactor {
 			USER_APPROVAL: this._onUserApproval.bind(this),
 			USER_REJECTION: this._onUserRejection.bind(this),
 			COMPACTION_REQUESTED: this._onCompactionRequested.bind(this),
+			SESSION_BOUNDARY_INFERRED: this._onSessionBoundaryInferred.bind(this),
 		};
 	}
 
@@ -340,6 +354,9 @@ export class Reactor {
 	private async _onUserMessage(event: EventBase): Promise<void> {
 		const payload = event.payload as { content: unknown; images?: unknown };
 		if (this._shouldInterrupt()) return;
+
+		// Reset loop detection for a new prompt cycle
+		this._toolRoundSignatures = [];
 
 		// Emit thinking start
 		this._emit({
@@ -593,6 +610,10 @@ export class Reactor {
 			abortSignal: this.abortController?.signal,
 		};
 		this.turnTrackers.set(event.event_id, tracker);
+
+		// Record the sorted tool-name signature for loop detection
+		const signature = toolCalls.map((tc) => tc.name).sort();
+		this._toolRoundSignatures.push(signature);
 
 		// Emit one INTENT_TOOL_CALL per tool call
 		for (const toolCall of toolCalls) {
@@ -856,6 +877,19 @@ export class Reactor {
 			caused_by: event.event_id,
 		});
 
+		// Loop detection: if the model has called the exact same set of tools
+		// (by name) in too many consecutive rounds, break the loop by completing
+		// the turn instead of requesting another LLM round.
+		if (this._isInToolLoop()) {
+			this._emit({
+				actor_id: "coder_agent",
+				type: "AGENT_TURN_COMPLETED",
+				payload: { reason: "loop_detected" },
+				caused_by: event.event_id,
+			});
+			return;
+		}
+
 		// Kick off the next turn with the tool results
 		this._emit({
 			actor_id: "coder_agent",
@@ -863,6 +897,35 @@ export class Reactor {
 			payload: { reason: "tool_results" },
 			caused_by: event.event_id,
 		});
+	}
+
+	// ─── SESSION_BOUNDARY_INFERRED ──────────────────────────────────────────
+
+	/**
+	 * When a session split occurs, refresh the projection to point to the new
+	 * session. The new session's start_event_id is set to the current USER_MESSAGE,
+	 * so buildContext() will include the user's request + tool results but exclude
+	 * old conversation history. This lets the model continue working in the same
+	 * turn with a clean context.
+	 */
+	private _onSessionBoundaryInferred(_event: EventBase): void {
+		if (!this.config.sessionManager) return;
+		const newProjection = this.config.sessionManager.getActiveSession();
+		if (newProjection) {
+			this.config.projection = newProjection;
+		}
+	}
+
+	/**
+	 * Check whether the model is stuck in a loop — calling the exact same set
+	 * of tool names in too many consecutive rounds.
+	 */
+	private _isInToolLoop(): boolean {
+		const sigs = this._toolRoundSignatures;
+		if (sigs.length < MAX_CONSECUTIVE_IDENTICAL_TOOL_ROUNDS) return false;
+		const recent = sigs.slice(-MAX_CONSECUTIVE_IDENTICAL_TOOL_ROUNDS);
+		const first = recent[0]!.join(",");
+		return recent.every((sig) => sig.join(",") === first);
 	}
 
 	// ─── AGENT_TURN_COMPLETED ───────────────────────────────────────────────

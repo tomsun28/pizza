@@ -2946,6 +2946,16 @@ export class InteractiveMode {
 				this.ui.requestRender();
 				break;
 			}
+
+			case "session_split": {
+				this.chatContainer.addChild(new Spacer(1));
+				const reasonLabel = event.reason.replace(/_/g, " ");
+				const separator = `── Session split: ${reasonLabel} ──`;
+				this.chatContainer.addChild(new Text(theme.fg("accent", separator), 1, 0));
+				this.chatContainer.addChild(new Spacer(1));
+				this.ui.requestRender();
+				break;
+			}
 		}
 	}
 	/** Extract text content from a user message */

@@ -42,6 +42,7 @@ import { SettingsManager } from "./settings-manager.js";
 import { createSyntheticSourceInfo } from "./source-info.js";
 import { buildSystemPrompt } from "./system-prompt.js";
 import { allToolNames, createToolDefinition, DEFAULT_LLM_TOOLS, type ToolName } from "./tools/index.js";
+import { createSessionSplitToolDefinition } from "./tools/session-split.js";
 import { wrapToolDefinitions } from "./tools/tool-definition-wrapper.js";
 
 export interface CreateSessionFacadeOptions {
@@ -289,6 +290,7 @@ export async function createSessionFacade(
 		store,
 		projection,
 		cwd,
+		sessionManager,
 	});
 	const extensionsResult = resourceLoader.getExtensions();
 	const extensionRunner = new ExtensionRunner(
@@ -338,6 +340,11 @@ export async function createSessionFacade(
 			definitions.set(definition.name, definition);
 			sources.set(definition.name, createSyntheticSourceInfo(`<sdk:${definition.name}>`, { source: "sdk" }));
 		}
+
+		// Always include the session_split tool
+		const sessionSplitDef = createSessionSplitToolDefinition();
+		definitions.set(sessionSplitDef.name, sessionSplitDef as unknown as ExtensionToolDefinition);
+		sources.set(sessionSplitDef.name, createSyntheticSourceInfo(`<builtin:${sessionSplitDef.name}>`, { source: "builtin" }));
 
 		availableToolDefinitions = Array.from(definitions.values());
 		availableToolSources = sources;

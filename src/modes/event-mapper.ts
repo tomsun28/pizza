@@ -49,7 +49,8 @@ export type ModeEvent =
 	  }
 	| { type: "thinking_level_changed"; eventId: string; level: string; previousLevel?: string }
 	| { type: "runtime_error"; eventId: string; error: string; stack?: string }
-	| { type: "agent_error"; eventId: string; error: string; stack?: string; retryable?: boolean };
+	| { type: "agent_error"; eventId: string; error: string; stack?: string; retryable?: boolean }
+	| { type: "session_split"; eventId: string; reason: string; newSessionId: string; name?: string };
 
 export function mapTypedEventToModeEvents(event: EventBase): ModeEvent[] {
 	const actions: ModeEvent[] = [];
@@ -237,6 +238,16 @@ export function mapTypedEventToModeEvents(event: EventBase): ModeEvent[] {
 				error: payload.error,
 				stack: payload.stack,
 				retryable: payload.retryable,
+			});
+			break;
+		}
+		case "SESSION_BOUNDARY_INFERRED": {
+			const payload = event.payload as { reason: string; new_session_id: string };
+			actions.push({
+				type: "session_split",
+				eventId: event.event_id,
+				reason: payload.reason,
+				newSessionId: payload.new_session_id,
 			});
 			break;
 		}

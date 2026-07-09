@@ -11,6 +11,7 @@ import type { EventStore, SubscribeOptions } from "../event-store/store.js";
 import { eventToMessage } from "../projection/event-to-message.js";
 import type { BuildContextOptions, BuiltContext } from "../projection/types.js";
 import type { SessionProjection } from "../projection/session-projection.js";
+import type { SessionManager as ProjectionSessionManager } from "../projection/session-manager.js";
 import type {
 	BranchSummaryEntry,
 	CompactionEntry,
@@ -32,6 +33,8 @@ export interface ExtensionSessionManager extends ReadonlySessionManager {
 	readonly projection?: SessionProjection;
 	buildContext?: (options?: BuildContextOptions) => BuiltContext;
 	subscribe?: (listener: (event: EventBase) => void, options?: SubscribeOptions) => () => void;
+	/** Split the current session, starting a new one from the current position. */
+	splitSession?: (reason?: string, name?: string) => { session_id: string; already_split?: boolean } | undefined;
 }
 
 export interface EventStoreExtensionSessionManagerOptions {
@@ -40,6 +43,8 @@ export interface EventStoreExtensionSessionManagerOptions {
 	cwd: string;
 	sessionDir?: string;
 	sessionFile?: string;
+	/** The projection SessionManager for mutation operations (e.g. splitSession). */
+	sessionManager?: ProjectionSessionManager;
 }
 
 export class EventStoreExtensionSessionManager implements ExtensionSessionManager {
@@ -48,14 +53,71 @@ export class EventStoreExtensionSessionManager implements ExtensionSessionManage
 	private cwd: string;
 	private sessionDir: string;
 	private sessionFile: string;
+	private sessionManager: ProjectionSessionManager | undefined;
 
 	constructor(options: EventStoreExtensionSessionManagerOptions) {
 		this.eventStore = options.store;
 		this.projection = options.projection;
 		this.cwd = options.cwd;
+		this.sessionManager = options.sessionManager;
 		const descriptor = options.projection.getDescriptor();
 		this.sessionDir = options.sessionDir ?? options.cwd;
 		this.sessionFile = options.sessionFile ?? `event-session:${descriptor.session_id}`;
+	}
+
+	splitSession(reason?: string, name?: string): { session_id: string; already_split?: boolean } | undefined {
+		if (!this.sessionManager) return undefined;
+
+		// Guard against redundant splits. If the most recent boundary event
+		// came after the most recent USER_MESSAGE, the session was just split
+		// (e.g. by a previous split within the same turn). Splitting again
+		// would only produce empty sessions and can cause the model to loop.
+		const recentUserMessages = this.eventStore.query({
+			reverse: true,
+			types: ["USER_MESSAGE"],
+		});
+		const recentBoundaries = this.eventStore.query({
+			reverse: true,
+			types: ["SESSION_BOUNDARY_INFERRED"],
+		});
+		const lastUserMsgSeq = recentUserMessages[0]?.sequence;
+		const lastBoundarySeq = recentBoundaries[0]?.sequence;
+		if (lastBoundarySeq !== undefined && lastUserMsgSeq !== undefined && lastBoundarySeq > lastUserMsgSeq) {
+			const activeId = this.sessionManager.getActiveSessionId();
+			return { session_id: activeId!, already_split: true };
+		}
+
+		// Find the most recent USER_MESSAGE — the new session should start from
+		// there so the model retains the current user request in context.
+		// query({ after }) is exclusive (sequence > ?), so we need the event
+		// immediately BEFORE the USER_MESSAGE as startEventId.
+		const userMessageId = recentUserMessages[0]?.event_id;
+		let startEventId: string | undefined;
+		if (userMessageId) {
+			const beforeUserMessage = this.eventStore.query({
+				before: userMessageId,
+				reverse: true,
+				limit: 1,
+			});
+			// If there's an event before USER_MESSAGE, use it as the exclusive
+			// start boundary. If USER_MESSAGE is the first event, use "ORIGIN"
+			// so the query includes everything from the beginning.
+			startEventId = beforeUserMessage[0]?.event_id ?? "ORIGIN";
+		}
+
+		const desc = this.sessionManager.createSession("auto_inferred", name, {
+			startEventId,
+		});
+		this.eventStore.append({
+			actor_id: "runtime",
+			type: "SESSION_BOUNDARY_INFERRED",
+			payload: {
+				reason: reason ?? "intent_shift",
+				new_session_id: desc.session_id,
+			},
+			thread_id: desc.thread_id,
+		});
+		return { session_id: desc.session_id };
 	}
 
 	getCwd(): string {

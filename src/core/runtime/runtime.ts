@@ -178,7 +178,8 @@ export class EventSourcedRuntime {
 						...this.config.compactionEngineSettings,
 					},
 				}),
-			});
+			sessionManager: this.sessionManager,
+		});
 
 			await this.reactor.start();
 
