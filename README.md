@@ -6,7 +6,7 @@ Pizza is an event-driven agent. Every conversation, tool call, and file edit is 
 
 ## About It
 
-Pizza is named after Pi -> Pizza. Thanks to Pi for open sourcing.
+Pizza’s shell comes from Pi -> Pizza. Thanks to Pi for open sourcing.
 
 - **Reactor-driven turn cycle**
   Unlike `Pi, Claude Code, and Codex`, Pizza does not run the agent loop as a brittle `while true` loop. Each turn is a state machine driven by an event-handler table. The result: interrupts, retries, parallel tool calls, and mid-turn failures can all be handled reliably.
