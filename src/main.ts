@@ -514,6 +514,7 @@ export async function main(args: string[], options?: MainOptions) {
 			sessionIndexPath: parsed.noSession ? ":memory:" : undefined,
 			workspaceId: target.workspaceId,
 			sessionId: target.sessionId,
+			isContinuing: parsed.continue ?? target.hasExistingSession,
 			forkFrom: target.forkFrom
 				? {
 						...target.forkFrom,
@@ -569,6 +570,7 @@ export async function main(args: string[], options?: MainOptions) {
 			sessionIndexPath: parsed.noSession ? ":memory:" : undefined,
 			workspaceId: target.workspaceId,
 			sessionId: target.sessionId,
+			isContinuing: parsed.continue ?? target.hasExistingSession,
 			forkFrom: target.forkFrom
 				? {
 						...target.forkFrom,
@@ -650,6 +652,7 @@ export async function main(args: string[], options?: MainOptions) {
 			sessionIndexPath: parsed.noSession ? ":memory:" : undefined,
 			workspaceId: target.workspaceId,
 			sessionId: target.sessionId,
+			isContinuing: parsed.continue ?? target.hasExistingSession,
 			forkFrom: target.forkFrom
 				? {
 						...target.forkFrom,
@@ -719,6 +722,7 @@ export async function main(args: string[], options?: MainOptions) {
 		sessionIndexPath: parsed.noSession ? ":memory:" : undefined,
 		workspaceId: target.workspaceId,
 		sessionId: target.sessionId,
+		isContinuing: parsed.continue ?? target.hasExistingSession,
 		forkFrom: target.forkFrom
 			? {
 					...target.forkFrom,

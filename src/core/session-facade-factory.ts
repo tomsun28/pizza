@@ -89,6 +89,8 @@ export interface CreateSessionFacadeOptions {
 		sessionId: string;
 		agentDir?: string;
 	};
+	/** Whether this is a continuation of an existing session (affects model selection). */
+	isContinuing?: boolean;
 	/** Context token budget. Default: model.contextWindow ?? 128000. */
 	contextBudget?: number;
 }
@@ -247,7 +249,7 @@ export async function createSessionFacade(
 	if (!model) {
 		const resolved = await findInitialModel({
 			scopedModels: [],
-			isContinuing: false,
+			isContinuing: options.isContinuing ?? false,
 			defaultProvider: settingsManager.getDefaultProvider(),
 			defaultModelId: settingsManager.getDefaultModel(),
 			defaultThinkingLevel: settingsManager.getDefaultThinkingLevel(),

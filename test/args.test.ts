@@ -253,6 +253,14 @@ describe("parseArgs", () => {
 		});
 	});
 
+	describe("--continue flag", () => {
+		test("parses --continue flag", () => {
+			const result = parseArgs(["--continue", "What did we discuss?"]);
+			expect(result.continue).toBe(true);
+			expect(result.messages).toEqual(["What did we discuss?"]);
+		});
+	});
+
 	describe("--no-tools flag", () => {
 		test("parses --no-tools flag", () => {
 			const result = parseArgs(["--no-tools"]);

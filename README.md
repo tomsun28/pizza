@@ -18,7 +18,7 @@ Pizza’s shell comes from Pi -> Pizza. Thanks to Pi for open sourcing.
   JSON is program-friendly at the API level but not model-friendly. Pizza aggressively gives the model only one tool: the `CLI Tool`. The model uses it to call `read`, `write`, `edit`, and other command-line commands. Surprisingly, it performs better and is more stable.
 
 - **Why New Session**
-  In Pizza, you do not need to manually create a new session. Think of it as a long-term task for a friend you can chat with for ten years. A friend will manage their own context — not through compression.
+  In Pizza, you do not need to manually create a new session. Think of it as a long-term task for a friend you can chat with for ten years. A friend will manage their own context.
 
 - **All interfaces share the same runtime**
   The interactive TUI, JSON-RPC server, and one-shot print mode all consume the same `SessionFacade` event stream. Script it, embed it, or chat with it directly in the terminal — it is the same agent.
