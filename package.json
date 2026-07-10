@@ -1,6 +1,6 @@
 {
 	"name": "pizza",
-	"version": "0.0.1",
+	"version": "0.0.2",
 	"description": "Pizza - Coding agent CLI",
 	"type": "module",
 	"pizzaConfig": {
