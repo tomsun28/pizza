@@ -7,7 +7,7 @@
 
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
-import { type ImageContent, modelsAreEqual, supportsXhigh } from "@mariozechner/pi-ai";
+import { type ImageContent, supportsXhigh } from "@mariozechner/pi-ai";
 import chalk from "chalk";
 import { type Args, type Mode, parseArgs, printHelp } from "./cli/args.js";
 import { processFileArguments } from "./cli/file-processor.js";
@@ -23,7 +23,7 @@ import { AuthStorage } from "./core/auth-storage.js";
 import { exportFromFile } from "./core/export-html/index.js";
 import type { ExtensionFactory } from "./core/extensions/types.js";
 import type { ModelRegistry } from "./core/model-registry.js";
-import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.js";
+import { resolveCliModel } from "./core/model-resolver.js";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.js";
 import type { CreateSessionFacadeOptions } from "./core/session-facade-factory.js";
 import { createSessionFacade, type CreateSessionFacadeResult } from "./core/session-facade-factory.js";
@@ -178,7 +178,6 @@ async function promptConfirm(message: string): Promise<boolean> {
 
 function buildSessionOptions(
 	parsed: Args,
-	scopedModels: ScopedModel[],
 	hasExistingSession: boolean,
 	modelRegistry: ModelRegistry,
 	settingsManager: SettingsManager,
@@ -217,29 +216,7 @@ function buildSessionOptions(
 		}
 	}
 
-	if (!options.model && scopedModels.length > 0 && !hasExistingSession) {
-		// Check if saved default is in scoped models - use it if so, otherwise first scoped model
-		const savedProvider = settingsManager.getDefaultProvider();
-		const savedModelId = settingsManager.getDefaultModel();
-		const savedModel = savedProvider && savedModelId ? modelRegistry.find(savedProvider, savedModelId) : undefined;
-		const savedInScope = savedModel ? scopedModels.find((sm) => modelsAreEqual(sm.model, savedModel)) : undefined;
-
-		if (savedInScope) {
-			options.model = savedInScope.model;
-			// Use thinking level from scoped model config if explicitly set
-			if (!parsed.thinking && savedInScope.thinkingLevel) {
-				options.thinkingLevel = savedInScope.thinkingLevel;
-			}
-		} else {
-			options.model = scopedModels[0].model;
-			// Use thinking level from first scoped model if explicitly set
-			if (!parsed.thinking && scopedModels[0].thinkingLevel) {
-				options.thinkingLevel = scopedModels[0].thinkingLevel;
-			}
-		}
-	}
-
-	// Thinking level from CLI (takes precedence over scoped model thinking levels set above)
+	// Thinking level from CLI (takes precedence over any model-level thinking)
 	if (parsed.thinking) {
 		options.thinkingLevel = parsed.thinking;
 	}
@@ -274,7 +251,6 @@ interface CliSessionSetup {
 	services: SessionServices;
 	diagnostics: SessionDiagnostic[];
 	sessionOptions: CreateSessionFacadeOptions;
-	scopedModels: ScopedModel[];
 	cliThinkingFromModel: boolean;
 }
 
@@ -329,16 +305,12 @@ async function createCliSessionSetup(options: {
 		})),
 	];
 
-	const modelPatterns = parsed.models ?? settingsManager.getEnabledModels();
-	const scopedModels =
-		modelPatterns && modelPatterns.length > 0 ? await resolveModelScope(modelPatterns, modelRegistry) : [];
 	const {
 		options: sessionOptions,
 		cliThinkingFromModel,
 		diagnostics: sessionOptionDiagnostics,
 	} = buildSessionOptions(
 		parsed,
-		scopedModels,
 		hasExistingSession,
 		modelRegistry,
 		settingsManager,
@@ -356,7 +328,7 @@ async function createCliSessionSetup(options: {
 		}
 	}
 
-	return { services, diagnostics, sessionOptions, scopedModels, cliThinkingFromModel };
+	return { services, diagnostics, sessionOptions, cliThinkingFromModel };
 }
 
 function applyCliThinkingClampToFacade(created: CreateSessionFacadeResult, cliThinkingOverride: boolean): void {
@@ -496,7 +468,7 @@ export async function main(args: string[], options?: MainOptions) {
 		extensionFactories: options?.extensionFactories,
 		hasExistingSession: target.hasExistingSession,
 	});
-	const { services, sessionOptions, cliThinkingFromModel, scopedModels: setupScopedModels } = setup;
+	const { services, sessionOptions, cliThinkingFromModel } = setup;
 	const { settingsManager, modelRegistry, resourceLoader } = services;
 
 	if (parsed.help) {
@@ -621,19 +593,8 @@ export async function main(args: string[], options?: MainOptions) {
 		);
 		time("prepareInitialMessage");
 
-		const scopedModelsList = setupScopedModels ?? [];
-		if (scopedModelsList.length > 0 && (parsed.verbose || !settingsManager.getQuietStartup())) {
-			const modelList = scopedModelsList
-				.map((sm) => {
-					const thinkingStr = sm.thinkingLevel ? `:${sm.thinkingLevel}` : "";
-					return `${sm.model.id}${thinkingStr}`;
-				})
-				.join(", ");
-			console.log(chalk.dim(`Model scope: ${modelList} ${chalk.gray("(Ctrl+P to cycle)")}`));
-		}
-
 		const startupBenchmark = isTruthyEnvFlag(process.env.PIZZA_STARTUP_BENCHMARK);
-		const interactiveMode = InteractiveMode.fromFacade(created, scopedModelsList, {
+		const interactiveMode = InteractiveMode.fromFacade(created, {
 			modelFallbackMessage: created.modelFallbackMessage,
 			initialMessage,
 			initialImages,

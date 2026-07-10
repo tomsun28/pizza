@@ -65,7 +65,7 @@ import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.js";
 import { computeMessageStats } from "../../core/session-stats.js";
 import { createCompactionSummaryMessage } from "../../core/messages.js";
-import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.js";
+import { defaultModelPerProvider, findExactModelReferenceMatch } from "../../core/model-resolver.js";
 import { DefaultPackageManager } from "../../core/package-manager.js";
 import { GoalProjection } from "../../core/projection/goal-projection.js";
 import { buildRecentTaskHistory, TASK_HISTORY_EVENT_TYPES } from "../../core/projection/task-history.js";
@@ -102,7 +102,6 @@ import { keyText } from "./components/keybinding-hints.js";
 import { LoginDialogComponent } from "./components/login-dialog.js";
 import { ModelSelectorComponent } from "./components/model-selector.js";
 import { OAuthSelectorComponent } from "./components/oauth-selector.js";
-import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.js";
 import { SettingsSelectorComponent } from "./components/settings-selector.js";
 import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.js";
 import { ToolExecutionComponent } from "./components/tool-execution.js";
@@ -192,7 +191,6 @@ export class InteractiveMode {
 	private facade!: SessionFacade;
 	private facadeResult?: CreateSessionFacadeResult;
 	private options: InteractiveModeOptions = {};
-	private scopedModels: Array<{ model: Model<any>; thinkingLevel?: string }> = [];
 	// State tracked from event stream (facade mode)
 	private _isStreaming = false;
 	private _isCompacting = false;
@@ -305,10 +303,6 @@ export class InteractiveMode {
 		return this.settingsManager.getCompactionEnabled();
 	}
 
-	private get currentScopedModels(): readonly { model: Model<any>; thinkingLevel?: string }[] {
-		return this.scopedModels;
-	}
-
 	private get promptTemplatesValue() {
 		return this.facade.resourceLoader?.getPrompts().prompts ?? [];
 	}
@@ -379,16 +373,10 @@ export class InteractiveMode {
 	private setAutoCompactionEnabledFacade(enabled: boolean): void {
 		this.settingsManager.setCompactionEnabled(enabled);
 	}
-	private setScopedModelsFacade(scopedModels: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>): void {
-		this.scopedModels = scopedModels;
-	}
 	private async cycleModelFacade(direction: "forward" | "backward"): Promise<any> {
-		const models = this.currentScopedModels.length > 0
-			? this.currentScopedModels.map((s) => s.model)
-			: this.modelRegistryValue.getAvailable();
+		const models = this.modelRegistryValue.getAvailable();
 		if (models.length <= 1) {
-			const msg = this.currentScopedModels.length > 0 ? "Only one model in scope" : "Only one model available";
-			return { success: false as const, message: msg };
+			return { success: false as const, message: "Only one model available" };
 		}
 		const currentId = this.facade.model.model_id;
 		const currentIndex = models.findIndex((m: any) => m.id === currentId);
@@ -507,14 +495,12 @@ export class InteractiveMode {
 	 */
 	static fromFacade(
 		facadeResult: CreateSessionFacadeResult,
-		scopedModels: Array<{ model: Model<any>; thinkingLevel?: string }> = [],
 		options: InteractiveModeOptions = {},
 	): InteractiveMode {
 		const mode = Object.create(InteractiveMode.prototype) as InteractiveMode;
 		mode.facade = facadeResult.facade;
 		mode.facadeResult = facadeResult;
 		mode.options = options;
-		mode.scopedModels = scopedModels;
 		mode._isStreaming = false;
 		mode._isCompacting = false;
 		mode._retryAttempt = 0;
@@ -545,7 +531,6 @@ export class InteractiveMode {
 		this.pendingBashComponents ??= [];
 		this.signalCleanupHandlers ??= [];
 		this.compactionQueuedMessages ??= [];
-		this.scopedModels ??= [];
 		this.keybindings = KeybindingsManager.create();
 		setKeybindings(this.keybindings);
 		const editorPaddingX = settingsMgr.getEditorPaddingX();
@@ -669,11 +654,7 @@ export class InteractiveMode {
 		const modelCommand = slashCommands.find((command) => command.name === "model");
 		if (modelCommand) {
 			modelCommand.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null => {
-				// Get available models (scoped or from registry)
-				const models =
-					this.currentScopedModels.length > 0
-						? this.currentScopedModels.map((s) => s.model)
-						: this.modelRegistryValue.getAvailable();
+				const models = this.modelRegistryValue.getAvailable();
 
 				if (models.length === 0) return null;
 
@@ -2449,11 +2430,6 @@ export class InteractiveMode {
 				this.editor.setText("");
 				return;
 			}
-			if (text === "/scoped-models") {
-				this.editor.setText("");
-				await this.showModelsSelector();
-				return;
-			}
 			if (text === "/model" || text.startsWith("/model ")) {
 				const searchTerm = text.startsWith("/model ") ? text.slice(7).trim() : undefined;
 				this.editor.setText("");
@@ -3371,8 +3347,7 @@ export class InteractiveMode {
 		try {
 			const result = await this.cycleModelFacade(direction);
 			if (result === undefined) {
-				const msg = this.currentScopedModels.length > 0 ? "Only one model in scope" : "Only one model available";
-				this.showStatus(msg);
+				this.showStatus("Only one model available");
 			} else {
 				this.footer.invalidate();
 				this.updateEditorBorderColor();
@@ -3857,10 +3832,6 @@ export class InteractiveMode {
 	}
 
 	private async getModelCandidates(): Promise<Model<any>[]> {
-		if (this.currentScopedModels.length > 0) {
-			return this.currentScopedModels.map((scoped) => scoped.model);
-		}
-
 		this.modelRegistryValue.refresh();
 		try {
 			return await this.modelRegistryValue.getAvailable();
@@ -3912,7 +3883,6 @@ export class InteractiveMode {
 				this.currentModel,
 				this.settingsManager,
 				this.modelRegistryValue,
-				this.currentScopedModels,
 				async (model) => {
 					try {
 						await this.setModelFacade(model);
@@ -3932,83 +3902,6 @@ export class InteractiveMode {
 					this.ui.requestRender();
 				},
 				initialSearchInput,
-			);
-			return { component: selector, focus: selector };
-		});
-	}
-
-	private async showModelsSelector(): Promise<void> {
-		// Get all available models
-		this.modelRegistryValue.refresh();
-		const allModels = this.modelRegistryValue.getAvailable();
-
-		if (allModels.length === 0) {
-			this.showStatus("No models available");
-			return;
-		}
-
-		// Check if session has scoped models (from previous session-only changes or CLI --models)
-		const sessionScopedModels = this.currentScopedModels;
-		const hasSessionScope = sessionScopedModels.length > 0;
-
-		// Build enabled model IDs from session state or settings
-		let currentEnabledIds: string[] | null = null;
-
-		if (hasSessionScope) {
-			// Use current session's scoped models
-			currentEnabledIds = sessionScopedModels.map((scoped) => `${scoped.model.provider}/${scoped.model.id}`);
-		} else {
-			// Fall back to settings
-			const patterns = this.settingsManager.getEnabledModels();
-			if (patterns !== undefined && patterns.length > 0) {
-				const scopedModels = await resolveModelScope(patterns, this.modelRegistryValue);
-				currentEnabledIds = scopedModels.map((scoped) => `${scoped.model.provider}/${scoped.model.id}`);
-			}
-		}
-
-		// Helper to update session's scoped models (session-only, no persist)
-		const updateSessionModels = async (enabledIds: string[] | null) => {
-			currentEnabledIds = enabledIds === null ? null : [...enabledIds];
-			if (enabledIds && enabledIds.length > 0 && enabledIds.length < allModels.length) {
-				const newScopedModels = await resolveModelScope(enabledIds, this.modelRegistryValue);
-				this.setScopedModelsFacade(
-					newScopedModels.map((sm) => ({
-						model: sm.model,
-						thinkingLevel: sm.thinkingLevel,
-					})),
-				);
-			} else {
-				// All enabled or none enabled = no filter
-				this.setScopedModelsFacade([]);
-			}
-			await this.updateAvailableProviderCount();
-			this.ui.requestRender();
-		};
-
-		this.showSelector((done) => {
-			const selector = new ScopedModelsSelectorComponent(
-				{
-					allModels,
-					enabledModelIds: currentEnabledIds,
-				},
-				{
-					onChange: async (enabledIds) => {
-						await updateSessionModels(enabledIds);
-					},
-					onPersist: (enabledIds) => {
-						// Persist to settings
-						const newPatterns =
-							enabledIds === null || enabledIds.length === allModels.length
-								? undefined // All enabled = clear filter
-								: enabledIds;
-						this.settingsManager.setEnabledModels(newPatterns ? [...newPatterns] : undefined);
-						this.showStatus("Model selection saved to settings");
-					},
-					onCancel: () => {
-						done();
-						this.ui.requestRender();
-					},
-				},
 			);
 			return { component: selector, focus: selector };
 		});

@@ -13,20 +13,12 @@ import type { ModelRegistry } from "../../../core/model-registry.js";
 import type { SettingsManager } from "../../../core/settings-manager.js";
 import { theme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
-import { keyHint } from "./keybinding-hints.js";
 
 interface ModelItem {
 	provider: string;
 	id: string;
 	model: Model<any>;
 }
-
-interface ScopedModelItem {
-	model: Model<any>;
-	thinkingLevel?: string;
-}
-
-type ModelScope = "all" | "scoped";
 
 /**
  * Component that renders a model selector with search
@@ -45,8 +37,6 @@ export class ModelSelectorComponent extends Container implements Focusable {
 	}
 	private listContainer: Container;
 	private allModels: ModelItem[] = [];
-	private scopedModelItems: ModelItem[] = [];
-	private activeModels: ModelItem[] = [];
 	private filteredModels: ModelItem[] = [];
 	private selectedIndex: number = 0;
 	private currentModel?: Model<any>;
@@ -56,17 +46,12 @@ export class ModelSelectorComponent extends Container implements Focusable {
 	private onCancelCallback: () => void;
 	private errorMessage?: string;
 	private tui: TUI;
-	private scopedModels: ReadonlyArray<ScopedModelItem>;
-	private scope: ModelScope = "all";
-	private scopeText?: Text;
-	private scopeHintText?: Text;
 
 	constructor(
 		tui: TUI,
 		currentModel: Model<any> | undefined,
 		settingsManager: SettingsManager,
 		modelRegistry: ModelRegistry,
-		scopedModels: ReadonlyArray<ScopedModelItem>,
 		onSelect: (model: Model<any>) => void,
 		onCancel: () => void,
 		initialSearchInput?: string,
@@ -77,8 +62,6 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		this.currentModel = currentModel;
 		this.settingsManager = settingsManager;
 		this.modelRegistry = modelRegistry;
-		this.scopedModels = scopedModels;
-		this.scope = scopedModels.length > 0 ? "scoped" : "all";
 		this.onSelectCallback = onSelect;
 		this.onCancelCallback = onCancel;
 
@@ -87,15 +70,8 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		this.addChild(new Spacer(1));
 
 		// Add hint about model filtering
-		if (scopedModels.length > 0) {
-			this.scopeText = new Text(this.getScopeText(), 0, 0);
-			this.addChild(this.scopeText);
-			this.scopeHintText = new Text(this.getScopeHintText(), 0, 0);
-			this.addChild(this.scopeHintText);
-		} else {
-			const hintText = "Only showing models with configured API keys (see README for details)";
-			this.addChild(new Text(theme.fg("warning", hintText), 0, 0));
-		}
+		const hintText = "Only showing models with configured API keys (see README for details)";
+		this.addChild(new Text(theme.fg("warning", hintText), 0, 0));
 		this.addChild(new Spacer(1));
 
 		// Create search input
@@ -156,25 +132,13 @@ export class ModelSelectorComponent extends Container implements Focusable {
 			}));
 		} catch (error) {
 			this.allModels = [];
-			this.scopedModelItems = [];
-			this.activeModels = [];
 			this.filteredModels = [];
 			this.errorMessage = error instanceof Error ? error.message : String(error);
 			return;
 		}
 
 		this.allModels = this.sortModels(models);
-		this.scopedModels = this.scopedModels.map((scoped) => {
-			const refreshed = this.modelRegistry.find(scoped.model.provider, scoped.model.id);
-			return refreshed ? { ...scoped, model: refreshed } : scoped;
-		});
-		this.scopedModelItems = this.scopedModels.map((scoped) => ({
-			provider: scoped.model.provider,
-			id: scoped.model.id,
-			model: scoped.model,
-		}));
-		this.activeModels = this.scope === "scoped" ? this.scopedModelItems : this.allModels;
-		this.filteredModels = this.activeModels;
+		this.filteredModels = this.allModels;
 		const currentIndex = this.filteredModels.findIndex((item) => modelsAreEqual(this.currentModel, item.model));
 		this.selectedIndex =
 			currentIndex >= 0 ? currentIndex : Math.min(this.selectedIndex, Math.max(0, this.filteredModels.length - 1));
@@ -193,36 +157,14 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		return sorted;
 	}
 
-	private getScopeText(): string {
-		const allText = this.scope === "all" ? theme.fg("accent", "all") : theme.fg("muted", "all");
-		const scopedText = this.scope === "scoped" ? theme.fg("accent", "scoped") : theme.fg("muted", "scoped");
-		return `${theme.fg("muted", "Scope: ")}${allText}${theme.fg("muted", " | ")}${scopedText}`;
-	}
-
-	private getScopeHintText(): string {
-		return keyHint("tui.input.tab", "scope") + theme.fg("muted", " (all/scoped)");
-	}
-
-	private setScope(scope: ModelScope): void {
-		if (this.scope === scope) return;
-		this.scope = scope;
-		this.activeModels = this.scope === "scoped" ? this.scopedModelItems : this.allModels;
-		const currentIndex = this.activeModels.findIndex((item) => modelsAreEqual(this.currentModel, item.model));
-		this.selectedIndex = currentIndex >= 0 ? currentIndex : 0;
-		this.filterModels(this.searchInput.getValue());
-		if (this.scopeText) {
-			this.scopeText.setText(this.getScopeText());
-		}
-	}
-
 	private filterModels(query: string): void {
 		this.filteredModels = query
 			? fuzzyFilter(
-					this.activeModels,
+					this.allModels,
 					query,
 					({ id, provider }) => `${id} ${provider} ${provider}/${id} ${provider} ${id}`,
 				)
-			: this.activeModels;
+			: this.allModels;
 		this.selectedIndex = Math.min(this.selectedIndex, Math.max(0, this.filteredModels.length - 1));
 		this.updateList();
 	}
@@ -286,16 +228,6 @@ export class ModelSelectorComponent extends Container implements Focusable {
 
 	handleInput(keyData: string): void {
 		const kb = getKeybindings();
-		if (kb.matches(keyData, "tui.input.tab")) {
-			if (this.scopedModelItems.length > 0) {
-				const nextScope: ModelScope = this.scope === "all" ? "scoped" : "all";
-				this.setScope(nextScope);
-				if (this.scopeHintText) {
-					this.scopeHintText.setText(this.getScopeHintText());
-				}
-			}
-			return;
-		}
 		// Up arrow - wrap to bottom when at top
 		if (kb.matches(keyData, "tui.select.up")) {
 			if (this.filteredModels.length === 0) return;
