@@ -13,6 +13,7 @@ const FD_DARWIN_X64_VERSION = "10.3.0";
 const RG_VERSION = "15.1.0";
 
 const outRoot = fileURLToPath(new URL("../dist/vendor/bin/", import.meta.url));
+const cacheRoot = fileURLToPath(new URL("../.vendor-tools/", import.meta.url));
 
 const targets = {
 	"darwin-arm64": {
@@ -212,18 +213,32 @@ async function installTool(targetName, toolName, asset) {
 	const tempDir = await mkdtemp(path.join(tmpdir(), `pizza-${toolName}-${targetName}-`));
 	try {
 		const archiveName = path.basename(new URL(asset.url).pathname);
-		const archivePath = path.join(tempDir, archiveName);
+		const cacheDir = path.join(cacheRoot, targetName);
+		const cachePath = path.join(cacheDir, archiveName);
 		const extractDir = path.join(tempDir, "extract");
 
-		console.log(`Downloading ${toolName} for ${targetName}`);
-		const archive = await download(asset.url);
-		const actualSha = sha256(archive);
-		if (actualSha !== asset.sha256) {
-			throw new Error(`${toolName} ${targetName} checksum mismatch: expected ${asset.sha256}, got ${actualSha}`);
+		let archive;
+		if (existsSync(cachePath)) {
+			console.log(`Using cached ${toolName} for ${targetName}`);
+			archive = await readFile(cachePath);
+			const actualSha = sha256(archive);
+			if (actualSha !== asset.sha256) {
+				console.log(`Cached ${toolName} ${targetName} checksum mismatch, re-downloading`);
+				archive = undefined;
+			}
+		}
+		if (!archive) {
+			console.log(`Downloading ${toolName} for ${targetName}`);
+			archive = await download(asset.url);
+			const actualSha = sha256(archive);
+			if (actualSha !== asset.sha256) {
+				throw new Error(`${toolName} ${targetName} checksum mismatch: expected ${asset.sha256}, got ${actualSha}`);
+			}
+			await mkdir(cacheDir, { recursive: true });
+			await writeFile(cachePath, archive);
 		}
 
-		await writeFile(archivePath, archive);
-		await extractArchive(archivePath, extractDir);
+		await extractArchive(cachePath, extractDir);
 
 		const binaryPath = await findBinary(extractDir, asset.binary);
 		if (!binaryPath) {

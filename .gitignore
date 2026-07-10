@@ -42,3 +42,6 @@ plans/
 .pizza/hf-sessions/
 .pizza/hf-sessions-backup/
 collect.sh
+
+# Downloaded vendor tool archives
+.vendor-tools/
