@@ -3,7 +3,7 @@ import { createWriteStream, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentTool } from "../agent/types.js";
-import { Container, Text, truncateToWidth, type Component } from "@mariozechner/pi-tui";
+import { Container, Text, truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import { type Static, Type } from "@sinclair/typebox";
 import { spawn } from "child_process";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";

@@ -5,7 +5,7 @@
  * Shows a chronological feed of all activity: messages, tool executions, file mutations, etc.
  */
 
-import { Container, Spacer, Text, type TUI } from "@mariozechner/pi-tui";
+import { Container, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
 import type { TimelineEntry } from "../../../core/projection/timeline-projection.js";
 import { theme } from "../theme/theme.js";
 

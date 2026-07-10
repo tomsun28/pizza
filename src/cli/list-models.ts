@@ -3,7 +3,7 @@
  */
 
 import type { Api, Model } from "@earendil-works/pi-ai/compat";
-import { fuzzyFilter } from "@mariozechner/pi-tui";
+import { fuzzyFilter } from "@earendil-works/pi-tui";
 import chalk from "chalk";
 import type { ModelRegistry } from "../core/model-registry.js";
 

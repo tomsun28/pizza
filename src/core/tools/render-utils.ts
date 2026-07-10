@@ -1,6 +1,6 @@
 import * as os from "node:os";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai/compat";
-import { getCapabilities, getImageDimensions, imageFallback } from "@mariozechner/pi-tui";
+import { getCapabilities, getImageDimensions, imageFallback } from "@earendil-works/pi-tui";
 import stripAnsi from "strip-ansi";
 import { sanitizeBinaryOutput } from "../../utils/shell.js";
 

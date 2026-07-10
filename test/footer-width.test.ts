@@ -1,4 +1,4 @@
-import { visibleWidth } from "@mariozechner/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { ReadonlyFooterDataProvider } from "../src/core/footer-data-provider.js";
 import type { FooterSessionInfo } from "../src/modes/interactive/components/footer.js";

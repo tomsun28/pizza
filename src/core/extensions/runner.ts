@@ -4,7 +4,7 @@
 
 import type { AgentMessage } from "../agent/types.js";
 import type { ImageContent, Model, TextContent, ToolResultMessage } from "@earendil-works/pi-ai/compat";
-import type { KeyId } from "@mariozechner/pi-tui";
+import type { KeyId } from "@earendil-works/pi-tui";
 import { type Theme, theme } from "../../modes/interactive/theme/theme.js";
 import type { ResourceDiagnostic } from "../diagnostics.js";
 import type { EventBase } from "../event-store/types.js";

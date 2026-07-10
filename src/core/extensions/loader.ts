@@ -12,8 +12,8 @@ import { fileURLToPath } from "node:url";
 import { createJiti } from "@mariozechner/jiti";
 import * as _bundledAi from "@earendil-works/pi-ai/compat";
 import * as _bundledAiOauth from "@earendil-works/pi-ai/oauth";
-import type { KeyId } from "@mariozechner/pi-tui";
-import * as _bundledTui from "@mariozechner/pi-tui";
+import type { KeyId } from "@earendil-works/pi-tui";
+import * as _bundledTui from "@earendil-works/pi-tui";
 // Static imports of packages that extensions may use.
 // These MUST be static so Bun bundles them into the compiled binary.
 // The virtualModules option then makes them available to extensions.
@@ -41,7 +41,7 @@ import type {
 /** Modules available to extensions via virtualModules (for compiled Bun binary) */
 const VIRTUAL_MODULES: Record<string, unknown> = {
 	"@sinclair/typebox": _bundledTypebox,
-	"@mariozechner/pi-tui": _bundledTui,
+	"@earendil-works/pi-tui": _bundledTui,
 	"@earendil-works/pi-ai": _bundledAi,
 	"@earendil-works/pi-ai/oauth": _bundledAiOauth,
 	pizza: _bundledPizza,
@@ -94,7 +94,7 @@ function getAliases(): Record<string, string> {
 
 	_aliases = {
 		pizza: packageIndex,
-		"@mariozechner/pi-tui": resolveWorkspaceOrImport("tui/dist/index.js", "@mariozechner/pi-tui"),
+		"@earendil-works/pi-tui": resolveWorkspaceOrImport("tui/dist/index.js", "@earendil-works/pi-tui"),
 		"@earendil-works/pi-ai": resolveWorkspaceOrImport("ai/dist/index.js", "@earendil-works/pi-ai"),
 		"@earendil-works/pi-ai/oauth": resolveWorkspaceOrImport("ai/dist/oauth.js", "@earendil-works/pi-ai/oauth"),
 		"@sinclair/typebox": typeboxRoot,

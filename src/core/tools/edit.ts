@@ -1,5 +1,5 @@
 import type { AgentTool } from "../agent/types.js";
-import { Box, Container, Spacer, Text } from "@mariozechner/pi-tui";
+import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "@sinclair/typebox";
 import { constants } from "fs";
 import { access as fsAccess, readFile as fsReadFile, writeFile as fsWriteFile } from "fs/promises";

@@ -1,5 +1,5 @@
 import { type Static, Type } from "@sinclair/typebox";
-import { Text } from "@mariozechner/pi-tui";
+import { Text } from "@earendil-works/pi-tui";
 import { defineTool, type ToolDefinition } from "../extensions/types.js";
 
 const sessionSplitSchema = Type.Object({

@@ -1,4 +1,4 @@
-import { setKeybindings, visibleWidth } from "@mariozechner/pi-tui";
+import { setKeybindings, visibleWidth } from "@earendil-works/pi-tui";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.js";
 import { BrandHeaderComponent } from "../src/modes/interactive/components/brand-header.js";
