@@ -10,8 +10,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "@mariozechner/jiti";
-import * as _bundledAi from "@mariozechner/pi-ai";
-import * as _bundledAiOauth from "@mariozechner/pi-ai/oauth";
+import * as _bundledAi from "@earendil-works/pi-ai/compat";
+import * as _bundledAiOauth from "@earendil-works/pi-ai/oauth";
 import type { KeyId } from "@mariozechner/pi-tui";
 import * as _bundledTui from "@mariozechner/pi-tui";
 // Static imports of packages that extensions may use.
@@ -42,8 +42,8 @@ import type {
 const VIRTUAL_MODULES: Record<string, unknown> = {
 	"@sinclair/typebox": _bundledTypebox,
 	"@mariozechner/pi-tui": _bundledTui,
-	"@mariozechner/pi-ai": _bundledAi,
-	"@mariozechner/pi-ai/oauth": _bundledAiOauth,
+	"@earendil-works/pi-ai": _bundledAi,
+	"@earendil-works/pi-ai/oauth": _bundledAiOauth,
 	pizza: _bundledPizza,
 };
 
@@ -95,8 +95,8 @@ function getAliases(): Record<string, string> {
 	_aliases = {
 		pizza: packageIndex,
 		"@mariozechner/pi-tui": resolveWorkspaceOrImport("tui/dist/index.js", "@mariozechner/pi-tui"),
-		"@mariozechner/pi-ai": resolveWorkspaceOrImport("ai/dist/index.js", "@mariozechner/pi-ai"),
-		"@mariozechner/pi-ai/oauth": resolveWorkspaceOrImport("ai/dist/oauth.js", "@mariozechner/pi-ai/oauth"),
+		"@earendil-works/pi-ai": resolveWorkspaceOrImport("ai/dist/index.js", "@earendil-works/pi-ai"),
+		"@earendil-works/pi-ai/oauth": resolveWorkspaceOrImport("ai/dist/oauth.js", "@earendil-works/pi-ai/oauth"),
 		"@sinclair/typebox": typeboxRoot,
 	};
 

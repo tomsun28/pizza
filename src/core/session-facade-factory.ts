@@ -9,7 +9,7 @@
  */
 
 import { join } from "node:path";
-import { type Model, streamSimple } from "@mariozechner/pi-ai";
+import { type Model, streamSimple } from "@earendil-works/pi-ai/compat";
 import { getAgentDir, getDocsPath } from "../config.js";
 import type { AgentMessage, AgentTool, ThinkingLevel } from "./agent/index.js";
 import { AuthStorage } from "./auth-storage.js";

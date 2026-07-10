@@ -27,7 +27,7 @@ import type {
 	SimpleStreamOptions,
 	TextContent,
 	ToolResultMessage,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai/compat";
 import type {
 	AutocompleteItem,
 	Component,

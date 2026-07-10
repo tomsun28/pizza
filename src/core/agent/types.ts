@@ -23,7 +23,7 @@ import type {
 	Tool,
 	ToolResultMessage,
 	UserMessage,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai/compat";
 import type { Static, TSchema } from "@sinclair/typebox";
 
 // ============================================================================

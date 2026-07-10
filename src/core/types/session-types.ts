@@ -7,7 +7,7 @@
  */
 
 import type { AgentMessage } from "../agent/types.js";
-import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
+import type { ImageContent, TextContent } from "@earendil-works/pi-ai/compat";
 
 // ============================================================================
 // Session Header

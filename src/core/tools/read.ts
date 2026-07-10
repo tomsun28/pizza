@@ -1,5 +1,5 @@
 import type { AgentTool } from "../agent/types.js";
-import type { Api, ImageContent, Model, TextContent } from "@mariozechner/pi-ai";
+import type { Api, ImageContent, Model, TextContent } from "@earendil-works/pi-ai/compat";
 import { Text } from "@mariozechner/pi-tui";
 import { type Static, Type } from "@sinclair/typebox";
 import { constants } from "fs";

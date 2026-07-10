@@ -6,7 +6,7 @@
  * projections through EventSourcedRuntime.
  */
 
-import type { Model } from "@mariozechner/pi-ai";
+import type { Model } from "@earendil-works/pi-ai/compat";
 import type { EventBase, ImageContent } from "./event-store/types.js";
 import type { SubscribeOptions } from "./event-store/store.js";
 import type { ExtensionRunner } from "./extensions/runner.js";

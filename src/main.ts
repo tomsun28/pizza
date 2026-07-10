@@ -7,7 +7,11 @@
 
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
-import { type ImageContent, supportsXhigh } from "@mariozechner/pi-ai";
+import { type Api, type ImageContent, type Model, getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
+
+function supportsXhigh(model: Model<Api>): boolean {
+	return getSupportedThinkingLevels(model).includes("xhigh" as any);
+}
 import chalk from "chalk";
 import { type Args, type Mode, parseArgs, printHelp } from "./cli/args.js";
 import { processFileArguments } from "./cli/file-processor.js";

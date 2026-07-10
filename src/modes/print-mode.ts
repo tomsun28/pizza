@@ -6,7 +6,7 @@
  * - `pizza --mode json "prompt"` - JSON event stream
  */
 
-import type { AssistantMessage, ImageContent } from "@mariozechner/pi-ai";
+import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai/compat";
 import type { AgentMessage } from "../core/agent/types.js";
 import type { ImageContent as EventImageContent } from "../core/event-store/types.js";
 import { flushRawStdout, writeRawStdout } from "../core/output-guard.js";

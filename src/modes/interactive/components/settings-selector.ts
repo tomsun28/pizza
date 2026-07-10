@@ -1,5 +1,5 @@
 import type { ThinkingLevel } from "../../../core/agent/types.js";
-import type { Transport } from "@mariozechner/pi-ai";
+import type { Transport } from "@earendil-works/pi-ai/compat";
 import {
 	Container,
 	getCapabilities,
@@ -26,6 +26,7 @@ const THINKING_DESCRIPTIONS: Record<ThinkingLevel, string> = {
 	medium: "Moderate reasoning (~8k tokens)",
 	high: "Deep reasoning (~16k tokens)",
 	xhigh: "Maximum reasoning (~32k tokens)",
+	max: "Extreme reasoning (~64k tokens)",
 };
 
 export interface SettingsConfig {

@@ -8,7 +8,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage, ThinkingLevel } from "../../core/agent/types.js";
-import type { AssistantMessage, ImageContent, Message, Model, OAuthProviderId } from "@mariozechner/pi-ai";
+import type { AssistantMessage, ImageContent, Message, Model, OAuthProviderId } from "@earendil-works/pi-ai/compat";
 import type {
 	AutocompleteItem,
 	EditorComponent,
@@ -4218,6 +4218,20 @@ export class InteractiveMode {
 				},
 
 				onManualCodeInput: () => manualCodePromise,
+
+				onDeviceCode: (info) => {
+					dialog.showAuth(info.verificationUri, `Enter code: ${info.userCode}`);
+				},
+
+				onSelect: async (prompt) => {
+					const optionsText = prompt.options.map((o) => `${o.id}: ${o.label}`).join("\n");
+					try {
+						const input = await dialog.showPrompt(`${prompt.message}\n${optionsText}`, prompt.options[0]?.id);
+						return prompt.options.find((o) => o.id === input || o.label === input)?.id;
+					} catch {
+						return undefined;
+					}
+				},
 
 				signal: dialog.signal,
 			});

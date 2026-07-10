@@ -38,7 +38,7 @@ import type {
 	RpcSessionState,
 	RpcSlashCommand,
 } from "./rpc-types.js";
-import type { ImageContent } from "@mariozechner/pi-ai";
+import type { ImageContent } from "@earendil-works/pi-ai/compat";
 
 // Re-export types for consumers
 export type {

@@ -3,7 +3,7 @@
  */
 
 import type { AgentMessage } from "../agent/types.js";
-import type { Message } from "@mariozechner/pi-ai";
+import type { Message } from "@earendil-works/pi-ai/compat";
 
 // ============================================================================
 // File Operation Tracking

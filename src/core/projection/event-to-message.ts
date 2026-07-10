@@ -5,7 +5,7 @@
  */
 
 import type { AgentMessage } from "../agent/types.js";
-import type { TextContent, ImageContent, ThinkingContent, ToolCall, Usage, StopReason, Api, Provider } from "@mariozechner/pi-ai";
+import type { TextContent, ImageContent, ThinkingContent, ToolCall, Usage, StopReason, Api, ProviderId } from "@earendil-works/pi-ai/compat";
 import type { EventBase } from "../event-store/types.js";
 import type {
 	ToolExecutionEndEvent,
@@ -123,7 +123,7 @@ export function eventToMessage(event: EventBase): AgentMessage | null {
 				role: "assistant",
 				content,
 				api: payload.model.provider as Api,
-				provider: payload.model.provider as Provider,
+				provider: payload.model.provider as ProviderId,
 				model: payload.model.model_id,
 				usage,
 				stopReason,

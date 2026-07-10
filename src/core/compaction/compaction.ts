@@ -6,7 +6,7 @@
  */
 
 import type { AgentMessage } from "../agent/types.js";
-import type { AssistantMessage, Usage } from "@mariozechner/pi-ai";
+import type { AssistantMessage, Usage } from "@earendil-works/pi-ai/compat";
 import type { SessionEntry } from "../types/session-types.js";
 import type { FileOperations } from "./utils.js";
 

@@ -6,7 +6,7 @@ import type {
 	SimpleStreamOptions,
 	streamSimple,
 	ToolCall,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai/compat";
 import type { LLMChunk, LLMClient, ModelConfig } from "./llm-types.js";
 
 export type AiStreamFn = (

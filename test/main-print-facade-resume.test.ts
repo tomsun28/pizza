@@ -6,7 +6,7 @@ import {
 	type AssistantMessageEvent,
 	type Context,
 	EventStream,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ENV_AGENT_DIR } from "../src/config.js";
 import { deriveWorkspaceId, getSessionIndexPath } from "../src/core/event-store/workspace.js";

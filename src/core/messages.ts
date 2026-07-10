@@ -12,7 +12,7 @@ import type {
 	CompactionSummaryMessage,
 	CustomMessage,
 } from "./agent/types.js";
-import type { ImageContent, Message, TextContent } from "@mariozechner/pi-ai";
+import type { ImageContent, Message, TextContent } from "@earendil-works/pi-ai/compat";
 
 export type { BashExecutionMessage, BranchSummaryMessage, CompactionSummaryMessage, CustomMessage };
 

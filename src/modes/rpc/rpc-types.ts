@@ -6,7 +6,7 @@
  */
 
 import type { AgentMessage, ThinkingLevel } from "../../core/agent/types.js";
-import type { ImageContent, Model } from "@mariozechner/pi-ai";
+import type { ImageContent, Model } from "@earendil-works/pi-ai/compat";
 import type { SessionStats } from "../../core/session-stats.js";
 import type { BashResult } from "../../core/bash-executor.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
