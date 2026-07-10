@@ -30,7 +30,7 @@ Pizza 的表壳来源于 Pi -> Pizza, 感谢 Pi 的开源。
 ## 快速开始
 
 ```bash
-npm install -g pizza
+npm install -g @tomsun28/pizza
 export ZAI_API_KEY=your_zai_api_key
 pizza
 ```

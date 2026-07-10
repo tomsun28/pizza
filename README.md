@@ -29,7 +29,7 @@ Pizza’s shell comes from Pi -> Pizza. Thanks to Pi for open sourcing.
 ## Quick Start
 
 ```bash
-npm install -g pizza
+npm install -g @tomsun28/pizza
 export ZAI_API_KEY=your_zai_api_key
 pizza
 ```
