@@ -18,7 +18,7 @@ const sessionSplitSchema = Type.Object({
 
 export type SessionSplitToolInput = Static<typeof sessionSplitSchema>;
 
-export function createSessionSplitToolDefinition(): ToolDefinition<typeof sessionSplitSchema> {
+export function createSessionSplitToolDefinition(): ToolDefinition<typeof sessionSplitSchema, undefined> {
 	return defineTool({
 		name: "session_split",
 		label: "session_split",

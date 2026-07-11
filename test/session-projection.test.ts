@@ -332,56 +332,6 @@ describe("SessionManager", () => {
 		]);
 	});
 
-	it("should auto-split sessions after a time gap and keep the triggering message in the new session", () => {
-		const mgr = new SessionManager(store, join(testDir, "sessions.json"));
-		const source = mgr.createSession("user_explicit", "Original");
-		const baseTime = Date.now();
-
-		store.append({
-			actor_id: "user",
-			type: "USER_MESSAGE",
-			timestamp: baseTime + 1_000,
-			payload: { content: "initial task" },
-		});
-		const lastEventBeforeSplit = store.append({
-			actor_id: "coder_agent",
-			type: "AGENT_MESSAGE_END",
-			timestamp: baseTime + 2_000,
-			payload: {
-				content: [{ type: "text", text: "initial response" }],
-				model: { provider: "anthropic", model_id: "claude" },
-				usage: { input: 5, output: 10, cache_read: 0, cache_write: 0, total: 15, cost: 0 },
-				stop_reason: "stop",
-			},
-		});
-		const triggeringMessage = store.append({
-			actor_id: "user",
-			type: "USER_MESSAGE",
-			timestamp: baseTime + 3 * 60 * 60 * 1_000,
-			payload: { content: "new task after a long break" },
-		});
-
-		const activeSessionId = mgr.getActiveSessionId();
-		const inferred = activeSessionId ? mgr.getSession(activeSessionId) : undefined;
-		const sourceAfterSplit = mgr.getSession(source.session_id);
-
-		expect(activeSessionId).toBeDefined();
-		expect(activeSessionId).not.toBe(source.session_id);
-		expect(inferred?.created_by).toBe("auto_inferred");
-		expect(sourceAfterSplit?.event_range.end_event_id).toBe(triggeringMessage.event_id);
-		expect(inferred?.event_range.start_event_id).toBe(lastEventBeforeSplit.event_id);
-
-		const sourceMessages = mgr.getSessionProjection(source.session_id)!.buildContext().messages;
-		const inferredMessages = mgr.getSessionProjection(activeSessionId!)!.buildContext().messages;
-
-		expect(sourceMessages.map((message) => message.role)).toEqual(["user", "assistant"]);
-		expect(inferredMessages).toHaveLength(1);
-		expect(inferredMessages[0]).toMatchObject({
-			role: "user",
-			content: "new task after a long break",
-		});
-	});
-
 	it("should persist sessions to disk", () => {
 		const sessionPath = join(testDir, "sessions.json");
 		{

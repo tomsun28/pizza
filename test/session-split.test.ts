@@ -71,13 +71,13 @@ describe("session_split", () => {
 
 		it("maps SESSION_BOUNDARY_INFERRED with different reason", () => {
 			const events = mapTypedEventToModeEvents(mkEvent("SESSION_BOUNDARY_INFERRED", {
-				reason: "time_gap",
+				reason: "topic_change",
 				new_session_id: "sess_abc",
 			}));
 
 			expect(events[0]).toMatchObject({
 				type: "session_split",
-				reason: "time_gap",
+				reason: "topic_change",
 				newSessionId: "sess_abc",
 			});
 		});

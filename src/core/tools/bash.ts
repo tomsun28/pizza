@@ -31,6 +31,7 @@ import {
 } from "./builtin-commands.js";
 import { createEditToolDefinition, type EditToolDetails, type EditToolInput, type EditToolOptions } from "./edit.js";
 import { createReadToolDefinition, type ReadToolDetails, type ReadToolInput, type ReadToolOptions } from "./read.js";
+import { createSessionSplitToolDefinition, type SessionSplitToolInput } from "./session-split.js";
 import { createWriteToolDefinition, type WriteToolInput, type WriteToolOptions } from "./write.js";
 
 /**
@@ -69,6 +70,11 @@ export type BashBuiltinDetails =
 			name: "edit";
 			args: EditToolInput;
 			details?: EditToolDetails;
+	  }
+	| {
+			name: "session_split";
+			args: SessionSplitToolInput;
+			details?: undefined;
 	  };
 
 /**
@@ -401,11 +407,12 @@ export function createBashToolDefinition(
 	const readDefinition = createReadToolDefinition(cwd, options?.read);
 	const writeDefinition = createWriteToolDefinition(cwd, options?.write);
 	const editDefinition = createEditToolDefinition(cwd, options?.edit);
+	const sessionSplitDefinition = createSessionSplitToolDefinition();
 	return {
 		name: "cli",
 		label: "cli",
-		description: `Execute a CLI command in the current working directory. Built-in file commands are routed internally: read, write, and edit. Other commands execute through the system shell (grep, find, ls, git, npm, etc.). Truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB.`,
-		promptSnippet: "Execute CLI commands: read/write/edit built-ins, or shell commands (grep, find, ls, git, npm, etc.)",
+		description: `Execute a CLI command in the current working directory. Built-in commands are routed internally: read, write, edit, and session_split. Other commands execute through the system shell (grep, find, ls, git, npm, etc.). Truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB.`,
+		promptSnippet: "Execute CLI commands: read/write/edit/session_split built-ins, or shell commands (grep, find, ls, git, npm, etc.)",
 		parameters: bashSchema,
 		async execute(
 			toolCallId,
@@ -447,6 +454,13 @@ export function createBashToolDefinition(
 						return {
 							content: result.content,
 							details: { builtin: { name: "edit", args: prepared, details: result.details } },
+						};
+					}
+					case "session_split": {
+						const result = await sessionSplitDefinition.execute(toolCallId, builtin.input, signal, undefined, ctx as never);
+						return {
+							content: result.content,
+							details: { builtin: { name: "session_split", args: builtin.input, details: result.details } },
 						};
 					}
 				}
@@ -585,7 +599,9 @@ export function createBashToolDefinition(
 								? readDefinition
 								: builtin.command === "write"
 									? writeDefinition
-									: editDefinition;
+									: builtin.command === "edit"
+										? editDefinition
+										: sessionSplitDefinition;
 						const renderContext = makeBuiltinRenderContext(
 							context,
 							builtin.input,
@@ -643,12 +659,19 @@ export function createBashToolDefinition(
 									renderTheme,
 									renderContext as never,
 								)
-							: editDefinition.renderResult?.(
-									{ content: result.content as never, details: builtin.details },
-									options,
-									renderTheme,
-									renderContext as never,
-								);
+							: builtin.name === "edit"
+								? editDefinition.renderResult?.(
+										{ content: result.content as never, details: builtin.details },
+										options,
+										renderTheme,
+										renderContext as never,
+									)
+								: sessionSplitDefinition.renderResult?.(
+										{ content: result.content as never, details: builtin.details },
+										options,
+										renderTheme,
+										renderContext as never,
+									);
 				if (component) {
 					state.builtinResultComponent = component;
 					return component;

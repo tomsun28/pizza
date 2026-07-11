@@ -6,12 +6,10 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import type { EventBase } from "../event-store/types.js";
-import type { EventQuery, EventStore } from "../event-store/store.js";
+import type { EventStore } from "../event-store/store.js";
 import type { SessionDescriptor, SessionIndex, ThreadDescriptor } from "./types.js";
 import { SessionProjection } from "./session-projection.js";
-import { SessionBoundaryInferrer } from "./boundary-inferrer.js";
-import { getSessionIndexPath, deriveWorkspaceId } from "../event-store/workspace.js";
+import { getSessionIndexPath } from "../event-store/workspace.js";
 
 export interface CreateProjectionSessionOptions {
 	parentSessionId?: string;
@@ -37,21 +35,17 @@ export class SessionManager {
 	private sessions: Map<string, SessionDescriptor> = new Map();
 	private activeThreadId: string | undefined;
 	private activeSessionId: string | undefined;
-	private inferrer: SessionBoundaryInferrer;
-	private unsubscribe: (() => void) | undefined;
 	private filePath: string | undefined;
 
 	constructor(
 		private store: EventStore,
 		storagePath?: string,
 	) {
-		this.inferrer = new SessionBoundaryInferrer();
 		this.filePath = storagePath === ":memory:" ? undefined : (storagePath ?? getSessionIndexPath(store.workspace_id));
 		if (this.filePath) {
 			this._ensureStorageDir();
 			this._loadIndex();
 		}
-		this._subscribeToEvents();
 	}
 
 	// =========================================================================
@@ -244,7 +238,6 @@ export class SessionManager {
 	/**
 	 * Create a new thread (conversation). Threads are the isolation unit —
 	 * events are tagged with thread_id. Creates the first session in the thread.
-	 * Threads are fixed once created; auto-splitting happens at session level.
 	 */
 	createThread(name?: string): ThreadDescriptor {
 		const thread = this._createThreadRecord(name);
@@ -257,72 +250,12 @@ export class SessionManager {
 	 * Dispose the session manager.
 	 */
 	dispose(): void {
-		this.unsubscribe?.();
+		// no-op
 	}
 
 	// =========================================================================
 	// Internal Methods
 	// =========================================================================
-
-	private _subscribeToEvents(): void {
-		this.unsubscribe = this.store.subscribe((event) => {
-			if (event.type === "USER_MESSAGE") {
-				this._evaluateBoundary(event);
-			}
-		}, { types: ["USER_MESSAGE"] });
-	}
-
-	private _evaluateBoundary(event: EventBase): void {
-		if (!this.activeSessionId) return;
-
-		const current = this.sessions.get(this.activeSessionId);
-		if (!current) return;
-
-		// Only evaluate if we're at HEAD
-		if (current.event_range.end_event_id !== "HEAD") return;
-
-		const recent = this._getRecentEventsBefore(event, current);
-		const decision = this.inferrer.evaluate(recent, event);
-
-		if (decision.should_split) {
-			const lastEventBeforeSplit = recent[recent.length - 1];
-
-			// End the current session before the triggering message.
-			// EventStore range queries use exclusive end boundaries.
-			current.event_range.end_event_id = event.event_id;
-
-			// Start the inferred session after the previous event so the triggering
-			// message becomes the first user-visible message in the new view.
-			this.createSession("auto_inferred", decision.suggested_name, {
-				startEventId: lastEventBeforeSplit?.event_id ?? current.event_range.start_event_id,
-			});
-
-		this.store.append({
-			actor_id: "runtime",
-			type: "SESSION_BOUNDARY_INFERRED",
-			payload: {
-				reason: decision.reason,
-				new_session_id: this.activeSessionId,
-			},
-			caused_by: event.event_id,
-			thread_id: this.activeThreadId,
-		});
-		}
-	}
-
-	private _getRecentEventsBefore(event: EventBase, current: SessionDescriptor): EventBase[] {
-		const query: EventQuery = {
-			before_sequence: event.sequence,
-			limit: 20,
-			reverse: true,
-		};
-
-		if (current.event_range.start_event_id !== "ORIGIN") {
-			query.after = current.event_range.start_event_id;
-		}
-
-		return this.store.query(query).filter((e) => !e.thread_id || e.thread_id === current.thread_id).reverse();
-	}
 
 	private _ensureStorageDir(): void {
 		if (!this.filePath) return;

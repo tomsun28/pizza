@@ -434,8 +434,8 @@ describe("Coding Agent Tools", () => {
 			expect(result.details).toBeUndefined();
 		});
 
-		it("should show help for built-in file commands", async () => {
-			for (const command of ["read", "write", "edit"]) {
+		it("should show help for built-in commands", async () => {
+			for (const command of ["read", "write", "edit", "session_split"]) {
 				const result = await bashTool.execute(`test-help-${command}`, { command: `${command} -h` });
 				const output = getTextOutput(result);
 

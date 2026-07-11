@@ -50,6 +50,10 @@ export type ParsedBuiltinToolInput =
 	| {
 			command: "edit";
 			input: { path: string; edits: Edit[] };
+	  }
+	| {
+			command: "session_split";
+			input: { reason?: string; name?: string };
 	  };
 
 /**
@@ -104,6 +108,8 @@ export function parseBuiltinToolInput(
 			return { command: "write", input: parseWriteInput(args, heredoc) };
 		case "edit":
 			return { command: "edit", input: parseEditInput(args) };
+		case "session_split":
+			return { command: "session_split", input: parseSessionSplitInput(args) };
 		default:
 			return null;
 	}
@@ -166,6 +172,32 @@ function parseWriteInput(args: string[], heredoc?: string): { path: string; cont
 	}
 
 	return { path, content };
+}
+
+function parseSessionSplitInput(args: string[]): { reason?: string; name?: string } {
+	let reason: string | undefined;
+	let name: string | undefined;
+	const positional: string[] = [];
+
+	for (let i = 0; i < args.length; i++) {
+		const arg = args[i];
+		if (arg === "--reason" || arg === "-r") {
+			reason = args[++i];
+		} else if (arg === "--name" || arg === "-n") {
+			name = args[++i];
+		} else {
+			positional.push(arg);
+		}
+	}
+
+	if (positional.length > 0 && reason === undefined) {
+		reason = positional[0];
+		if (positional.length > 1 && name === undefined) {
+			name = positional.slice(1).join(" ");
+		}
+	}
+
+	return { reason, name };
 }
 
 function parseEditInput(args: string[]): { path: string; edits: Edit[] } {
@@ -398,6 +430,27 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"  edit --path src/app.ts --op delete --range 12#ab..14#de",
 				"  edit --path src/app.ts --edits '[{\"op\":\"replace\",\"range\":\"12#ab\",\"new\":\"const a = 2\"}]'",
 			].join("\n");
+		case "session_split":
+			return [
+				"session_split - Split the current conversation session",
+				"",
+				"Description:",
+				"  Start a new session from the current point. Previous messages are no longer",
+				"  included in the LLM context for subsequent turns. Use this when the user's",
+				"  intent has clearly shifted to a new, unrelated topic.",
+				"",
+				"Parameters:",
+				"  reason            Short reason for the split (e.g. 'topic_change', 'new_task', 'context_reset').",
+				"  name              Optional name for the new session (e.g. 'Fix authentication bug').",
+				"  --reason, -r      Split reason.",
+				"  --name, -n        New session name.",
+				"  -h, --help        Show this help.",
+				"",
+				"Examples:",
+				"  session_split topic_change",
+				"  session_split topic_change \"Fix auth\"",
+				"  session_split --reason topic_change --name \"Fix auth\"",
+			].join("\n");
 		default:
 			return undefined;
 	}
@@ -596,6 +649,14 @@ export async function executeBuiltinCommand(
 			});
 		}
 
+		case "session_split": {
+			return {
+				stdout: "",
+				stderr: "session_split requires an active agent session context and is executed through the cli tool.",
+				exitCode: 1,
+			};
+		}
+
 		default:
 			return {
 				stdout: "",
@@ -605,7 +666,7 @@ export async function executeBuiltinCommand(
 	}
 }
 
-export const BUILTIN_COMMANDS = ["read", "write", "edit"] as const;
+export const BUILTIN_COMMANDS = ["read", "write", "edit", "session_split"] as const;
 export type BuiltinCommand = (typeof BUILTIN_COMMANDS)[number];
 
 // ============================================================================

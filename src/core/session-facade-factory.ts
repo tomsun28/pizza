@@ -343,11 +343,6 @@ export async function createSessionFacade(
 			sources.set(definition.name, createSyntheticSourceInfo(`<sdk:${definition.name}>`, { source: "sdk" }));
 		}
 
-		// Always include the session_split tool
-		const sessionSplitDef = createSessionSplitToolDefinition();
-		definitions.set(sessionSplitDef.name, sessionSplitDef as unknown as ExtensionToolDefinition);
-		sources.set(sessionSplitDef.name, createSyntheticSourceInfo(`<builtin:${sessionSplitDef.name}>`, { source: "builtin" }));
-
 		availableToolDefinitions = Array.from(definitions.values());
 		availableToolSources = sources;
 	};
@@ -362,6 +357,18 @@ export async function createSessionFacade(
 				toolSnippets[definition.name] = snippet;
 			}
 			for (const guideline of definition.promptGuidelines ?? []) {
+				const normalized = guideline.trim();
+				if (normalized) {
+					promptGuidelines.push(normalized);
+				}
+			}
+		}
+
+		// session_split is a built-in cli command, not a separate tool; ensure its
+		// prompt guidelines are included whenever the cli tool is active.
+		if (definitions.some((definition) => definition.name === "cli" || definition.name === "bash")) {
+			const sessionSplitDef = createSessionSplitToolDefinition();
+			for (const guideline of sessionSplitDef.promptGuidelines ?? []) {
 				const normalized = guideline.trim();
 				if (normalized) {
 					promptGuidelines.push(normalized);

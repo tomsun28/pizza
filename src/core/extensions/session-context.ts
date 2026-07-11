@@ -105,7 +105,7 @@ export class EventStoreExtensionSessionManager implements ExtensionSessionManage
 			startEventId = beforeUserMessage[0]?.event_id ?? "ORIGIN";
 		}
 
-		const desc = this.sessionManager.createSession("auto_inferred", name, {
+		const desc = this.sessionManager.createSession("user_explicit", name, {
 			startEventId,
 		});
 		this.eventStore.append({

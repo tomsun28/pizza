@@ -316,7 +316,7 @@ export interface SessionCreatedEvent extends EventBase {
 	payload: {
 		session_id: string;
 		name?: string;
-		created_by: "user_explicit" | "auto_inferred" | "fork";
+		created_by: "user_explicit" | "fork";
 	};
 }
 
@@ -324,7 +324,7 @@ export interface SessionCreatedEvent extends EventBase {
 export interface SessionBoundaryInferredEvent extends EventBase {
 	type: "SESSION_BOUNDARY_INFERRED";
 	payload: {
-		reason: "intent_shift" | "file_drift" | "time_gap" | "user_explicit";
+		reason: "intent_shift" | "file_drift" | "user_explicit";
 		new_session_id: string;
 	};
 }

@@ -25,9 +25,9 @@ export interface SessionDescriptor {
 	/** User-defined name */
 	name?: string;
 	/** Creation method */
-	created_by: "user_explicit" | "auto_inferred" | "fork";
+	created_by: "user_explicit" | "fork";
 	/** Boundary inference reason */
-	boundary_reason?: "intent_shift" | "file_drift" | "time_gap" | "user_explicit";
+	boundary_reason?: "intent_shift" | "file_drift" | "user_explicit";
 	/** Parent session (fork source) */
 	parent_session_id?: string;
 	/** Creation timestamp */
@@ -42,7 +42,7 @@ export interface SessionDescriptor {
  * A conversation thread — the isolation unit.
  *
  * One thread = one `thread_id` on events. Threads are fixed once created;
- * auto-splitting happens at session level (within a thread), never at thread level.
+ * session splitting happens at session level (within a thread), never at thread level.
  * A thread contains a tree of sessions (branches from rewind/fork).
  */
 export interface ThreadDescriptor {
