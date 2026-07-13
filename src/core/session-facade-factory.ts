@@ -27,7 +27,7 @@ import {
 import type { EventBase, ImageContent } from "./event-store/types.js";
 import type { EventAppendInput } from "./event-store/store.js";
 import { SqliteEventStore } from "./event-store/sqlite-store.js";
-import { deriveWorkspaceId, ensureWorkspaceMeta, getEventDatabasePath, getSessionIndexPath } from "./event-store/workspace.js";
+import { deriveWorkspaceId, ensureWorkspaceMeta, getEventDatabasePath } from "./event-store/workspace.js";
 import { createToolRegistry } from "./intent/tool-adapter.js";
 import { ModelRegistry } from "./model-registry.js";
 import { findInitialModel } from "./model-resolver.js";
@@ -77,8 +77,6 @@ export interface CreateSessionFacadeOptions {
 
 	/** Override SQLite event database path (e.g. ":memory:" for tests). */
 	storagePath?: string;
-	/** Override session index path. */
-	sessionIndexPath?: string;
 	/** Override workspace id when opening a session from another workspace. */
 	workspaceId?: string;
 	/** Existing projection session id to activate before prompting. */
@@ -188,7 +186,7 @@ function prepareForkedSession(options: {
 	);
 	const sourceSessionManager = new ProjectionSessionManager(
 		sourceStore,
-		getSessionIndexPath(source.workspaceId, sourceAgentDir),
+		sourceStore,
 	);
 	try {
 		const sourceProjection = sourceSessionManager.getSessionProjection(source.sessionId);
@@ -269,7 +267,7 @@ export async function createSessionFacade(
 
 	// ── EventStore + projection SessionManager ─────────────────────────────
 	const workspaceId = options.workspaceId ?? deriveWorkspaceId(cwd);
-	if (options.storagePath !== ":memory:" && options.sessionIndexPath !== ":memory:") {
+	if (options.storagePath !== ":memory:") {
 		ensureWorkspaceMeta(workspaceId, cwd, options.agentDir);
 	}
 	const store = new SqliteEventStore(
@@ -278,7 +276,7 @@ export async function createSessionFacade(
 	);
 	const sessionManager = new ProjectionSessionManager(
 		store,
-		options.sessionIndexPath ?? getSessionIndexPath(workspaceId, options.agentDir),
+		store,
 	);
 	if (options.forkFrom) {
 		prepareForkedSession({ store, sessionManager, agentDir, source: options.forkFrom });

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -10,7 +10,8 @@ import {
 } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ENV_AGENT_DIR } from "../src/config.js";
-import { deriveWorkspaceId, getSessionIndexPath } from "../src/core/event-store/workspace.js";
+import { SqliteEventStore } from "../src/core/event-store/sqlite-store.js";
+import { deriveWorkspaceId, getEventDatabasePath } from "../src/core/event-store/workspace.js";
 import type { EventBase } from "../src/core/event-store/types.js";
 import type { ExtensionAPI } from "../src/core/extensions/types.js";
 import { main } from "../src/main.js";
@@ -146,10 +147,15 @@ describe("main print facade route", () => {
 		parent_session_id?: string;
 	}> {
 		const workspaceId = deriveWorkspaceId(cwd);
-		const index = JSON.parse(readFileSync(getSessionIndexPath(workspaceId, agentDir), "utf8")) as {
-			sessions: Array<{ session_id: string; created_by?: string; parent_session_id?: string }>;
-		};
-		return index.sessions;
+		const dbPath = getEventDatabasePath(workspaceId, agentDir);
+		if (!existsSync(dbPath)) return [];
+		const store = new SqliteEventStore(workspaceId, dbPath, "test_session_read");
+		try {
+			const index = store.getSessionIndex();
+			return index?.sessions ?? [];
+		} finally {
+			store.close();
+		}
 	}
 
 	function readOnlySessionId(agentDir: string, cwd = process.cwd()): string {
@@ -173,7 +179,7 @@ describe("main print facade route", () => {
 		expect(events.find((event) => event.type === "AGENT_MESSAGE_END")?.payload).toMatchObject({
 			stop_reason: "stop",
 		});
-		expect(events.some((event) => event.type === "session")).toBe(false);
+		expect(events.some((event) => (event.type as string) === "session")).toBe(false);
 	});
 
 	it("auto-resumes the projection session in print/json facade mode", async () => {
@@ -199,7 +205,7 @@ describe("main print facade route", () => {
 
 		const events = stdout.join("").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as EventBase);
 		expect(events.map((event) => event.type)).toContain("AGENT_MESSAGE_END");
-		expect(events.some((event) => event.type === "session")).toBe(false);
+		expect(events.some((event) => (event.type as string) === "session")).toBe(false);
 	});
 
 	it("continues the active projection session in print/json facade mode", async () => {

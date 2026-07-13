@@ -248,7 +248,7 @@ describe("SessionManager", () => {
 	});
 
 	it("should create a session on first access", () => {
-		const mgr = new SessionManager(store, join(testDir, "sessions.json"));
+		const mgr = new SessionManager(store, store);
 		const session = mgr.getActiveSession();
 
 		expect(session).toBeDefined();
@@ -256,7 +256,7 @@ describe("SessionManager", () => {
 	});
 
 	it("should create named sessions", () => {
-		const mgr = new SessionManager(store, join(testDir, "sessions.json"));
+		const mgr = new SessionManager(store, store);
 		const desc = mgr.createSession("user_explicit", "My Session");
 
 		expect(desc.name).toBe("My Session");
@@ -265,7 +265,7 @@ describe("SessionManager", () => {
 	});
 
 	it("should list sessions", () => {
-		const mgr = new SessionManager(store, join(testDir, "sessions.json"));
+		const mgr = new SessionManager(store, store);
 		mgr.createSession("user_explicit", "Session A");
 		mgr.createSession("user_explicit", "Session B");
 
@@ -274,7 +274,7 @@ describe("SessionManager", () => {
 	});
 
 	it("should switch sessions", () => {
-		const mgr = new SessionManager(store, join(testDir, "sessions.json"));
+		const mgr = new SessionManager(store, store);
 		const s1 = mgr.createSession("user_explicit", "Session 1");
 		const s2 = mgr.createSession("user_explicit", "Session 2");
 
@@ -285,14 +285,14 @@ describe("SessionManager", () => {
 	});
 
 	it("should throw when switching to non-existent session", () => {
-		const mgr = new SessionManager(store, join(testDir, "sessions.json"));
+		const mgr = new SessionManager(store, store);
 		mgr.createSession("user_explicit");
 
 		expect(() => mgr.switchTo("non-existent")).toThrow("Session not found");
 	});
 
 	it("should rename sessions", () => {
-		const mgr = new SessionManager(store, join(testDir, "sessions.json"));
+		const mgr = new SessionManager(store, store);
 		const desc = mgr.createSession("user_explicit", "Old Name");
 
 		mgr.renameSession(desc.session_id, "New Name");
@@ -301,7 +301,7 @@ describe("SessionManager", () => {
 	});
 
 	it("should fork sessions", () => {
-		const mgr = new SessionManager(store, join(testDir, "sessions.json"));
+		const mgr = new SessionManager(store, store);
 		mgr.createSession("user_explicit", "Original");
 		const event = store.append({ actor_id: "user", type: "USER_MESSAGE", payload: { content: "fork point" } });
 
@@ -312,7 +312,7 @@ describe("SessionManager", () => {
 	});
 
 	it("should fork a session while preserving history and freezing the source", () => {
-		const mgr = new SessionManager(store, join(testDir, "sessions.json"));
+		const mgr = new SessionManager(store, store);
 		const source = mgr.createSession("user_explicit", "Original");
 		store.append({ actor_id: "user", type: "USER_MESSAGE", payload: { content: "source message" } });
 
@@ -333,15 +333,14 @@ describe("SessionManager", () => {
 	});
 
 	it("should persist sessions to disk", () => {
-		const sessionPath = join(testDir, "sessions.json");
 		{
-			const mgr = new SessionManager(store, sessionPath);
+			const mgr = new SessionManager(store, store);
 			mgr.createSession("user_explicit", "Persisted");
 			mgr.dispose();
 		}
 
 		{
-			const mgr = new SessionManager(store, sessionPath);
+			const mgr = new SessionManager(store, store);
 			const list = mgr.listSessions();
 			expect(list.length).toBe(1);
 			expect(list[0].name).toBe("Persisted");

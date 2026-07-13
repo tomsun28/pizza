@@ -97,7 +97,7 @@ describe("session_split", () => {
 		it("creates a new session and emits SESSION_BOUNDARY_INFERRED event", () => {
 			const cwd = makeTempDir();
 			const store = new SqliteEventStore("test-ws", ":memory:");
-			const sessionManager = new ProjectionSessionManager(store, ":memory:");
+			const sessionManager = new ProjectionSessionManager(store, store);
 
 			const projection = sessionManager.getActiveSession();
 			const extSessionManager = new EventStoreExtensionSessionManager({
@@ -138,7 +138,7 @@ describe("session_split", () => {
 		it("is a no-op when the active session has no user message (loop guard)", () => {
 			const cwd = makeTempDir();
 			const store = new SqliteEventStore("test-ws", ":memory:");
-			const sessionManager = new ProjectionSessionManager(store, ":memory:");
+			const sessionManager = new ProjectionSessionManager(store, store);
 			const projection = sessionManager.getActiveSession();
 			const extSessionManager = new EventStoreExtensionSessionManager({
 				store,
@@ -171,7 +171,7 @@ describe("session_split", () => {
 		it("allows a new split after a new user message arrives", () => {
 			const cwd = makeTempDir();
 			const store = new SqliteEventStore("test-ws", ":memory:");
-			const sessionManager = new ProjectionSessionManager(store, ":memory:");
+			const sessionManager = new ProjectionSessionManager(store, store);
 			const projection = sessionManager.getActiveSession();
 			const extSessionManager = new EventStoreExtensionSessionManager({
 				store,
@@ -200,7 +200,7 @@ describe("session_split", () => {
 		it("returns undefined when sessionManager is not provided", () => {
 			const cwd = makeTempDir();
 			const store = new SqliteEventStore("test-ws", ":memory:");
-			const sessionManager = new ProjectionSessionManager(store, ":memory:");
+			const sessionManager = new ProjectionSessionManager(store, store);
 			const projection = sessionManager.getActiveSession();
 
 			const extSessionManager = new EventStoreExtensionSessionManager({
@@ -225,7 +225,7 @@ describe("session_split", () => {
 		it("executes successfully and returns session id", async () => {
 			const cwd = makeTempDir();
 			const store = new SqliteEventStore("test-ws", ":memory:");
-			const sessionManager = new ProjectionSessionManager(store, ":memory:");
+			const sessionManager = new ProjectionSessionManager(store, store);
 			const projection = sessionManager.getActiveSession();
 
 			const extSessionManager = new EventStoreExtensionSessionManager({
@@ -264,7 +264,7 @@ describe("session_split", () => {
 		it("returns error message when splitSession is unavailable", async () => {
 			const cwd = makeTempDir();
 			const store = new SqliteEventStore("test-ws", ":memory:");
-			const sessionManager = new ProjectionSessionManager(store, ":memory:");
+			const sessionManager = new ProjectionSessionManager(store, store);
 			const projection = sessionManager.getActiveSession();
 
 			const extSessionManager = new EventStoreExtensionSessionManager({
@@ -298,7 +298,7 @@ describe("session_split", () => {
 		it("uses default reason when none provided", async () => {
 			const cwd = makeTempDir();
 			const store = new SqliteEventStore("test-ws", ":memory:");
-			const sessionManager = new ProjectionSessionManager(store, ":memory:");
+			const sessionManager = new ProjectionSessionManager(store, store);
 			const projection = sessionManager.getActiveSession();
 
 			const extSessionManager = new EventStoreExtensionSessionManager({

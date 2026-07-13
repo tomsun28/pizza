@@ -5,11 +5,10 @@
  * Data lives in EventStore. Session is just a query view.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { EventStore } from "../event-store/store.js";
+import { isSessionStore, type SessionStore } from "../event-store/session-store.js";
 import type { SessionDescriptor, SessionIndex, ThreadDescriptor } from "./types.js";
 import { SessionProjection } from "./session-projection.js";
-import { getSessionIndexPath } from "../event-store/workspace.js";
 
 export interface CreateProjectionSessionOptions {
 	parentSessionId?: string;
@@ -26,7 +25,7 @@ export interface CreateProjectionSessionOptions {
 /**
  * SessionManager - manages session descriptors only.
  *
- * Storage: ~/.pizza/agent/workspaces/<workspace_id>/sessions.json
+ * Storage: SessionStore implementation (typically SQLite via SqliteEventStore).
  *
  * Does NOT store messages. Tree structure emerges from EventStore's caused_by chain.
  */
@@ -35,17 +34,14 @@ export class SessionManager {
 	private sessions: Map<string, SessionDescriptor> = new Map();
 	private activeThreadId: string | undefined;
 	private activeSessionId: string | undefined;
-	private filePath: string | undefined;
+	private sessionStore: SessionStore | undefined;
 
 	constructor(
 		private store: EventStore,
-		storagePath?: string,
+		sessionStore?: SessionStore,
 	) {
-		this.filePath = storagePath === ":memory:" ? undefined : (storagePath ?? getSessionIndexPath(store.workspace_id));
-		if (this.filePath) {
-			this._ensureStorageDir();
-			this._loadIndex();
-		}
+		this.sessionStore = sessionStore ?? (isSessionStore(store) ? store : undefined);
+		this._loadIndex();
 	}
 
 	// =========================================================================
@@ -257,45 +253,31 @@ export class SessionManager {
 	// Internal Methods
 	// =========================================================================
 
-	private _ensureStorageDir(): void {
-		if (!this.filePath) return;
-		const dir = this.filePath.substring(0, this.filePath.lastIndexOf("/"));
-		if (!existsSync(dir)) {
-			mkdirSync(dir, { recursive: true });
-		}
-	}
-
 	private _loadIndex(): void {
-		if (!this.filePath) return;
-		if (!existsSync(this.filePath)) return;
+		const index = this.sessionStore?.getSessionIndex();
+		if (!index) return;
 
-		try {
-			const content = readFileSync(this.filePath, "utf8");
-			const index = JSON.parse(content) as SessionIndex;
-			for (const thread of index.threads ?? []) {
-				this.threads.set(thread.thread_id, thread);
-				if (thread.status === "active") {
-					this.activeThreadId = thread.thread_id;
-				}
+		for (const thread of index.threads ?? []) {
+			this.threads.set(thread.thread_id, thread);
+			if (thread.status === "active") {
+				this.activeThreadId = thread.thread_id;
 			}
-			for (const session of index.sessions) {
-				this.sessions.set(session.session_id, session);
-				if (session.event_range.end_event_id === "HEAD" && session.thread_id === this.activeThreadId) {
-					this.activeSessionId = session.session_id;
-				}
+		}
+		for (const session of index.sessions) {
+			this.sessions.set(session.session_id, session);
+			if (session.event_range.end_event_id === "HEAD" && session.thread_id === this.activeThreadId) {
+				this.activeSessionId = session.session_id;
 			}
-		} catch {
-			// Start fresh if corrupted
 		}
 	}
 
 	private _persistIndex(): void {
-		if (!this.filePath) return;
+		if (!this.sessionStore) return;
 		const index: SessionIndex = {
 			threads: Array.from(this.threads.values()),
 			sessions: Array.from(this.sessions.values()),
 		};
-		writeFileSync(this.filePath, JSON.stringify(index, null, 2));
+		this.sessionStore.saveSessionIndex(index);
 	}
 
 	private _generateSessionId(): string {

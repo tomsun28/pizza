@@ -5,6 +5,9 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { v7 as uuidv7 } from "uuid";
 import type { EventBase, EventType } from "./types.js";
 import type { EventAppendInput, EventQuery, EventStore, SubscribeOptions } from "./store.js";
+import type { SessionIndex } from "../projection/types.js";
+import type { SessionStore } from "./session-store.js";
+import { SqliteSessionStore } from "./sqlite-session-store.js";
 import { deriveWorkspaceId, getEventDatabasePath } from "./workspace.js";
 
 const require = createRequire(import.meta.url);
@@ -27,10 +30,11 @@ type EventRow = {
 	idempotency_key: string | null;
 };
 
-export class SqliteEventStore implements EventStore {
+export class SqliteEventStore implements EventStore, SessionStore {
 	private db: DatabaseSync;
 	private subscribers: Map<number, { handler: (event: EventBase) => void; options?: SubscribeOptions }> = new Map();
 	private nextSubId = 0;
+	private sessionStore: SqliteSessionStore;
 
 	readonly workspace_id: string;
 
@@ -45,6 +49,7 @@ export class SqliteEventStore implements EventStore {
 		}
 		this.db = new (loadDatabaseSync())(dbPath);
 		this._initSchema();
+		this.sessionStore = new SqliteSessionStore(this.db, workspaceId);
 	}
 
 	append(partial: EventAppendInput): EventBase {
@@ -209,6 +214,14 @@ export class SqliteEventStore implements EventStore {
 
 	close(): void {
 		this.db.close();
+	}
+
+	getSessionIndex(): SessionIndex | undefined {
+		return this.sessionStore.getSessionIndex();
+	}
+
+	saveSessionIndex(index: SessionIndex): void {
+		this.sessionStore.saveSessionIndex(index);
 	}
 
 	private _initSchema(): void {

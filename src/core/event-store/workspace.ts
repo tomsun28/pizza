@@ -6,9 +6,8 @@
  *
  * Storage layout:
  *   <agentDir>/workspaces/<workspace_id>/
- *     events.sqlite             # Primary event log
+ *     events.sqlite             # Primary event log + session index
  *     meta.json
- *     sessions.json
  */
 
 import { createHash } from "node:crypto";
@@ -45,11 +44,6 @@ export function getEventDatabasePath(workspaceId: string, agentDir?: string): st
 /** Returns the meta.json path for a workspace. */
 export function getWorkspaceMetaPath(workspaceId: string, agentDir?: string): string {
 	return join(getWorkspaceDir(workspaceId, agentDir), "meta.json");
-}
-
-/** Returns the sessions.json path for a workspace. */
-export function getSessionIndexPath(workspaceId: string, agentDir?: string): string {
-	return join(getWorkspaceDir(workspaceId, agentDir), "sessions.json");
 }
 
 /** Workspace metadata. */

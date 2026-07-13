@@ -13,7 +13,8 @@ import type { ToolRegistry, ApprovalHandler } from "../intent/types.js";
 import type { LLMClient, ModelConfig, ToolDefinition } from "./llm-types.js";
 import { SqliteEventStore } from "../event-store/sqlite-store.js";
 import { ThreadScopedStore } from "../event-store/thread-scoped-store.js";
-import { deriveWorkspaceId, getEventDatabasePath, getSessionIndexPath } from "../event-store/workspace.js";
+import { SessionStore, isSessionStore } from "../event-store/session-store.js";
+import { deriveWorkspaceId, getEventDatabasePath } from "../event-store/workspace.js";
 import { SessionManager } from "../projection/session-manager.js";
 import { SessionProjection } from "../projection/session-projection.js";
 import { TimelineProjection, type TimelineQueryOptions } from "../projection/timeline-projection.js";
@@ -35,8 +36,6 @@ export interface EventSourcedRuntimeConfig {
 	agentDir?: string;
 	/** SQLite database path for events (overrides default) */
 	storagePath?: string;
-	/** Session index path (overrides default) */
-	sessionIndexPath?: string;
 	/** Pre-configured EventStore (optional, will create if not provided) */
 	store?: EventStore;
 	/** Thread ID for event isolation. When set, the runtime wraps its store so every appended event carries thread_id = threadId. */
@@ -125,7 +124,7 @@ export class EventSourcedRuntime {
 		// 2. Create or use provided SessionManager (optional for migration)
 		this.sessionManager = config.sessionManager ?? (config.sessionManager !== undefined ? new SessionManager(
 			this.store,
-			config.sessionIndexPath ?? getSessionIndexPath(this.store.workspace_id, config.agentDir),
+			isSessionStore(rawStore) ? (rawStore as SessionStore) : undefined,
 		) : undefined);
 
 		// 3. Create IntentClassifier
@@ -551,7 +550,7 @@ export class EventSourcedRuntime {
 export function createEventSourcedRuntime(
 	store: EventStore,
 	sessionManager: SessionManager,
-	config: Omit<EventSourcedRuntimeConfig, "cwd" | "storagePath" | "sessionIndexPath">,
+	config: Omit<EventSourcedRuntimeConfig, "cwd" | "storagePath">,
 ): EventSourcedRuntime {
 	return new EventSourcedRuntime({
 		cwd: store.workspace_id, // workspace_id is used as cwd proxy

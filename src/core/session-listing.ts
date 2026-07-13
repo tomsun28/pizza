@@ -1,7 +1,7 @@
 /**
  * Session Listing
  *
- * Lists sessions from the new session index (sessions.json) and EventStore.
+ * Lists sessions from the SQLite event store session index and EventStore.
  * Replaces old SessionManager.list/listAll static methods with a clean,
  * event-sourced implementation.
  */
@@ -11,9 +11,8 @@ import { join } from "node:path";
 import type { AgentMessage, Message } from "./agent/types.js";
 import { getAgentDir } from "../config.js";
 import { SqliteEventStore } from "./event-store/sqlite-store.js";
-import type { EventBase } from "./event-store/types.js";
-import { deriveWorkspaceId, getEventDatabasePath, getWorkspaceMetaPath } from "./event-store/workspace.js";
 import type { SessionDescriptor, SessionIndex } from "./projection/types.js";
+import { deriveWorkspaceId, getEventDatabasePath, getWorkspaceMetaPath } from "./event-store/workspace.js";
 
 // ============================================================================
 // Types
@@ -55,16 +54,6 @@ function extractTextContent(message: Message): string {
 
 function isMessageWithContent(message: AgentMessage): message is Message {
 	return typeof (message as Message).role === "string" && "content" in message;
-}
-
-/** Read session index from a workspace directory */
-function readSessionIndex(indexPath: string): SessionIndex | undefined {
-	if (!existsSync(indexPath)) return undefined;
-	try {
-		return JSON.parse(readFileSync(indexPath, "utf8")) as SessionIndex;
-	} catch {
-		return undefined;
-	}
 }
 
 /** Read workspace cwd from meta.json */
@@ -138,7 +127,7 @@ function buildSessionInfo(
 
 /**
  * List all sessions for a workspace (current cwd).
- * Reads from sessions.json + EventStore for each session.
+ * Reads from the SQLite session index + EventStore for each session.
  */
 export async function listWorkspaceSessions(
 	cwd: string,
@@ -146,15 +135,14 @@ export async function listWorkspaceSessions(
 	onProgress?: SessionListProgress,
 ): Promise<SessionListInfo[]> {
 	const workspaceId = deriveWorkspaceId(cwd);
-	const indexPath = join(agentDir, "workspaces", workspaceId, "sessions.json");
-	const index = readSessionIndex(indexPath);
-	if (!index || index.sessions.length === 0) return [];
-
 	const dbPath = getEventDatabasePath(workspaceId, agentDir);
 	if (!existsSync(dbPath)) return [];
 
 	const store = new SqliteEventStore(workspaceId, dbPath, "session_list");
 	try {
+		const index = store.getSessionIndex();
+		if (!index || index.sessions.length === 0) return [];
+
 		const workspaceCwd = readWorkspaceCwd(workspaceId, agentDir) ?? cwd;
 		const results: SessionListInfo[] = [];
 
@@ -173,7 +161,7 @@ export async function listWorkspaceSessions(
 
 /**
  * List all sessions across all workspaces.
- * Scans agentDir/workspaces/* for sessions.json files.
+ * Scans agentDir/workspaces/* for event databases.
  */
 export async function listAllSessions(
 	agentDir: string = getAgentDir(),
@@ -190,15 +178,14 @@ export async function listAllSessions(
 
 	for (let i = 0; i < workspaceEntries.length; i++) {
 		const workspaceId = workspaceEntries[i]!;
-		const indexPath = join(workspacesDir, workspaceId, "sessions.json");
-		const index = readSessionIndex(indexPath);
-		if (!index || index.sessions.length === 0) continue;
-
 		const dbPath = getEventDatabasePath(workspaceId, agentDir);
 		if (!existsSync(dbPath)) continue;
 
 		const store = new SqliteEventStore(workspaceId, dbPath, "session_list_all");
 		try {
+			const index = store.getSessionIndex();
+			if (!index || index.sessions.length === 0) continue;
+
 			const workspaceCwd = readWorkspaceCwd(workspaceId, agentDir) ?? process.cwd();
 			for (const desc of index.sessions) {
 				results.push(buildSessionInfo(desc, workspaceId, workspaceCwd, store));

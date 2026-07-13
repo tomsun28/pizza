@@ -62,7 +62,7 @@ function makeTextResponse(text: string): LLMResponse {
 function createFacade(client?: LLMClient, modelRegistry?: ModelRegistry): SessionFacade {
 	const cwd = makeTempDir();
 	const store = new SqliteEventStore(`rpc-facade-${Date.now()}`, join(cwd, "events.sqlite"));
-	const sessionManager = new SessionManager(store, join(cwd, "sessions.json"));
+	const sessionManager = new SessionManager(store, store);
 	sessionManager.createSession("user_explicit", "Initial");
 	const runtime = new EventSourcedRuntime({
 		cwd,
@@ -135,8 +135,8 @@ describe("runRpcModeWithFacade", () => {
 				}),
 			);
 			const eventTypes = records
-				.filter((record): record is EventBase => typeof record.event_id === "string")
-				.map((record) => record.type);
+				.filter((record) => typeof record.event_id === "string")
+				.map((record) => (record as unknown as EventBase).type);
 			expect(eventTypes).toContain("USER_MESSAGE");
 			expect(eventTypes).toContain("AGENT_MESSAGE_END");
 			expect(eventTypes).toContain("AGENT_TURN_COMPLETED");

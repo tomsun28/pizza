@@ -72,7 +72,6 @@ describe("createSessionFacade", () => {
 		return {
 			cwd,
 			storagePath: ":memory:",
-			sessionIndexPath: join(cwd, "sessions.json"),
 			authStorage: AuthStorage.inMemory(),
 			modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
 			settingsManager: SettingsManager.inMemory({ defaultProvider: "test", defaultModel: "test-model" }),

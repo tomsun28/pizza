@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -9,11 +9,10 @@ import {
 } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ENV_AGENT_DIR } from "../src/config.js";
-import { deriveWorkspaceId, getSessionIndexPath } from "../src/core/event-store/workspace.js";
+import { SqliteEventStore } from "../src/core/event-store/sqlite-store.js";
+import { deriveWorkspaceId, getEventDatabasePath } from "../src/core/event-store/workspace.js";
 import type { ExtensionAPI } from "../src/core/extensions/types.js";
 import { makeSessionRef } from "../src/core/session-ref.js";
-
-
 
 import { main } from "../src/main.js";
 
@@ -144,11 +143,18 @@ describe("main print facade resume route", () => {
 
 	function readOnlySessionRef(agentDir: string): string {
 		const workspaceId = deriveWorkspaceId(process.cwd());
-		const index = JSON.parse(readFileSync(getSessionIndexPath(workspaceId, agentDir), "utf8")) as {
-			sessions: Array<{ session_id: string }>;
-		};
-		expect(index.sessions).toHaveLength(1);
-		return makeSessionRef(workspaceId, index.sessions[0]!.session_id);
+		const dbPath = getEventDatabasePath(workspaceId, agentDir);
+		if (!existsSync(dbPath)) {
+			throw new Error(`Event database not found: ${dbPath}`);
+		}
+		const store = new SqliteEventStore(workspaceId, dbPath, "test_session_read");
+		try {
+			const index = store.getSessionIndex();
+			expect(index?.sessions).toHaveLength(1);
+			return makeSessionRef(workspaceId, index!.sessions[0]!.session_id);
+		} finally {
+			store.close();
+		}
 	}
 
 	it("auto-resumes the eternal conversation in print/json facade mode", async () => {

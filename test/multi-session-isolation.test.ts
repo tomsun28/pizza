@@ -3,6 +3,7 @@ import { SqliteEventStore } from "../src/core/event-store/sqlite-store.js";
 import { ThreadScopedStore } from "../src/core/event-store/thread-scoped-store.js";
 import { SessionManager } from "../src/core/projection/session-manager.js";
 import { SessionProjection } from "../src/core/projection/session-projection.js";
+import type { AgentMessage } from "../src/core/agent/types.js";
 
 /**
  * Prove that two threads sharing one EventStore are isolated:
@@ -14,7 +15,7 @@ import { SessionProjection } from "../src/core/projection/session-projection.js"
 describe("multi-thread isolation", () => {
 	function setup() {
 		const store = new SqliteEventStore("ws_test", ":memory:");
-		const sessionManager = new SessionManager(store, ":memory:");
+		const sessionManager = new SessionManager(store, store);
 		return { store, sessionManager };
 	}
 
@@ -39,9 +40,9 @@ describe("multi-thread isolation", () => {
 		});
 	}
 
-	function textOf(messages: { content: unknown }[]): string[] {
+	function textOf(messages: AgentMessage[]): string[] {
 		return messages.map((m) => {
-			const c = m.content;
+			const c = (m as any).content;
 			if (typeof c === "string") return c;
 			return Array.isArray(c)
 				? c.filter((b: { type: string }) => b.type === "text").map((b: { text: string }) => b.text).join("")
