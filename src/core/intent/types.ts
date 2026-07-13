@@ -92,6 +92,11 @@ export interface ToolMetadata {
 
 /** Approval handler for UI integration */
 export interface ApprovalHandler {
-	requestApproval(intentEventId: string, classification: IntentClassification): void;
+	requestApproval(
+		intentEventId: string,
+		classification: IntentClassification,
+		toolName?: string,
+		args?: Record<string, unknown>,
+	): void;
 	cancelApproval(intentEventId: string): void;
 }

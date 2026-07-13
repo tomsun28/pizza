@@ -367,6 +367,10 @@ export class EventSourcedRuntime {
 		});
 	}
 
+	setApprovalHandler(approvalHandler: ApprovalHandler): void {
+		this.config.approvalHandler = approvalHandler;
+	}
+
 	private _createDefaultProjection(): SessionProjection {
 		const desc: SessionDescriptor = {
 			session_id: "default",
