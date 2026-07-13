@@ -50,6 +50,7 @@ import { parseSkillBlock } from "../../core/skill-block-parser.js";
 
 import type { SessionFacade } from "../../core/session-facade.js";
 import type { CreateSessionFacadeResult } from "../../core/session-facade-factory.js";
+import type { ApprovalHandler, IntentClassification } from "../../core/intent/types.js";
 import type { ModeEvent } from "../event-mapper.js";
 import { mapTypedEventToModeEvents } from "../event-mapper.js";
 import type { EventBase } from "../../core/event-store/types.js";
@@ -81,6 +82,7 @@ import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipb
 import { parseGitUrl } from "../../utils/git.js";
 import { killTrackedDetachedChildren } from "../../utils/shell.js";
 import { ensureTool } from "../../utils/tools-manager.js";
+import { ApprovalDialogComponent } from "./components/approval-dialog.js";
 import { AssistantMessageComponent } from "./components/assistant-message.js";
 import { BashExecutionComponent } from "./components/bash-execution.js";
 import { BorderedLoader } from "./components/bordered-loader.js";
@@ -242,6 +244,8 @@ export class InteractiveMode {
 	private extensionSelector: ExtensionSelectorComponent | undefined = undefined;
 	private extensionInput: ExtensionInputComponent | undefined = undefined;
 	private extensionEditor: ExtensionEditorComponent | undefined = undefined;
+	private approvalDialogComponent: ApprovalDialogComponent | undefined = undefined;
+	private pendingApprovalEventId: string | undefined = undefined;
 	private extensionTerminalInputUnsubscribers = new Set<() => void>();
 	private extensionWidgetsAbove = new Map<string, Component & { dispose?(): void }>();
 	private extensionWidgetsBelow = new Map<string, Component & { dispose?(): void }>();
@@ -505,7 +509,21 @@ export class InteractiveMode {
 		mode._streamingText = "";
 		mode.signalCleanupHandlers = [];
 		mode.initUI();
+		mode.facade.runtime.setApprovalHandler(mode.createApprovalHandler());
 		return mode;
+	}
+
+	private createApprovalHandler(): ApprovalHandler {
+		return {
+			requestApproval: (intentEventId, classification, toolName, args) => {
+				this.showApprovalDialog(intentEventId, classification, toolName ?? "unknown", args ?? {});
+			},
+			cancelApproval: (intentEventId) => {
+				if (this.approvalDialogComponent) {
+					this.hideApprovalDialog();
+				}
+			},
+		};
 	}
 
 	/** Shared UI initialization */
@@ -1762,6 +1780,9 @@ export class InteractiveMode {
 		if (this.extensionEditor) {
 			this.hideExtensionEditor();
 		}
+		if (this.approvalDialogComponent) {
+			this.hideApprovalDialog();
+		}
 		this.ui.hideOverlay();
 		this.clearExtensionTerminalInputListeners();
 		this.setExtensionFooter(undefined);
@@ -2025,6 +2046,54 @@ export class InteractiveMode {
 		this.editorContainer.addChild(this.editor);
 		this.extensionSelector = undefined;
 		this.ui.setFocus(this.editor);
+		this.ui.requestRender();
+	}
+
+	private showApprovalDialog(
+		intentEventId: string,
+		classification: IntentClassification,
+		toolName: string,
+		args: Record<string, unknown>,
+	): void {
+		this.hideApprovalDialog();
+		this.pendingApprovalEventId = intentEventId;
+		this.approvalDialogComponent = new ApprovalDialogComponent(
+			this.ui,
+			classification,
+			toolName,
+			args,
+			() => {
+				const eid = this.pendingApprovalEventId;
+				this.pendingApprovalEventId = undefined;
+				this.hideApprovalDialog();
+				if (eid) this.facade.runtime.approve(eid);
+			},
+			() => {
+				const eid = this.pendingApprovalEventId;
+				this.pendingApprovalEventId = undefined;
+				this.hideApprovalDialog();
+				if (eid) this.facade.runtime.reject(eid);
+			},
+		);
+		this.editorContainer.clear();
+		this.editorContainer.addChild(this.approvalDialogComponent);
+		this.ui.setFocus(this.approvalDialogComponent);
+		this.ui.requestRender();
+	}
+
+	private hideApprovalDialog(): void {
+		const eid = this.pendingApprovalEventId;
+		this.approvalDialogComponent?.dispose();
+		this.approvalDialogComponent = undefined;
+		this.pendingApprovalEventId = undefined;
+		if (eid) {
+			this.facade.runtime.reject(eid);
+		}
+		if (!this.extensionSelector && !this.extensionInput && !this.extensionEditor) {
+			this.editorContainer.clear();
+			this.editorContainer.addChild(this.editor);
+			this.ui.setFocus(this.editor);
+		}
 		this.ui.requestRender();
 	}
 
@@ -2631,6 +2700,12 @@ export class InteractiveMode {
 					this.streamingMessage = undefined;
 				}
 				this.pendingTools.clear();
+				// Surface loop detection to the user so they know why the agent stopped.
+				if (event.reason === "loop_detected") {
+					this.showStatus(
+						"Agent stopped: repeated identical tool calls detected (possible loop). Send a message to continue.",
+					);
+				}
 				await this.checkShutdownRequested();
 				this.ui.requestRender();
 				break;

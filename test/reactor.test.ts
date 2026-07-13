@@ -580,4 +580,105 @@ describe("Reactor (event-driven core)", () => {
 
 		store.close();
 	});
+
+	// ─── Loop detection ──────────────────────────────────────────────────────
+
+	it("does NOT trigger loop detection when the same tool is called with different arguments", async () => {
+		const cwd = makeTempDir();
+		const registry = makeCliRegistry();
+
+		// LLM calls `cli` 8 times with different commands, then stops.
+		// Before the fix (signature = tool name only), 6 consecutive `cli`
+		// rounds would trigger loop_detected. With argument-aware signatures,
+		// each round is unique so no loop is detected.
+		let calls = 0;
+		const commands = ["ls", "pwd", "whoami", "date", "echo a", "echo b", "echo c", "echo d"];
+		const client: LLMClient = {
+			async complete(): Promise<LLMResponse> {
+				calls++;
+				if (calls <= commands.length) {
+					return {
+						content: [
+							{ type: "tool_call", id: `call_${calls}`, name: "cli", arguments: { command: commands[calls - 1] } } as ContentBlock,
+						],
+						provider: "test",
+						model: "test",
+						usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, cost: 0 },
+						stopReason: "tool_use",
+					};
+				}
+				return {
+					content: [{ type: "text", text: "done" } as ContentBlock],
+					provider: "test",
+					model: "test",
+					usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, cost: 0 },
+					stopReason: "stop",
+				};
+			},
+		};
+
+		const runtime = new EventSourcedRuntime({
+			cwd,
+			agentDir: cwd,
+			toolRegistry: registry,
+			llmClient: client,
+			classifierConfig: { approve_unknown: false },
+			systemPrompt: "",
+			model: { provider: "test", model_id: "test" },
+			tools: [],
+		});
+
+		await runtime.prompt("run 8 different commands");
+
+		const completed = runtime.store.query({ types: ["AGENT_TURN_COMPLETED"] });
+		expect(completed).toHaveLength(1);
+		expect((completed[0].payload as { reason: string }).reason).toBe("stop");
+		expect(calls).toBe(commands.length + 1); // 8 tool rounds + 1 stop
+
+		runtime.dispose();
+	});
+
+	it("triggers loop detection when the same tool is called with identical arguments repeatedly", async () => {
+		const cwd = makeTempDir();
+		const registry = makeCliRegistry();
+
+		// LLM calls `cli` with the EXACT same command 8 times.
+		// After 6 consecutive identical rounds, loop_detected should fire.
+		let calls = 0;
+		const client: LLMClient = {
+			async complete(): Promise<LLMResponse> {
+				calls++;
+				return {
+					content: [
+						{ type: "tool_call", id: `call_${calls}`, name: "cli", arguments: { command: "same command" } } as ContentBlock,
+					],
+					provider: "test",
+					model: "test",
+					usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, cost: 0 },
+					stopReason: "tool_use",
+				};
+			},
+		};
+
+		const runtime = new EventSourcedRuntime({
+			cwd,
+			agentDir: cwd,
+			toolRegistry: registry,
+			llmClient: client,
+			classifierConfig: { approve_unknown: false },
+			systemPrompt: "",
+			model: { provider: "test", model_id: "test" },
+			tools: [],
+		});
+
+		await runtime.prompt("run same command repeatedly");
+
+		const completed = runtime.store.query({ types: ["AGENT_TURN_COMPLETED"] });
+		expect(completed).toHaveLength(1);
+		expect((completed[0].payload as { reason: string }).reason).toBe("loop_detected");
+		// Should stop after 6 identical rounds, not 8
+		expect(calls).toBe(6);
+
+		runtime.dispose();
+	});
 });

@@ -87,12 +87,31 @@ export type EventHandlerMap = Partial<Record<EventType, EventHandler>>;
 type RetryScheduleResult = "scheduled" | "not_retryable" | "max_attempts" | "backoff_exhausted";
 
 /**
- * Safety limit: if the model calls the exact same set of tools (by name) in this
- * many consecutive turns, the reactor assumes it is stuck in an unproductive loop
- * and completes the turn instead of requesting another. Prevents runaway loops
- * (e.g. a model repeatedly calling a control tool like session_split).
+ * Safety limit: if the model calls the exact same set of tools (by name AND
+ * arguments) in this many consecutive turns, the reactor assumes it is stuck in
+ * an unproductive loop and completes the turn instead of requesting another.
+ * Prevents runaway loops (e.g. a model repeatedly calling a control tool like
+ * session_split with identical arguments).
+ *
+ * Note: the signature includes a hash of the arguments, so calling the same
+ * tool with different arguments (e.g. `cli` with different commands) does NOT
+ * count as a loop. Only truly identical rounds are detected.
  */
 const MAX_CONSECUTIVE_IDENTICAL_TOOL_ROUNDS = 6;
+
+/**
+ * Compute a stable hash of a tool call's arguments for loop detection.
+ * Uses FNV-1a (32-bit) — fast, dependency-free, good enough for signatures.
+ */
+function hashArguments(args: unknown): string {
+	const s = typeof args === "string" ? args : JSON.stringify(args);
+	let h = 0x811c9dc5;
+	for (let i = 0; i < s.length; i++) {
+		h ^= s.charCodeAt(i);
+		h = Math.imul(h, 0x01000193);
+	}
+	return (h >>> 0).toString(16);
+}
 
 // ============================================================================
 // Tool Call Tracking (join-pattern for parallel tool execution)
@@ -135,7 +154,7 @@ export class Reactor {
 	}>();
 	/** Set when abort() is called with no new content — next turn completion should discard queued follow-ups. */
 	private _abortedByUser = false;
-	/** Tool names called in each consecutive tool-use round within the current prompt cycle. */
+	/** Signatures (tool name + argument hash) for each consecutive tool-use round within the current prompt cycle. */
 	private _toolRoundSignatures: string[][] = [];
 	constructor(config: ReactorConfig) {
 		this.config = config;
@@ -611,8 +630,12 @@ export class Reactor {
 		};
 		this.turnTrackers.set(event.event_id, tracker);
 
-		// Record the sorted tool-name signature for loop detection
-		const signature = toolCalls.map((tc) => tc.name).sort();
+		// Record the sorted signature (tool name + argument hash) for loop detection.
+		// Including arguments prevents false positives when the model calls the same
+		// tool (e.g. `cli`) repeatedly with different commands — a normal workflow.
+		const signature = toolCalls
+			.map((tc) => `${tc.name}:${hashArguments(tc.arguments)}`)
+			.sort();
 		this._toolRoundSignatures.push(signature);
 
 		// Emit one INTENT_TOOL_CALL per tool call
@@ -669,7 +692,12 @@ export class Reactor {
 					tool_name: payload.tool_name,
 					arguments: payload.arguments,
 				});
-				this.config.approvalHandler?.requestApproval(event.event_id, payload.classification!);
+				this.config.approvalHandler?.requestApproval(
+					event.event_id,
+					payload.classification!,
+					payload.tool_name,
+					payload.arguments,
+				);
 			});
 
 			if (!approved) {
@@ -918,7 +946,7 @@ export class Reactor {
 
 	/**
 	 * Check whether the model is stuck in a loop — calling the exact same set
-	 * of tool names in too many consecutive rounds.
+	 * of tools (by name AND arguments) in too many consecutive rounds.
 	 */
 	private _isInToolLoop(): boolean {
 		const sigs = this._toolRoundSignatures;

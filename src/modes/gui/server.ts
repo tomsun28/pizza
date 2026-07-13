@@ -865,6 +865,15 @@ const INDEX_HTML = String.raw`<!doctype html>
 					break;
 				case "turn_completed":
 					state.isRunning = false;
+					if (event.reason === "loop_detected") {
+						state.items.push({
+							id: event.eventId,
+							type: "system",
+							title: "Loop detected",
+							status: "",
+							text: "Agent stopped: repeated identical tool calls detected (possible loop). Send a message to continue.",
+						});
+					}
 					renderMeta();
 					break;
 				case "runtime_error":
