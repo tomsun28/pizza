@@ -29,7 +29,8 @@ export type Edit =
 	| { op: "replace"; range: string; new: string }
 	| { op: "insert_before"; range: string; new: string }
 	| { op: "insert_after"; range: string; new: string }
-	| { op: "delete"; range: string };
+	| { op: "delete"; range: string }
+	| { op: "search"; old: string; new: string };
 
 interface MatchedEdit {
 	editIndex: number;
@@ -88,7 +89,11 @@ export function applyEditsToNormalizedContent(
 ): AppliedEditsResult {
 	for (let i = 0; i < edits.length; i++) {
 		const edit = edits[i];
-		if (edit.range.trim().length === 0) {
+		if (edit.op === "search") {
+			if (edit.old.trim().length === 0) {
+				throw new Error(`edits[${i}].old must not be empty in ${path}.`);
+			}
+		} else if (edit.range.trim().length === 0) {
 			throw new Error(`edits[${i}].range must not be empty in ${path}.`);
 		}
 	}
@@ -97,6 +102,32 @@ export function applyEditsToNormalizedContent(
 	const matchedEdits: MatchedEdit[] = [];
 	for (let i = 0; i < edits.length; i++) {
 		const edit = edits[i];
+
+		// Search-and-replace: find the exact text in the file, no line anchors needed.
+		if (edit.op === "search") {
+			const searchText = normalizeToLF(edit.old);
+			const firstMatch = baseContent.indexOf(searchText);
+			if (firstMatch === -1) {
+				throw new Error(
+					`edits[${i}].old text not found in ${path}. Make sure the search text matches the file exactly (including whitespace and indentation).`,
+				);
+			}
+			const secondMatch = baseContent.indexOf(searchText, firstMatch + 1);
+			if (secondMatch !== -1) {
+				throw new Error(
+					`edits[${i}].old text matches multiple locations in ${path}. Include more surrounding lines in the search text to make it unique.`,
+				);
+			}
+			const existingText = baseContent.slice(firstMatch, firstMatch + searchText.length);
+			matchedEdits.push({
+				editIndex: i,
+				matchIndex: firstMatch,
+				matchLength: searchText.length,
+				replacement: normalizeReplacementText(edit.new, existingText),
+			});
+			continue;
+		}
+
 		const resolved = resolveRange(baseContent, edit.range, path);
 		let matchIndex = resolved.startIndex;
 		let matchLength = resolved.endIndex - resolved.startIndex;

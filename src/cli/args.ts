@@ -207,13 +207,13 @@ If grep/find/ls are missing from PATH, Pizza injects temporary shims only for th
 
 ${chalk.bold("Commands:")}
   ${APP_NAME} gui                      Open the local GUI workbench
-  ${APP_NAME} install <source> [-l]     Install extension source and add to settings
-  ${APP_NAME} remove <source> [-l]      Remove extension source from settings
-  ${APP_NAME} uninstall <source> [-l]   Alias for remove
-  ${APP_NAME} update [source]           Update installed extensions (skips pinned sources)
-  ${APP_NAME} list                      List installed extensions from settings
+  ${APP_NAME} plugin install <src> [-l]  Install extension source and add to settings
+  ${APP_NAME} plugin remove <src> [-l]   Remove extension source from settings
+  ${APP_NAME} plugin uninstall <src> [-l] Alias for remove
+  ${APP_NAME} plugin update [source]     Update installed extensions (skips pinned sources)
+  ${APP_NAME} plugin list                List installed extensions from settings
   ${APP_NAME} config                    Open TUI to enable/disable package resources
-  ${APP_NAME} <command> --help          Show help for install/remove/uninstall/update/list
+  ${APP_NAME} plugin --help             Show help for plugin commands
 
 ${chalk.bold("Options:")}
   --provider <name>              Provider name (default: google)

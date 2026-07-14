@@ -207,6 +207,7 @@ function parseEditInput(args: string[]): { path: string; edits: Edit[] } {
 	const positional: string[] = [];
 	let op: Edit["op"] | undefined;
 	let range: string | undefined;
+	let oldValue: string | undefined;
 	let newValue: string | undefined;
 
 	for (let i = 0; i < args.length; i++) {
@@ -218,7 +219,7 @@ function parseEditInput(args: string[]): { path: string; edits: Edit[] } {
 		} else if (arg === "--op") {
 			op = parseEditOp(args[++i] ?? "");
 		} else if (arg === "--old" || arg === "-o") {
-			throw new Error("edit no longer supports --old. Read the file and use --range from the line anchors.");
+			oldValue = args[++i] ?? "";
 		} else if (arg === "--range-id" || arg === "--rangeId") {
 			throw new Error("edit no longer supports --range-id. Use --range.");
 		} else if (arg === "--range" || arg === "-r") {
@@ -243,10 +244,17 @@ function parseEditInput(args: string[]): { path: string; edits: Edit[] } {
 	}
 
 	if (edits.length === 0) {
-		if (op !== undefined || range !== undefined) {
+		if (op === "search") {
+			edits.push(buildSearchEdit(oldValue, newValue));
+		} else if (op !== undefined || range !== undefined) {
 			edits.push(buildEditFromParts(op, range, newValue));
 		} else if (positional.length >= 2) {
-			edits.push(buildEditFromParts(parseEditOp(positional[0] ?? ""), positional[1], positional.slice(2).join(" ")));
+			const parsedOp = parseEditOp(positional[0] ?? "");
+			if (parsedOp === "search") {
+				edits.push(buildSearchEdit(positional[1], positional.slice(2).join(" ")));
+			} else {
+				edits.push(buildEditFromParts(parsedOp, positional[1], positional.slice(2).join(" ")));
+			}
 		}
 	}
 
@@ -254,25 +262,44 @@ function parseEditInput(args: string[]): { path: string; edits: Edit[] } {
 }
 
 function parseEditOp(value: string): Edit["op"] {
-	if (value === "replace" || value === "insert_before" || value === "insert_after" || value === "delete") {
+	if (value === "replace" || value === "insert_before" || value === "insert_after" || value === "delete" || value === "search") {
 		return value;
 	}
-	throw new Error("edit op must be one of: replace, insert_before, insert_after, delete");
+	throw new Error("edit op must be one of: replace, insert_before, insert_after, delete, search");
 }
 
 function parseEditEntry(entry: unknown): Edit {
 	if (!entry || typeof entry !== "object") {
-		throw new Error('edit --edits entries must be objects with op, range, and new (unless op is "delete")');
+		throw new Error('edit --edits entries must be objects with op, range, and new (unless op is "delete" or "search")');
 	}
 	const record = entry as Record<string, unknown>;
+	const op = parseEditOp(String(record.op ?? ""));
+	if (op === "search") {
+		return buildSearchEdit(
+			typeof record.old === "string" ? record.old : undefined,
+			typeof record.new === "string" ? record.new : undefined,
+		);
+	}
 	return buildEditFromParts(
-		parseEditOp(String(record.op ?? "")),
+		op as AnchorEditOp,
 		typeof record.range === "string" ? record.range : undefined,
 		typeof record.new === "string" ? record.new : undefined,
 	);
 }
 
-function buildEditFromParts(op: Edit["op"] | undefined, range: string | undefined, newValue: string | undefined): Edit {
+function buildSearchEdit(oldValue: string | undefined, newValue: string | undefined): Edit {
+	if (typeof oldValue !== "string") {
+		throw new Error('edit search requires --old (the text to search for in the file)');
+	}
+	if (typeof newValue !== "string") {
+		throw new Error('edit search requires --new (the replacement text)');
+	}
+	return { op: "search", old: oldValue, new: newValue };
+}
+
+type AnchorEditOp = "replace" | "insert_before" | "insert_after" | "delete";
+
+function buildEditFromParts(op: AnchorEditOp | undefined, range: string | undefined, newValue: string | undefined): Edit {
 	if (!op) {
 		throw new Error("edit requires --op");
 	}
@@ -403,24 +430,28 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 			].join("\n");
 		case "edit":
 			return [
-				"edit - Edit a file with read range anchors",
+				"edit - Edit a file with read range anchors or search-and-replace",
 				"",
 				"Description:",
-				"  Edits one existing file using hashline ranges from read output. Each edit",
-				"  can replace, insert before, insert after, or delete one whole line or a",
-				"  continuous whole-line range. Ranges fail safely",
-				"  if the referenced lines changed or became ambiguous.",
+				"  Edits one existing file. Two modes are supported:",
+				"  1. Anchor mode: use hashline ranges from read output (replace, insert_before,",
+				"     insert_after, delete). Ranges fail safely if lines changed or became ambiguous.",
+				"  2. Search mode: use op=search to find and replace exact text without line anchors.",
+				"     The search text must match exactly one location in the file. Use this as a",
+				"     fallback when you don't have fresh line anchors (e.g. after using sed/cat).",
 				"",
 				"Parameters:",
 				"  path              File path to edit. Relative paths are resolved from the working directory.",
-				"  op                replace, insert_before, insert_after, or delete.",
+				"  op                replace, insert_before, insert_after, delete, or search.",
 				"  range             Line anchor or range from read output, e.g. 12#ab or 12#ab..14#de.",
-				"  new               New text for replace and insert operations. Omit for delete.",
+				"  old               Text to search for (only for op=search). Must match exactly one location.",
+				"  new               New text for replace, insert, and search operations. Omit for delete.",
 				"  --path, -p        File path to edit.",
 				"  --op              Edit operation.",
 				"  --range, -r       Line anchor or range from read output.",
-				"  --new, -n         New text for replace and insert operations.",
-				"  --edits, -e       JSON array of {\"op\":\"...\",\"range\":\"...\",\"new\":\"...\"} edits.",
+				"  --old, -o         Text to search for (only for op=search).",
+				"  --new, -n         New text for replace, insert, and search operations.",
+				"  --edits, -e       JSON array of edit objects.",
 				"  -h, --help        Show this help.",
 				"",
 				"Examples:",
@@ -428,7 +459,10 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"  edit src/app.ts replace 12#ab \"const a = 2\"",
 				"  edit --path src/app.ts --op insert_after --range 12#ab --new \"const b = 3\"",
 				"  edit --path src/app.ts --op delete --range 12#ab..14#de",
+				"  edit --path src/app.ts --op search --old \"const a = 1\" --new \"const a = 2\"",
+				"  edit src/app.ts search \"const a = 1\" \"const a = 2\"",
 				"  edit --path src/app.ts --edits '[{\"op\":\"replace\",\"range\":\"12#ab\",\"new\":\"const a = 2\"}]'",
+				"  edit --path src/app.ts --edits '[{\"op\":\"search\",\"old\":\"const a = 1\",\"new\":\"const a = 2\"}]'",
 			].join("\n");
 		case "session_split":
 			return [

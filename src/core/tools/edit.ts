@@ -51,12 +51,28 @@ const rangeEditSchema = Type.Object(
 	{ additionalProperties: false },
 );
 
+const searchEditSchema = Type.Object(
+	{
+		op: Type.Literal("search", { description: "Search-and-replace: find exact text and replace it." }),
+		old: Type.String({
+			description:
+				"The exact text to search for in the file. Must match exactly one location. Include enough surrounding context to be unique.",
+		}),
+		new: Type.String({
+			description: "The replacement text.",
+		}),
+	},
+	{ additionalProperties: false },
+);
+
+const editEntrySchema = Type.Union([rangeEditSchema, searchEditSchema]);
+
 const editSchema = Type.Object(
 	{
 		path: Type.String({ description: "Path to the file to edit (relative or absolute)" }),
-		edits: Type.Array(rangeEditSchema, {
+		edits: Type.Array(editEntrySchema, {
 			description:
-				"One or more edits using ranges from read output. Each edit is resolved against the original file, not incrementally. Do not include overlapping or nested ranges. If two changes touch the same block or nearby lines, merge them into one range edit instead.",
+				"One or more edits. Anchor edits use ranges from read output; search edits find and replace exact text. Each edit is resolved against the original file, not incrementally. Do not include overlapping or nested ranges. If two changes touch the same block or nearby lines, merge them into one edit instead.",
 		}),
 	},
 	{ additionalProperties: false },
@@ -118,6 +134,9 @@ function isValidEditEntry(edit: unknown): edit is Edit {
 		return false;
 	}
 	const record = edit as Record<string, unknown>;
+	if (record.op === "search") {
+		return typeof record.old === "string" && typeof record.new === "string";
+	}
 	if (
 		record.op !== "replace" &&
 		record.op !== "insert_before" &&
@@ -137,7 +156,7 @@ function validateEditInput(input: EditToolInput): { path: string; edits: Edit[] 
 		throw new Error("Edit tool input is invalid. edits must contain at least one edit.");
 	}
 	if (!input.edits.every(isValidEditEntry)) {
-		throw new Error('Edit tool input is invalid. Each edit must include op and range, plus new unless op is "delete".');
+		throw new Error('Edit tool input is invalid. Each edit must include op and range (plus new unless op is "delete"), or op="search" with old and new.');
 	}
 	return { path: input.path, edits: input.edits };
 }
@@ -310,12 +329,13 @@ export function createEditToolDefinition(
 		name: "edit",
 		label: "edit",
 		description:
-			"Edit a single file using range anchors from read output. Supports replace, insert_before, insert_after, and delete for one line or a continuous whole-line range. Ranges fail safely if the referenced lines changed or became ambiguous. If two changes affect the same block or nearby lines, merge them into one range edit instead of emitting overlapping edits.",
-		promptSnippet: "Make precise file edits with read range anchors, including multiple disjoint edits in one call",
+			"Edit a single file using range anchors from read output, or search-and-replace for exact text matching. Anchor mode supports replace, insert_before, insert_after, and delete for one line or a continuous whole-line range. Ranges fail safely if the referenced lines changed or became ambiguous. Search mode (op=search) finds and replaces exact text without needing line anchors — use it as a fallback when you don't have fresh anchors. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits.",
+		promptSnippet: "Make precise file edits with read range anchors or search-and-replace, including multiple disjoint edits in one call",
 		promptGuidelines: [
-			"Use edits[].range from read output for every edit.",
+			"Use edits[].range from read output for every anchor-mode edit.",
 			"Use op=insert_after or op=insert_before instead of repeating the anchored line.",
 			"For partial-line changes, use op=replace and replace the whole line with the updated line.",
+			"Use op=search with old/new for search-and-replace when you don't have fresh line anchors (e.g. after using sed/cat to view the file, or after a previous edit shifted line numbers). The old text must match exactly one location in the file.",
 			"When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls",
 			"Each edit is resolved against the original file, not after earlier edits are applied. Do not emit overlapping or nested ranges. Merge nearby changes into one edit.",
 		],

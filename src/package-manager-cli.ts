@@ -27,13 +27,13 @@ function reportSettingsErrors(settingsManager: SettingsManager, context: string)
 function getPackageCommandUsage(command: PackageCommand): string {
 	switch (command) {
 		case "install":
-			return `${APP_NAME} install <source> [-l]`;
+			return `${APP_NAME} plugin install <source> [-l]`;
 		case "remove":
-			return `${APP_NAME} remove <source> [-l]`;
+			return `${APP_NAME} plugin remove <source> [-l]`;
 		case "update":
-			return `${APP_NAME} update [source]`;
+			return `${APP_NAME} plugin update [source]`;
 		case "list":
-			return `${APP_NAME} list`;
+			return `${APP_NAME} plugin list`;
 	}
 }
 
@@ -49,12 +49,12 @@ Options:
   -l, --local    Install project-locally (${CONFIG_DIR_NAME}/settings.json)
 
 Examples:
-  ${APP_NAME} install npm:@foo/bar
-  ${APP_NAME} install git:github.com/user/repo
-  ${APP_NAME} install git:git@github.com:user/repo
-  ${APP_NAME} install https://github.com/user/repo
-  ${APP_NAME} install ssh://git@github.com/user/repo
-  ${APP_NAME} install ./local/path
+  ${APP_NAME} plugin install npm:@foo/bar
+  ${APP_NAME} plugin install git:github.com/user/repo
+  ${APP_NAME} plugin install git:git@github.com:user/repo
+  ${APP_NAME} plugin install https://github.com/user/repo
+  ${APP_NAME} plugin install ssh://git@github.com/user/repo
+  ${APP_NAME} plugin install ./local/path
 `);
 			return;
 
@@ -63,14 +63,14 @@ Examples:
   ${getPackageCommandUsage("remove")}
 
 Remove a package and its source from settings.
-Alias: ${APP_NAME} uninstall <source> [-l]
+Alias: ${APP_NAME} plugin uninstall <source> [-l]
 
 Options:
   -l, --local    Remove from project settings (${CONFIG_DIR_NAME}/settings.json)
 
 Examples:
-  ${APP_NAME} remove npm:@foo/bar
-  ${APP_NAME} uninstall npm:@foo/bar
+  ${APP_NAME} plugin remove npm:@foo/bar
+  ${APP_NAME} plugin uninstall npm:@foo/bar
 `);
 			return;
 
@@ -93,8 +93,33 @@ List installed packages from user and project settings.
 	}
 }
 
+function printPluginGroupHelp(): void {
+	console.log(`${chalk.bold("Usage:")}
+  ${APP_NAME} plugin <command> [options]
+
+${chalk.bold("Plugin commands:")}
+  install <source> [-l]   Install extension source and add to settings
+  remove <source> [-l]    Remove extension source from settings
+  uninstall <source> [-l] Alias for remove
+  update [source]         Update installed extensions (skips pinned sources)
+  list                    List installed extensions from settings
+
+${chalk.bold("Examples:")}
+  ${APP_NAME} plugin install npm:@foo/bar
+  ${APP_NAME} plugin remove npm:@foo/bar
+  ${APP_NAME} plugin update
+  ${APP_NAME} plugin list
+
+Run "${APP_NAME} plugin <command> --help" for command-specific help.
+`);
+}
+
 function parsePackageCommand(args: string[]): PackageCommandOptions | undefined {
-	const [rawCommand, ...rest] = args;
+	// Expect: plugin <subcommand> [options...]
+	if (args[0] !== "plugin") {
+		return undefined;
+	}
+	const [rawCommand, ...rest] = args.slice(1);
 	let command: PackageCommand | undefined;
 	if (rawCommand === "uninstall") {
 		command = "remove";
@@ -161,6 +186,30 @@ export async function handleConfigCommand(args: string[]): Promise<boolean> {
 }
 
 export async function handlePackageCommand(args: string[]): Promise<boolean> {
+	// Only handle args that start with the "plugin" group.
+	if (args[0] !== "plugin") {
+		return false;
+	}
+
+	const subArgs = args.slice(1);
+	const subCommand = subArgs[0];
+
+	// `pizza plugin` with no subcommand, or `pizza plugin --help` → show group help.
+	if (!subCommand || subCommand === "-h" || subCommand === "--help") {
+		printPluginGroupHelp();
+		return true;
+	}
+
+	// Unknown plugin subcommand → friendly error.
+	const known = ["install", "remove", "uninstall", "update", "list"];
+	if (!known.includes(subCommand)) {
+		console.error(chalk.red(`Unknown plugin command "${subCommand}".`));
+		console.error(chalk.dim(`Available commands: ${known.join(", ")}`));
+		console.error(chalk.dim(`Use "${APP_NAME} plugin --help" for more information.`));
+		process.exitCode = 1;
+		return true;
+	}
+
 	const options = parsePackageCommand(args);
 	if (!options) {
 		return false;

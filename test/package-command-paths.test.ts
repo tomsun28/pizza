@@ -46,7 +46,7 @@ describe("package commands", () => {
 		const relativePkgDir = join(projectDir, "packages", "local-package");
 		mkdirSync(relativePkgDir, { recursive: true });
 
-		await main(["install", "./packages/local-package"]);
+		await main(["plugin", "install", "./packages/local-package"]);
 
 		const settingsPath = join(agentDir, "settings.json");
 		const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as { packages?: string[] };
@@ -57,13 +57,13 @@ describe("package commands", () => {
 	});
 
 	it("should remove local packages using a path with a trailing slash", async () => {
-		await main(["install", `${packageDir}/`]);
+		await main(["plugin", "install", `${packageDir}/`]);
 
 		const settingsPath = join(agentDir, "settings.json");
 		const installedSettings = JSON.parse(readFileSync(settingsPath, "utf-8")) as { packages?: string[] };
 		expect(installedSettings.packages?.length).toBe(1);
 
-		await main(["remove", `${packageDir}/`]);
+		await main(["plugin", "remove", `${packageDir}/`]);
 
 		const removedSettings = JSON.parse(readFileSync(settingsPath, "utf-8")) as { packages?: string[] };
 		expect(removedSettings.packages ?? []).toHaveLength(0);
@@ -74,11 +74,11 @@ describe("package commands", () => {
 		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
 		try {
-			await expect(main(["install", "--help"])).resolves.toBeUndefined();
+			await expect(main(["plugin", "install", "--help"])).resolves.toBeUndefined();
 
 			const stdout = logSpy.mock.calls.map(([message]) => String(message)).join("\n");
 			expect(stdout).toContain("Usage:");
-			expect(stdout).toContain("pizza install <source> [-l]");
+			expect(stdout).toContain("pizza plugin install <source> [-l]");
 			expect(errorSpy).not.toHaveBeenCalled();
 			expect(process.exitCode).toBeUndefined();
 		} finally {
@@ -91,11 +91,11 @@ describe("package commands", () => {
 		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
 		try {
-			await expect(main(["install", "--unknown"])).resolves.toBeUndefined();
+			await expect(main(["plugin", "install", "--unknown"])).resolves.toBeUndefined();
 
 			const stderr = errorSpy.mock.calls.map(([message]) => String(message)).join("\n");
 			expect(stderr).toContain('Unknown option --unknown for "install".');
-			expect(stderr).toContain('Use "pizza --help" or "pizza install <source> [-l]".');
+			expect(stderr).toContain('Use "pizza --help" or "pizza plugin install <source> [-l]".');
 			expect(process.exitCode).toBe(1);
 		} finally {
 			errorSpy.mockRestore();
@@ -106,11 +106,11 @@ describe("package commands", () => {
 		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
 		try {
-			await expect(main(["install"])).resolves.toBeUndefined();
+			await expect(main(["plugin", "install"])).resolves.toBeUndefined();
 
 			const stderr = errorSpy.mock.calls.map(([message]) => String(message)).join("\n");
 			expect(stderr).toContain("Missing install source.");
-			expect(stderr).toContain("Usage: pizza install <source> [-l]");
+			expect(stderr).toContain("Usage: pizza plugin install <source> [-l]");
 			expect(stderr).not.toContain("at ");
 			expect(process.exitCode).toBe(1);
 		} finally {
@@ -126,7 +126,7 @@ describe("package commands", () => {
 		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
 		try {
-			await expect(main(["update", "pizza-formatter"])).resolves.toBeUndefined();
+			await expect(main(["plugin", "update", "pizza-formatter"])).resolves.toBeUndefined();
 
 			const stderr = errorSpy.mock.calls.map(([message]) => String(message)).join("\n");
 			const stdout = logSpy.mock.calls.map(([message]) => String(message)).join("\n");

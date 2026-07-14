@@ -153,6 +153,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		addGuideline("Use Pizza built-in file commands only for read, write, edit, and session_split");
 		addGuideline("Use shell commands such as grep, find, and ls normally; shell handles pipes, redirects, globs, &&, and ;");
 		addGuideline("Use read line anchors as edit range values; edit accepts op/range/new edits");
+		addGuideline("Use edit op=search with old/new for search-and-replace when you don't have fresh line anchors (e.g. after using sed/cat, or after a previous edit shifted line numbers)");
 		addGuideline("Only call session_split when the user's request is clearly unrelated to the current conversation topic");
 		addGuideline("Do not call session_split for follow-up questions, clarifications, or refinements of the current task");
 		addGuideline("Call session_split at most once per turn; after the split, your context is refreshed so proceed with the task");
@@ -193,6 +194,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		'- cli("edit src/main.ts replace 12#ab \"const value = 2\"") - Replace an anchored line',
 		'- cli("edit src/main.ts insert_after 12#ab \"const next = 3\"") - Insert after an anchored line',
 		'- cli("edit src/main.ts delete 12#ab..14#de") - Delete an anchored range',
+		'- cli("edit src/main.ts search \"const a = 1\" \"const a = 2\"") - Search-and-replace without line anchors (fallback when anchors are stale or unavailable)',
 		'- cli("session_split topic_change") - Split when the conversation topic changes',
 		'- cli("session_split --reason topic_change --name \"Fix auth\"") - Split and name the new session',
 		'- cli("grep -rn \"foo\" . | head") - Search with native shell pipeline',

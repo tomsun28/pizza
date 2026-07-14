@@ -452,7 +452,7 @@ describe("Coding Agent Tools", () => {
 
 			expect(result.exitCode).toBe(0);
 			expect(result.stderr).toBe("");
-			expect(result.stdout).toContain("edit - Edit a file with read range anchors");
+			expect(result.stdout).toContain("edit - Edit a file with read range anchors or search-and-replace");
 			expect(result.stdout).toContain("--edits, -e");
 			expect(result.stdout).toContain("--range, -r");
 			expect(result.stdout).toContain("Examples:");
