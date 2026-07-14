@@ -25,15 +25,17 @@ export function createSessionSplitToolDefinition(): ToolDefinition<typeof sessio
 		description:
 			"Split the current conversation session, starting a new session from this point forward. " +
 			"Previous messages will no longer be included in the LLM context for subsequent turns. " +
-			"Call this when the user's intent has clearly shifted to a new, unrelated topic and the previous " +
-			"conversation context is no longer needed. Do NOT call this for follow-up questions or clarifications " +
-			"about the current topic. You can call this alongside other tools in the same turn. " +
+			"Call this when the user's intent has shifted to a new topic that is substantially different from " +
+			"the current conversation and the previous context is no longer relevant. Do NOT call this for " +
+			"follow-up questions, clarifications, or refinements of the current task. You can call this " +
+			"alongside other tools in the same turn. " +
 			"IMPORTANT: Call this AT MOST ONCE per turn. After the split, your context will be refreshed " +
 			"to the new session — proceed directly with the user's requested task.",
-		promptSnippet: "Split the conversation session when the user's topic has clearly changed",
+		promptSnippet: "Split the conversation session when the user shifts to a new topic",
 		promptGuidelines: [
-			"Only call session_split when the user's request is clearly unrelated to the current conversation topic.",
+			"Call session_split when the user's request moves to a new topic that is substantially different from the current conversation.",
 			"Do not call session_split for follow-up questions, clarifications, or refinements of the current task.",
+			"When in doubt, lean towards NOT splitting — only split when the topic change is clear.",
 			"Call session_split at most once per turn. After the split, your context is refreshed — proceed with the task.",
 		],
 		parameters: sessionSplitSchema,

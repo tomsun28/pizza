@@ -154,8 +154,9 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		addGuideline("Use shell commands such as grep, find, and ls normally; shell handles pipes, redirects, globs, &&, and ;");
 		addGuideline("Use read line anchors as edit range values; edit accepts op/range/new edits");
 		addGuideline("Use edit op=search with old/new for search-and-replace when you don't have fresh line anchors (e.g. after using sed/cat, or after a previous edit shifted line numbers)");
-		addGuideline("Only call session_split when the user's request is clearly unrelated to the current conversation topic");
+		addGuideline("Call session_split when the user's request moves to a new topic that is substantially different from the current conversation");
 		addGuideline("Do not call session_split for follow-up questions, clarifications, or refinements of the current task");
+		addGuideline("When in doubt, lean towards NOT splitting — only split when the topic change is clear");
 		addGuideline("Call session_split at most once per turn; after the split, your context is refreshed so proceed with the task");
 	}
 
