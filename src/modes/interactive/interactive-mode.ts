@@ -47,6 +47,8 @@ import {
 	VERSION,
 } from "../../config.js";
 import { parseSkillBlock } from "../../core/skill-block-parser.js";
+import { executeBashWithOperations } from "../../core/bash-executor.js";
+import { createLocalBashOperations, type BashOperations } from "../../core/tools/bash.js";
 
 import type { SessionFacade } from "../../core/session-facade.js";
 import type { CreateSessionFacadeResult } from "../../core/session-facade-factory.js";
@@ -234,6 +236,7 @@ export class InteractiveMode {
 	private isBashMode = false;
 	private bashComponent: BashExecutionComponent | undefined = undefined;
 	private pendingBashComponents: BashExecutionComponent[] = [];
+	private bashAbortController: AbortController | undefined = undefined;
 	private autoCompactionLoader: Loader | undefined = undefined;
 	private autoCompactionEscapeHandler?: () => void;
 	private retryLoader: Loader | undefined = undefined;
@@ -326,7 +329,7 @@ export class InteractiveMode {
 	}
 
 	private get isBashRunningValue() {
-		return false;
+		return this.bashAbortController !== undefined;
 	}
 
 
@@ -361,7 +364,9 @@ export class InteractiveMode {
 		this.facade.abort();
 	}
 	private abortBashFacade(): void {
-		// No-op in facade mode
+		if (this.bashAbortController) {
+			this.bashAbortController.abort();
+		}
 	}
 	private abortBranchSummaryFacade(): void {
 		// No-op in facade mode
@@ -450,10 +455,38 @@ export class InteractiveMode {
 		// No-op in facade mode
 	}
 	private async executeBashFacade(command: string, onChunk?: (chunk: string) => void, options?: any): Promise<any> {
-		throw new Error("executeBash is not yet supported in facade mode");
+		const operations: BashOperations = options?.operations ?? createLocalBashOperations();
+		this.bashAbortController = new AbortController();
+		const startTime = Date.now();
+		try {
+			const result = await executeBashWithOperations(command, this.facadeCwd, operations, {
+				onChunk,
+				signal: this.bashAbortController.signal,
+			});
+			return {
+				...result,
+				durationMs: Date.now() - startTime,
+			};
+		} finally {
+			this.bashAbortController = undefined;
+		}
 	}
 	private recordBashResultFacade(command: string, result: any, options?: { excludeFromContext?: boolean }): void {
-		// No-op in facade mode
+		this.facade.runtime.store.append({
+			actor_id: "user",
+			type: "BASH_EXECUTION",
+			payload: {
+				command,
+				output: result.output ?? "",
+				exit_code: result.exitCode,
+				cancelled: result.cancelled ?? false,
+				truncated: result.truncated ?? false,
+				full_output_path: result.fullOutputPath,
+				cwd: this.facadeCwd,
+				duration_ms: result.durationMs,
+				exclude_from_context: options?.excludeFromContext ?? false,
+			},
+		});
 	}
 	private async waitForIdleFacade(): Promise<void> {
 		await this.facade.waitForIdle();
@@ -2713,6 +2746,11 @@ export class InteractiveMode {
 
 			case "message_committed": {
 				const msg = event.message;
+				// bashExecution messages are already rendered by handleBashCommand;
+				// skip here to avoid duplicate display from the BASH_EXECUTION event.
+				if (msg.role === "bashExecution") {
+					break;
+				}
 				if (msg.role === "user") {
 					this.addMessageToChat(msg);
 					this.updatePendingMessagesDisplay();
@@ -4900,6 +4938,9 @@ export class InteractiveMode {
 					result.fullOutputPath,
 				);
 			}
+
+			// Record the result in session
+			this.recordBashResultFacade(command, result, { excludeFromContext });
 		} catch (error) {
 			if (this.bashComponent) {
 				this.bashComponent.setComplete(undefined, false);
