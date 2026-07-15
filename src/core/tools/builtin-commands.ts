@@ -54,6 +54,16 @@ export type ParsedBuiltinToolInput =
 	| {
 			command: "session_split";
 			input: { reason?: string; name?: string };
+	  }
+	| {
+			command: "history_tree";
+			input: {
+				action: "list" | "view" | "jump" | "fork";
+				session_id?: string;
+				query?: string;
+				max_messages?: number;
+				reason?: string;
+			};
 	  };
 
 /**
@@ -110,6 +120,8 @@ export function parseBuiltinToolInput(
 			return { command: "edit", input: parseEditInput(args) };
 		case "session_split":
 			return { command: "session_split", input: parseSessionSplitInput(args) };
+		case "history_tree":
+			return { command: "history_tree", input: parseHistoryTreeInput(args) };
 		default:
 			return null;
 	}
@@ -198,6 +210,56 @@ function parseSessionSplitInput(args: string[]): { reason?: string; name?: strin
 	}
 
 	return { reason, name };
+}
+
+const HISTORY_TREE_ACTIONS = ["list", "view", "jump", "fork"] as const;
+type HistoryTreeAction = (typeof HISTORY_TREE_ACTIONS)[number];
+
+function parseHistoryTreeInput(args: string[]): {
+	action: HistoryTreeAction;
+	session_id?: string;
+	query?: string;
+	max_messages?: number;
+	reason?: string;
+} {
+	let action: HistoryTreeAction | undefined;
+	let sessionId: string | undefined;
+	let query: string | undefined;
+	let maxMessages: number | undefined;
+	let reason: string | undefined;
+	const positional: string[] = [];
+
+	for (let i = 0; i < args.length; i++) {
+		const arg = args[i];
+		if (arg === "--session" || arg === "-s") {
+			sessionId = args[++i];
+		} else if (arg === "--query" || arg === "-q") {
+			query = args[++i];
+		} else if (arg === "--max-messages" || arg === "-m") {
+			maxMessages = parseOptionalInt(args[++i]);
+		} else if (arg === "--reason" || arg === "-r") {
+			reason = args[++i];
+		} else {
+			positional.push(arg);
+		}
+	}
+
+	if (positional.length > 0 && action === undefined) {
+		const candidate = positional[0].toLowerCase();
+		if (!HISTORY_TREE_ACTIONS.includes(candidate as HistoryTreeAction)) {
+			throw new Error(`history_tree: unknown action "${positional[0]}". Valid actions: ${HISTORY_TREE_ACTIONS.join(", ")}`);
+		}
+		action = candidate as HistoryTreeAction;
+		if (positional.length > 1 && sessionId === undefined) {
+			sessionId = positional[1];
+		}
+	}
+
+	if (!action) {
+		throw new Error(`history_tree: action required. Valid actions: ${HISTORY_TREE_ACTIONS.join(", ")}`);
+	}
+
+	return { action, session_id: sessionId, query, max_messages: maxMessages, reason };
 }
 
 function parseEditInput(args: string[]): { path: string; edits: Edit[] } {
@@ -485,6 +547,35 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"  session_split topic_change \"Fix auth\"",
 				"  session_split --reason topic_change --name \"Fix auth\"",
 			].join("\n");
+		case "history_tree":
+			return [
+				"history_tree - Browse and navigate the session history tree",
+				"",
+				"Description:",
+				"  Every past session is a node in the history tree. Use list to see the tree,",
+				"  view to preview a session's messages without switching, jump to return to a",
+				"  previous session and continue there, and fork to branch off from a session.",
+				"",
+				"Actions:",
+				"  list              Show the session history tree.",
+				"  view <session>    Preview a session's recent messages (no switch).",
+				"  jump <session>    Switch to a session; closed sessions are reopened via fork.",
+				"  fork <session>    Start a new branch from a session.",
+				"",
+				"Parameters:",
+				"  --session, -s      Target session id (alternative to positional).",
+				"  --query, -q        For list: filter on session names and first messages.",
+				"  --max-messages, -m For view: max recent messages to show (default 20).",
+				"  --reason, -r       For jump: short reason (recorded in the event log).",
+				"  -h, --help         Show this help.",
+				"",
+				"Examples:",
+				"  history_tree list",
+				"  history_tree list --query \"auth bug\"",
+				"  history_tree view sess_0042",
+				"  history_tree jump sess_0042 --reason \"return to auth work\"",
+				"  history_tree fork sess_0042",
+			].join("\n");
 		default:
 			return undefined;
 	}
@@ -691,6 +782,14 @@ export async function executeBuiltinCommand(
 			};
 		}
 
+		case "history_tree": {
+			return {
+				stdout: "",
+				stderr: "history_tree requires an active agent session context and is executed through the cli tool.",
+				exitCode: 1,
+			};
+		}
+
 		default:
 			return {
 				stdout: "",
@@ -700,7 +799,7 @@ export async function executeBuiltinCommand(
 	}
 }
 
-export const BUILTIN_COMMANDS = ["read", "write", "edit", "session_split"] as const;
+export const BUILTIN_COMMANDS = ["read", "write", "edit", "session_split", "history_tree"] as const;
 export type BuiltinCommand = (typeof BUILTIN_COMMANDS)[number];
 
 // ============================================================================

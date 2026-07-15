@@ -31,6 +31,7 @@ import {
 } from "./builtin-commands.js";
 import { createEditToolDefinition, type EditToolDetails, type EditToolInput, type EditToolOptions } from "./edit.js";
 import { createReadToolDefinition, type ReadToolDetails, type ReadToolInput, type ReadToolOptions } from "./read.js";
+import { createHistoryTreeToolDefinition, type HistoryTreeToolInput } from "./history-tree.js";
 import { createSessionSplitToolDefinition, type SessionSplitToolInput } from "./session-split.js";
 import { createWriteToolDefinition, type WriteToolInput, type WriteToolOptions } from "./write.js";
 
@@ -74,6 +75,11 @@ export type BashBuiltinDetails =
 	| {
 			name: "session_split";
 			args: SessionSplitToolInput;
+			details?: undefined;
+	  }
+	| {
+			name: "history_tree";
+			args: HistoryTreeToolInput;
 			details?: undefined;
 	  };
 
@@ -408,11 +414,12 @@ export function createBashToolDefinition(
 	const writeDefinition = createWriteToolDefinition(cwd, options?.write);
 	const editDefinition = createEditToolDefinition(cwd, options?.edit);
 	const sessionSplitDefinition = createSessionSplitToolDefinition();
+	const historyTreeDefinition = createHistoryTreeToolDefinition();
 	return {
 		name: "cli",
 		label: "cli",
-		description: `Execute a CLI command in the current working directory. Built-in commands are routed internally: read, write, edit, and session_split. Other commands execute through the system shell (grep, find, ls, git, npm, etc.). Truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB.`,
-		promptSnippet: "Execute CLI commands: read/write/edit/session_split built-ins, or shell commands (grep, find, ls, git, npm, etc.)",
+		description: `Execute a CLI command in the current working directory. Built-in commands are routed internally: read, write, edit, session_split, and history_tree. Other commands execute through the system shell (grep, find, ls, git, npm, etc.). Truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB.`,
+		promptSnippet: "Execute CLI commands: read/write/edit/session_split/history_tree built-ins, or shell commands (grep, find, ls, git, npm, etc.)",
 		parameters: bashSchema,
 		async execute(
 			toolCallId,
@@ -461,6 +468,13 @@ export function createBashToolDefinition(
 						return {
 							content: result.content,
 							details: { builtin: { name: "session_split", args: builtin.input, details: result.details } },
+						};
+					}
+					case "history_tree": {
+						const result = await historyTreeDefinition.execute(toolCallId, builtin.input, signal, undefined, ctx as never);
+						return {
+							content: result.content,
+							details: { builtin: { name: "history_tree", args: builtin.input, details: result.details } },
 						};
 					}
 				}
@@ -601,7 +615,9 @@ export function createBashToolDefinition(
 									? writeDefinition
 									: builtin.command === "edit"
 										? editDefinition
-										: sessionSplitDefinition;
+										: builtin.command === "history_tree"
+											? historyTreeDefinition
+											: sessionSplitDefinition;
 						const renderContext = makeBuiltinRenderContext(
 							context,
 							builtin.input,
@@ -666,12 +682,19 @@ export function createBashToolDefinition(
 										renderTheme,
 										renderContext as never,
 									)
-								: sessionSplitDefinition.renderResult?.(
-										{ content: result.content as never, details: builtin.details },
-										options,
-										renderTheme,
-										renderContext as never,
-									);
+								: builtin.name === "history_tree"
+									? historyTreeDefinition.renderResult?.(
+											{ content: result.content as never, details: builtin.details },
+											options,
+											renderTheme,
+											renderContext as never,
+										)
+									: sessionSplitDefinition.renderResult?.(
+											{ content: result.content as never, details: builtin.details },
+											options,
+											renderTheme,
+											renderContext as never,
+										);
 				if (component) {
 					state.builtinResultComponent = component;
 					return component;

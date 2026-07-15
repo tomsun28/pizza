@@ -173,6 +173,48 @@ export class SessionManager {
 	}
 
 	/**
+	 * Jump to a session in the history tree.
+	 *
+	 * - Target is already active: no-op.
+	 * - Target is still open (`end_event_id === "HEAD"`): switch to it directly.
+	 * - Target is closed: reopen it by forking (new session reuses the target's
+	 *   start boundary so its conversation history is preserved).
+	 *
+	 * Emits SESSION_JUMPED so the reactor can refresh its projection.
+	 */
+	jumpToSession(session_id: string, reason?: string): { descriptor: SessionDescriptor; reopened: boolean } {
+		const target = this.sessions.get(session_id);
+		if (!target) {
+			throw new Error(`Session not found: ${session_id}`);
+		}
+		if (session_id === this.activeSessionId) {
+			return { descriptor: target, reopened: false };
+		}
+
+		if (target.event_range.end_event_id === "HEAD") {
+			this.activeSessionId = target.session_id;
+			this.activeThreadId = target.thread_id;
+			this._persistIndex();
+			this.store.append({
+				actor_id: "runtime",
+				type: "SESSION_JUMPED",
+				payload: { target_session_id: target.session_id, reason },
+				thread_id: target.thread_id,
+			});
+			return { descriptor: target, reopened: false };
+		}
+
+		const reopened = this.forkFromSession(session_id);
+		this.store.append({
+			actor_id: "runtime",
+			type: "SESSION_JUMPED",
+			payload: { target_session_id: session_id, reopened_as: reopened.session_id, reason },
+			thread_id: reopened.thread_id,
+		});
+		return { descriptor: reopened, reopened: true };
+	}
+
+	/**
 	 * List all sessions.
 	 */
 	listSessions(): SessionDescriptor[] {

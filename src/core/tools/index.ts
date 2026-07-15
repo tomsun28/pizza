@@ -18,6 +18,7 @@ export {
 	type EditToolOptions,
 } from "./edit.js";
 export { withFileMutationQueue } from "./file-mutation-queue.js";
+export { createHistoryTreeToolDefinition, type HistoryTreeToolInput } from "./history-tree.js";
 export {
 	createFindTool,
 	createFindToolDefinition,

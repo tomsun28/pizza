@@ -339,6 +339,18 @@ export interface SessionForkedEvent extends EventBase {
 	};
 }
 
+/** Agent jumped to another session in the history tree */
+export interface SessionJumpedEvent extends EventBase {
+	type: "SESSION_JUMPED";
+	payload: {
+		/** The session the agent jumped to (target in the history tree). */
+		target_session_id: string;
+		/** When the target was closed, the new session created to reopen it. */
+		reopened_as?: string;
+		reason?: string;
+	};
+}
+
 /** Legacy-compatible session tree entry stored in the event log. */
 export interface SessionEntryAppendedEvent extends EventBase {
 	type: "SESSION_ENTRY_APPENDED";
@@ -575,6 +587,7 @@ export type TypedEvent =
 	| SessionCreatedEvent
 	| SessionBoundaryInferredEvent
 	| SessionForkedEvent
+	| SessionJumpedEvent
 	| SessionEntryAppendedEvent
 	| CompactionStartEvent
 	| CompactionEndEvent

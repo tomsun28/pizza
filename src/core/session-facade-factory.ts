@@ -42,6 +42,8 @@ import { SettingsManager } from "./settings-manager.js";
 import { createSyntheticSourceInfo } from "./source-info.js";
 import { buildSystemPrompt } from "./system-prompt.js";
 import { allToolNames, createToolDefinition, DEFAULT_LLM_TOOLS, type ToolName } from "./tools/index.js";
+import { createHistoryTreeToolDefinition } from "./tools/history-tree.js";
+import { buildSessionBreadcrumb } from "./projection/history-tree.js";
 import { createSessionSplitToolDefinition } from "./tools/session-split.js";
 import { wrapToolDefinitions } from "./tools/tool-definition-wrapper.js";
 
@@ -362,19 +364,21 @@ export async function createSessionFacade(
 			}
 		}
 
-		// session_split is a built-in cli command, not a separate tool; ensure its
-		// prompt guidelines are included whenever the cli tool is active.
+		// session_split and history_tree are built-in cli commands, not separate
+		// tools; ensure their prompt guidelines are included whenever the cli
+		// tool is active.
 		if (definitions.some((definition) => definition.name === "cli" || definition.name === "bash")) {
-			const sessionSplitDef = createSessionSplitToolDefinition();
-			for (const guideline of sessionSplitDef.promptGuidelines ?? []) {
-				const normalized = guideline.trim();
-				if (normalized) {
-					promptGuidelines.push(normalized);
+			for (const builtinDef of [createSessionSplitToolDefinition(), createHistoryTreeToolDefinition()]) {
+				for (const guideline of builtinDef.promptGuidelines ?? []) {
+					const normalized = guideline.trim();
+					if (normalized) {
+						promptGuidelines.push(normalized);
+					}
 				}
 			}
 		}
 
-		return buildSystemPrompt({
+		let prompt = buildSystemPrompt({
 			cwd,
 			skills: resourceLoader.getSkills().skills,
 			contextFiles: resourceLoader.getAgentsFiles().agentsFiles,
@@ -384,6 +388,19 @@ export async function createSessionFacade(
 			toolSnippets,
 			promptGuidelines,
 		});
+
+		// Append session-position breadcrumb (~15-40 tokens) so the model
+		// always knows where it is in the branch tree without calling
+		// history_tree list every turn.
+		const breadcrumb = buildSessionBreadcrumb(
+			sessionManager.listSessions(),
+			sessionManager.getActiveSessionId(),
+		);
+		if (breadcrumb) {
+			prompt += `\n${breadcrumb}`;
+		}
+
+		return prompt;
 	};
 
 	const applyActiveTools = (toolNames?: string[]): void => {
@@ -398,6 +415,19 @@ export async function createSessionFacade(
 			runtime.setTools(activeToolDefinitions.map(toRuntimeToolDefinition));
 			runtime.setSystemPrompt(systemPrompt);
 		}
+	};
+
+	/**
+	 * Rebuild the system prompt with the current session-position breadcrumb.
+	 * Called by the reactor on session boundary events (split/fork/jump) so
+	 * the breadcrumb stays in sync without a full tool rebuild.
+	 */
+	const refreshSystemPromptWithBreadcrumb = (): string => {
+		systemPrompt = buildPromptForTools(activeToolDefinitions);
+		if (runtime) {
+			runtime.setSystemPrompt(systemPrompt);
+		}
+		return systemPrompt;
 	};
 
 	const getToolInfos = (): ToolInfo[] =>
@@ -593,6 +623,7 @@ export async function createSessionFacade(
 		retryAssistantErrorCompletions: true,
 		retryPolicy: new DefaultRetryPolicy({ capDelayMs: settingsManager.getRetrySettings().maxDelayMs }),
 		contextBudget: options.contextBudget ?? model?.contextWindow ?? 128000,
+		refreshSystemPrompt: refreshSystemPromptWithBreadcrumb,
 	});
 
 	const extensionEventUnsubscribe = extensionRunner.bindEventStore(store);

@@ -9,7 +9,8 @@ import type { AgentMessage } from "../agent/types.js";
 import type { EventBase } from "../event-store/types.js";
 import type { EventStore, SubscribeOptions } from "../event-store/store.js";
 import { eventToMessage } from "../projection/event-to-message.js";
-import type { BuildContextOptions, BuiltContext } from "../projection/types.js";
+import type { BuildContextOptions, BuiltContext, SessionDescriptor } from "../projection/types.js";
+import { buildHistoryTreeNodes, type HistoryTreeNodeInfo } from "../projection/history-tree.js";
 import type { SessionProjection } from "../projection/session-projection.js";
 import type { SessionManager as ProjectionSessionManager } from "../projection/session-manager.js";
 import type {
@@ -26,6 +27,27 @@ import type {
 	ThinkingLevelChangeEntry,
 } from "../types/session-types.js";
 
+/** Preview of a history session's context (for history_tree view). */
+export interface HistorySessionView {
+	descriptor: SessionDescriptor;
+	/** Formatted one-line previews of the most recent messages. */
+	messages: string[];
+	/** Total message count in the session context. */
+	message_count: number;
+}
+
+/** History tree operations exposed to the history_tree tool. */
+export interface HistoryTreeAccess {
+	/** Flattened history tree (depth-first, one node per session). */
+	list(): HistoryTreeNodeInfo[];
+	/** Preview a session's context without switching to it. */
+	view(sessionId: string, options?: { maxMessages?: number }): HistorySessionView | undefined;
+	/** Jump to a session; closed sessions are reopened via fork. */
+	jump(sessionId: string, reason?: string): { session_id: string; reopened: boolean };
+	/** Fork a new branch from a session. */
+	fork(sessionId: string): { session_id: string };
+}
+
 export interface ExtensionSessionManager extends ReadonlySessionManager {
 	/** Present when the session view is backed by EventStore. */
 	readonly eventStore?: EventStore;
@@ -35,6 +57,8 @@ export interface ExtensionSessionManager extends ReadonlySessionManager {
 	subscribe?: (listener: (event: EventBase) => void, options?: SubscribeOptions) => () => void;
 	/** Split the current session, starting a new one from the current position. */
 	splitSession?: (reason?: string, name?: string) => { session_id: string; already_split?: boolean } | undefined;
+	/** History tree operations (list/view/jump/fork over past sessions). */
+	readonly historyTree?: HistoryTreeAccess;
 }
 
 export interface EventStoreExtensionSessionManagerOptions {
@@ -107,6 +131,7 @@ export class EventStoreExtensionSessionManager implements ExtensionSessionManage
 
 		const desc = this.sessionManager.createSession("user_explicit", name, {
 			startEventId,
+			parentSessionId: this.sessionManager.getActiveSessionId(),
 		});
 		this.eventStore.append({
 			actor_id: "runtime",
@@ -118,6 +143,37 @@ export class EventStoreExtensionSessionManager implements ExtensionSessionManage
 			thread_id: desc.thread_id,
 		});
 		return { session_id: desc.session_id };
+	}
+
+	get historyTree(): HistoryTreeAccess | undefined {
+		const manager = this.sessionManager;
+		if (!manager) return undefined;
+		const store = this.eventStore;
+		return {
+			list: () => buildHistoryTreeNodes(manager.listSessions(), manager.getActiveSessionId(), store),
+			view: (sessionId, options) => {
+				const projection = manager.getSessionProjection(sessionId);
+				if (!projection) return undefined;
+				const context = projection.buildContext();
+				const previews = context.messages
+					.map((message) => formatMessagePreview(message))
+					.filter((line): line is string => line !== undefined);
+				const maxMessages = options?.maxMessages ?? 20;
+				return {
+					descriptor: projection.getDescriptor(),
+					messages: previews.slice(-maxMessages),
+					message_count: previews.length,
+				};
+			},
+			jump: (sessionId, reason) => {
+				const result = manager.jumpToSession(sessionId, reason);
+				return { session_id: result.descriptor.session_id, reopened: result.reopened };
+			},
+			fork: (sessionId) => {
+				const desc = manager.forkFromSession(sessionId);
+				return { session_id: desc.session_id };
+			},
+		};
 	}
 
 	getCwd(): string {
@@ -356,4 +412,31 @@ export class EventStoreExtensionSessionManager implements ExtensionSessionManage
 			"timestamp" in value
 		);
 	}
+}
+
+/** Format an AgentMessage as a compact one-line preview for history_tree view. */
+function formatMessagePreview(message: AgentMessage): string | undefined {
+	const m = message as {
+		role?: string;
+		content?: string | Array<{ type?: string; text?: string }>;
+		summary?: string;
+	};
+	if (m.role === "compactionSummary" || m.role === "branchSummary") {
+		const summary = (m.summary ?? "").replace(/\s+/g, " ").trim();
+		return `[${m.role}] ${truncatePreview(summary, 200)}`;
+	}
+	if (!m.role || m.content === undefined) return undefined;
+	const text =
+		typeof m.content === "string"
+			? m.content
+			: m.content
+					.map((block) => (block && block.type === "text" && typeof block.text === "string" ? block.text : ""))
+					.join(" ");
+	const trimmed = text.replace(/\s+/g, " ").trim();
+	if (!trimmed) return undefined;
+	return `${m.role}: ${truncatePreview(trimmed, 200)}`;
+}
+
+function truncatePreview(text: string, maxLength: number): string {
+	return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
 }

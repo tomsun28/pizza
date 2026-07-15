@@ -76,6 +76,13 @@ export interface ReactorConfig {
 	compactionPolicy?: CompactionPolicy;
 	/** SessionManager for refreshing projection after session splits. */
 	sessionManager?: SessionManager;
+	/**
+	 * Optional callback to rebuild the system prompt when the active session
+	 * changes (split/fork/jump). Lets the caller inject session-position
+	 * breadcrumbs without the reactor knowing about prompt construction.
+	 * Returns the updated system prompt string.
+	 */
+	refreshSystemPrompt?: () => string;
 }
 
 /** A single event handler. Returns void or void Promise. */
@@ -296,6 +303,8 @@ export class Reactor {
 			USER_REJECTION: this._onUserRejection.bind(this),
 			COMPACTION_REQUESTED: this._onCompactionRequested.bind(this),
 			SESSION_BOUNDARY_INFERRED: this._onSessionBoundaryInferred.bind(this),
+			SESSION_FORKED: this._onSessionBoundaryInferred.bind(this),
+			SESSION_JUMPED: this._onSessionBoundaryInferred.bind(this),
 		};
 	}
 
@@ -927,20 +936,24 @@ export class Reactor {
 		});
 	}
 
-	// ─── SESSION_BOUNDARY_INFERRED ──────────────────────────────────────────
+	// ─── SESSION_BOUNDARY_INFERRED / SESSION_FORKED / SESSION_JUMPED ────────
 
 	/**
-	 * When a session split occurs, refresh the projection to point to the new
-	 * session. The new session's start_event_id is set to the current USER_MESSAGE,
-	 * so buildContext() will include the user's request + tool results but exclude
-	 * old conversation history. This lets the model continue working in the same
-	 * turn with a clean context.
+	 * When the active session changes (split, fork, or history-tree jump),
+	 * refresh the projection to point to the new session so buildContext()
+	 * reflects the new context. For splits, the new session's start_event_id
+	 * is set to the current USER_MESSAGE, so the model keeps the user's request
+	 * + tool results but drops old conversation history.
 	 */
 	private _onSessionBoundaryInferred(_event: EventBase): void {
 		if (!this.config.sessionManager) return;
 		const newProjection = this.config.sessionManager.getActiveSession();
 		if (newProjection) {
 			this.config.projection = newProjection;
+		}
+		// Refresh system prompt so session-position breadcrumbs stay current.
+		if (this.config.refreshSystemPrompt) {
+			this.config.systemPrompt = this.config.refreshSystemPrompt();
 		}
 	}
 

@@ -4,8 +4,8 @@
 
 当前 Pizza 的事件源架构以 `EventStore` 为唯一真相源，所有用户输入、Agent 输出、工具执行、文件变更都作为不可变事件追加。`SessionProjection` 与 `SessionManager` 在此基础上提供了会话视图与切分能力，现有能力包括：
 
-- `session_split` 工具：自动在话题漂移时切分会话。
-- `SESSION_FORKED` / `SESSION_BOUNDARY_INFERRED` 事件：记录会话分叉与边界。
+- `session_split`：cli 工具的内建命令（非独立工具），由模型在话题漂移时主动调用切分会话；自动边界推断已移除。
+- `SESSION_FORKED` / `SESSION_BOUNDARY_INFERRED` 事件：记录会话分叉与切分边界。
 - `branch-summarization.ts`：在分支跳转时生成摘要，避免上下文丢失。
 - `tree-selector.ts`：以 ASCII 树展示 `SessionTreeNode`。
 
@@ -22,7 +22,7 @@
 | 概念 | 说明 | 与现有代码的映射 |
 |---|---|---|
 | **Event Log** | 唯一真相源，所有事件追加存储。 | `SqliteEventStore` |
-| **History Tree** | 由历史 Session 组成的树，每个节点是一次会话。 | `SessionIndex` / `sessions.json` |
+| **History Tree** | 由历史 Session 组成的树，每个节点是一次会话。 | `SessionIndex`（SQLite `threads`/`sessions` 表，`SqliteSessionStore`） |
 | **Node** | 历史树节点，对应一个 `SessionDescriptor`。 | `SessionDescriptor` |
 | **Current Leaf** | 当前活跃 session。 | `SessionManager.activeSessionId` |
 | **Branch** | 从某个 Session fork 出的新会话。 | `SESSION_FORKED` + `SessionDescriptor` |
@@ -51,7 +51,7 @@ interface SessionDescriptor {
 
 由 `session_id`、`parent_session_id`、`event_range` 已可直接构成一棵历史树。`SessionManager` 的 `listSessions()` 提供所有 session，运行时按 `parent_session_id` 组织成树。
 
-**不需要新增 `history-tree.json`。** 历史树直接使用 `SessionIndex`（`sessions.json`）作为索引；需要查看或跳转时，再按 `event_range` 查询 `SqliteEventStore` 中的事件。
+**不需要新增 `history-tree.json`。** 历史树直接使用 `SessionIndex` 作为索引，该索引已由 `SqliteSessionStore` 持久化在事件库同一个 SQLite 文件的 `threads` / `sessions` 表中；需要查看或跳转时，再按 `event_range` 查询 `SqliteEventStore` 中的事件。
 
 ## 4. 与事件日志的映射
 
@@ -135,7 +135,7 @@ interface HistoryTreeToolInput {
 ### 7.1 Session 数量控制
 
 - 配置 `max_sessions_per_workspace`（例如 500）。
-- 每个 workspace 的 `sessions.json` 只保留最近/最常访问的 session。
+- 每个 workspace 的 `sessions` 表只保留最近/最常访问的 session（活跃态）。
 - 当 session 数量超过阈值，将旧的、非当前路径的 session 归档。
 
 ### 7.2 归档策略
@@ -144,33 +144,37 @@ interface HistoryTreeToolInput {
 - 归档后保留 `SessionDescriptor`，但将 `event_range` 替换为摘要，`summary_event_id` 指向压缩事件。
 - 被归档 session 仍可通过 `view` 查看摘要，但不再默认展开完整时间线。
 
-### 7.3 树视图分层
+### 7.3 树视图：默认返回整棵树
 
-给 Agent 展示时，不必返回整棵树：
+`list` 默认返回**整棵树**，不做分层裁剪：
 
-- 当前路径（root → current leaf）完整。
-- 兄弟分支只返回一级。
-- 更深分支按需 `expand`。
-- `list` 支持 `cursor` / `limit` 分页。
+- 每个节点一行紧凑格式（`session_id` 短前缀、name、created_at、is_active、depth），单节点约 20~40 token。
+- 树的总规模由 7.1 的 `max_sessions_per_workspace` 与归档策略兜底：500 个节点约 1~2 万 token，属于可接受上限；正常使用中活跃 session 远少于此。
+- 已归档 session 折叠为单行摘要（标记 `archived`），不展开完整时间线。
+- 仅在极端情况（节点数超过上限仍未归档完成）才降级为 `cursor` / `limit` 分页，作为保护而非默认行为。
 
-### 7.4 最大深度与宽度
+### 7.4 规模策略：只控总量，不限深度与宽度
+
+不需要 `max_branch_depth` / `max_children_per_session`：
+
+- 展示整棵树时，token 成本只取决于**节点总数**，与树的形状（深/宽）无关，`max_sessions_per_workspace` 已足够约束。
+- 深度、宽度限制会在达到阈值时阻止合法的 `fork` / `session_split` 操作，用户感知为"莫名失败"，弊大于利。
+- 形状失衡（如某个 session 下大量子分支）由归档策略自然收敛：优先归档最久未访问、且非当前路径的分支。
 
 ```typescript
 interface HistoryTreePolicy {
   max_sessions_per_workspace: number; // 例如 500
-  max_branch_depth: number;            // 例如 50
-  max_children_per_session: number;    // 例如 20
   archive_after_idle_ms: number;       // 例如 7 天
 }
 ```
 
-超过阈值时，优先归档 `last_accessed_at` 最旧、且非当前路径的分支。
+超过阈值时，优先归档 `last_accessed_at` 最旧、且非当前路径的分支。（注：`SessionDescriptor` 目前没有 `last_accessed_at` 字段，实现规模控制时需在 `sessions` 表中补充。）
 
 ## 8. 与现有模块的集成
 
 ### 8.1 核心模块
 
-- `SessionManager`：已有 `listSessions()`、`switchTo()`、`getSession()`、`forkAt()`、`createSession()`。新增 `jumpToSession(session_id)`、`forkFromSession(session_id)` 即可。
+- `SessionManager`：已有 `listSessions()`、`switchTo()`、`getSession()`、`getSessionProjection()`、`forkAt()`、`forkFromSession(session_id)`、`createSession()`。仅需新增 `jumpToSession(session_id)`（对已关闭 session 的 jump 语义：从其 `start_event_id` 重开新 session）。
 - `EventStoreExtensionSessionManager`：暴露 `historyTree` 方法给工具。
 - `EventStore`：无需改动，按 `event_range` 查询事件。
 - `TimelineProjection` / `SessionProjection`：用于 `view` 与 `jump` 的上下文。
@@ -188,36 +192,38 @@ interface HistoryTreePolicy {
 
 ### 8.4 持久化
 
-- 直接使用 `~/.pizza/agent/workspaces/<workspace_id>/sessions.json`。
-- 不新增 `history-tree.json`。
-- 将来若要把 session 索引迁移到 `SqliteEventStore`，需要给 `SESSION_CREATED` 事件增加 `start_event_id` 字段，并补充 `SESSION_ENDED` 事件记录 `end_event_id`，否则无法从事件日志重建 `event_range`。
+- Session 索引已迁移到 SQLite：存放在 `~/.pizza/agent/workspaces/<workspace_id>/events.sqlite` 的 `threads` / `sessions` 表中，由 `SqliteSessionStore` 实现、经 `SessionStore` 接口通过 `SqliteEventStore` 暴露给 `SessionManager`。
+- `sessions` 表直接持久化 `start_event_id` / `end_event_id` / `parent_session_id` / `summary_event_id` 等字段，`event_range` 无需从事件日志重建——因此不需要给 `SESSION_CREATED` 增加 `start_event_id`，也不需要新增 `SESSION_ENDED` 事件。
+- 不新增 `history-tree.json`，索引与事件日志同库单文件。
 
 ## 9. 实现阶段
 
-1. **阶段 1：复用 `SessionManager` 构建历史树**
-   - 在 `SessionManager` 或 `HistoryTreeManager` 中按 `parent_session_id` 组织 session 树。
-   - 提供 `list` / `view` 查询接口。
+1. **阶段 1：复用 `SessionManager` 构建历史树** ✅ 已实现
+   - `src/core/projection/history-tree.ts`：`buildHistoryTreeNodes` 按 `parent_session_id` 组织 session 树（深度优先展平 + depth/child_count/snippet），`renderHistoryTreeText` 渲染紧凑 ASCII 树。
 
-2. **阶段 2：Agent 工具**
-   - 实现 `history_tree` 的 `list` / `view`。
-   - 注册工具。
+2. **阶段 2：Agent 工具** ✅ 已实现
+   - `src/core/tools/history-tree.ts`：`createHistoryTreeToolDefinition`，支持 `list`（含 `query` 过滤）/ `view` / `jump` / `fork`。
+   - 与 `session_split` 一致，作为 cli 工具的内建命令接入（`builtin-commands.ts` 解析 + `bash.ts` 路由 + system prompt 文档），prompt guidelines 由 `session-facade-factory.ts` 注入。
+   - `EventStoreExtensionSessionManager.historyTree` 暴露 list/view/jump/fork 给工具（`session-context.ts`）。
 
-3. **阶段 3：跳转与分支**
-   - 实现 `jump` / `fork`。
-   - 复用 `branch-summarization.ts` 生成离开分支摘要。
-   - 集成 `SessionManager`。
+3. **阶段 3：跳转与分支** ✅ 已实现
+   - `SessionManager.jumpToSession(session_id, reason?)`：活跃 session no-op；开放（HEAD）session 直接切换；已关闭 session 通过 `forkFromSession` 重开（保留原始 start 边界，历史完整）。
+   - 新增 `SESSION_JUMPED` 事件（审计 + 触发刷新）；reactor 对 `SESSION_JUMPED` / `SESSION_FORKED` 刷新 projection，与 `SESSION_BOUNDARY_INFERRED` 同一处理路径。
+   - 复用 `branch-summarization.ts` 生成离开分支摘要：待做（当前 jump/fork 保留原分支不动，暂无信息丢失）。
 
-4. **阶段 4：规模控制**
+4. **阶段 4：规模控制**（待做）
    - 实现 session 数量限制、LRU 归档、`COMPACTION_END` 压缩。
+   - 需在 `sessions` 表补充 `last_accessed_at` / `archived` 列。
 
-5. **阶段 5：UI 集成**
+5. **阶段 5：UI 集成**（待做）
    - 扩展 `tree-selector` 与 `interactive-mode`。
    - 增加 slash 命令与快捷键。
 
+测试：`test/history-tree.test.ts` 覆盖树构建、`jumpToSession`、`historyTree` 访问器、工具四个 action 与内建命令解析。
+
 ## 10. 待确认问题
 
-- 历史树是按 `thread_id` 隔离，还是按 `workspace_id` 全局？
+- 历史树是按 `thread_id` 隔离，还是按 `workspace_id` 全局？（现有代码中 thread 是隔离单元，session 树在 thread 内；`list` 展示整棵树时建议按当前 thread 隔离，跨 thread 需求走 thread 级切换。）
 - `jump` 是否允许跨 `workspace_id`？
-- 是否需要把 `SessionIndex` 迁移到 `SqliteEventStore` 以单源化？
 - 是否允许 Agent 自动 `jump` 而不经用户确认？
-- 归档后是否删除 `sessions.json` 中的 `SessionDescriptor`，还是保留并标记 `archived`？
+- 归档后是否删除 `sessions` 表中的记录，还是保留并标记 `archived`？（建议保留并加 `archived` 列，配合 7.3 的折叠展示。）

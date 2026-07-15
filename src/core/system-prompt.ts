@@ -150,14 +150,10 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 
 	// File exploration guidelines
 	if (hasCli) {
-		addGuideline("Use Pizza built-in file commands only for read, write, edit, and session_split");
+		addGuideline("Use Pizza built-in file commands only for read, write, edit, session_split, and history_tree");
 		addGuideline("Use shell commands such as grep, find, and ls normally; shell handles pipes, redirects, globs, &&, and ;");
 		addGuideline("Use read line anchors as edit range values; edit accepts op/range/new edits");
 		addGuideline("Use edit op=search with old/new for search-and-replace when you don't have fresh line anchors (e.g. after using sed/cat, or after a previous edit shifted line numbers)");
-		addGuideline("Call session_split when the user's request moves to a new topic that is substantially different from the current conversation");
-		addGuideline("Do not call session_split for follow-up questions, clarifications, or refinements of the current task");
-		addGuideline("When in doubt, lean towards NOT splitting — only split when the topic change is clear");
-		addGuideline("Call session_split at most once per turn; after the split, your context is refreshed so proceed with the task");
 	}
 
 	for (const guideline of promptGuidelines ?? []) {
@@ -184,6 +180,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		"  write <path> <<EOF\ncontent\nEOF             Write multi-line content (heredoc)",
 		"  edit <path> <op> <range> [new]               Edit anchored whole line(s)",
 		"  session_split [reason] [name]                Split conversation when the topic clearly changes",
+		"  history_tree <action> [session_id]           Browse past sessions: list, view, jump, fork",
 		"",
 		"grep, find, ls, git, npm, and all other commands are passed to the system shell as-is.",
 		"The shell handles native pipes, redirects, globs, command grouping, &&, and ;. If grep/find/ls are missing from PATH, Pizza injects temporary per-process shims for only those missing commands.",
@@ -198,6 +195,8 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		'- cli("edit src/main.ts search \"const a = 1\" \"const a = 2\"") - Search-and-replace without line anchors (fallback when anchors are stale or unavailable)',
 		'- cli("session_split topic_change") - Split when the conversation topic changes',
 		'- cli("session_split --reason topic_change --name \"Fix auth\"") - Split and name the new session',
+		'- cli("history_tree list") - Show the session history tree',
+		'- cli("history_tree jump sess_0042") - Return to a previous session and continue there',
 		'- cli("grep -rn \"foo\" . | head") - Search with native shell pipeline',
 		'- cli("find . -name \"*.py\" -maxdepth 2 | wc -l") - Find with native shell pipeline',
 		'- cli("ls -lah *.py") - List files with shell glob expansion',

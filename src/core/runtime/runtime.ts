@@ -68,6 +68,11 @@ export interface EventSourcedRuntimeConfig {
 	compactionPolicy?: import("./policies.js").CompactionPolicy;
 	/** Settings for the default event-sourced compaction engine. Ignored when compactionPolicy is provided. */
 	compactionEngineSettings?: CompactionEngineSettings;
+	/**
+	 * Optional callback to rebuild the system prompt when the active session
+	 * changes (split/fork/jump). Returns the updated system prompt string.
+	 */
+	refreshSystemPrompt?: () => string;
 }
 
 export interface RuntimeCompactOptions {
@@ -178,6 +183,7 @@ export class EventSourcedRuntime {
 					},
 				}),
 			sessionManager: this.sessionManager,
+			refreshSystemPrompt: this.config.refreshSystemPrompt,
 		});
 
 			await this.reactor.start();

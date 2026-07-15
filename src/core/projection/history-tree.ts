@@ -1,0 +1,178 @@
+/**
+ * History Tree
+ *
+ * Organizes SessionDescriptors into a tree by parent_session_id.
+ * Nodes are sessions; messages are rebuilt on demand from the EventStore
+ * via each session's event_range.
+ */
+
+import type { EventStore } from "../event-store/store.js";
+import type { SessionDescriptor } from "./types.js";
+
+// ============================================================================
+// Types
+// ============================================================================
+
+/** Flattened history tree node for tool/UI consumption. */
+export interface HistoryTreeNodeInfo {
+	session_id: string;
+	thread_id: string;
+	name?: string;
+	created_at: number;
+	created_by: SessionDescriptor["created_by"];
+	parent_session_id?: string;
+	depth: number;
+	child_count: number;
+	is_active: boolean;
+	/** Whether the session is closed (end_event_id !== "HEAD"). */
+	closed: boolean;
+	/** First user message in the session (truncated), for orientation/search. */
+	snippet?: string;
+}
+
+// ============================================================================
+// Tree Building
+// ============================================================================
+
+/**
+ * Build the history tree as a flattened, depth-annotated node list
+ * (depth-first order, siblings sorted by created_at ascending).
+ */
+export function buildHistoryTreeNodes(
+	sessions: SessionDescriptor[],
+	activeSessionId: string | undefined,
+	store?: EventStore,
+): HistoryTreeNodeInfo[] {
+	const byId = new Map(sessions.map((s) => [s.session_id, s]));
+	const children = new Map<string, SessionDescriptor[]>();
+	const roots: SessionDescriptor[] = [];
+
+	for (const session of sessions) {
+		const parentId = session.parent_session_id;
+		if (parentId && byId.has(parentId)) {
+			const list = children.get(parentId) ?? [];
+			list.push(session);
+			children.set(parentId, list);
+		} else {
+			roots.push(session);
+		}
+	}
+
+	const byCreatedAt = (a: SessionDescriptor, b: SessionDescriptor) => a.created_at - b.created_at;
+	roots.sort(byCreatedAt);
+	for (const list of children.values()) list.sort(byCreatedAt);
+
+	const nodes: HistoryTreeNodeInfo[] = [];
+	const visit = (session: SessionDescriptor, depth: number): void => {
+		const childList = children.get(session.session_id) ?? [];
+		nodes.push({
+			session_id: session.session_id,
+			thread_id: session.thread_id,
+			name: session.name,
+			created_at: session.created_at,
+			created_by: session.created_by,
+			parent_session_id: session.parent_session_id,
+			depth,
+			child_count: childList.length,
+			is_active: session.session_id === activeSessionId,
+			closed: session.event_range.end_event_id !== "HEAD",
+			snippet: store ? findFirstUserMessage(store, session) : undefined,
+		});
+		for (const child of childList) visit(child, depth + 1);
+	};
+	for (const root of roots) visit(root, 0);
+
+	return nodes;
+}
+
+/** Render the history tree as a compact ASCII listing (one line per node). */
+export function renderHistoryTreeText(nodes: HistoryTreeNodeInfo[]): string {
+	if (nodes.length === 0) return "(no sessions)";
+	const lines = nodes.map((node) => {
+		const indent = "  ".repeat(node.depth);
+		const marker = node.is_active ? "*" : "-";
+		const name = node.name ? ` ${JSON.stringify(node.name)}` : "";
+		const status = node.is_active ? " [active]" : node.closed ? "" : " [open]";
+		const snippet = node.snippet ? ` — ${node.snippet}` : "";
+		const date = new Date(node.created_at).toISOString().replace("T", " ").slice(0, 16);
+		return `${indent}${marker} ${node.session_id}${name} (${date})${status}${snippet}`;
+	});
+	return lines.join("\n");
+}
+
+// ============================================================================
+// Breadcrumb (compact session-position line for system prompt)
+// ============================================================================
+
+/**
+ * Build a compact one-line breadcrumb showing the active session's position
+ * in the history tree. Intended for system prompt injection (~15-40 tokens).
+ *
+ * Returns empty string when there's no meaningful tree (single root session
+ * with no children), so callers can skip appending it.
+ *
+ * Example output:
+ *   Session position: you are in sess_04d9 (depth 2, branch: sess_01a3 → sess_03c1 → sess_04d9). Use `history_tree list` to see all branches.
+ */
+export function buildSessionBreadcrumb(
+	sessions: SessionDescriptor[],
+	activeSessionId: string | undefined,
+): string {
+	if (!activeSessionId || sessions.length === 0) return "";
+
+	const byId = new Map(sessions.map((s) => [s.session_id, s]));
+	const active = byId.get(activeSessionId);
+	if (!active) return "";
+
+	// Walk up the parent chain to build the branch path.
+	const chain: string[] = [];
+	let cur: SessionDescriptor | undefined = active;
+	while (cur) {
+		chain.unshift(cur.session_id);
+		const parentId: string | undefined = cur.parent_session_id;
+		cur = parentId ? byId.get(parentId) : undefined;
+	}
+
+	// Single root with no children → no breadcrumb needed.
+	if (chain.length === 1) {
+		const root = byId.get(activeSessionId);
+		const hasChildren = sessions.some((s) => s.parent_session_id === activeSessionId);
+		if (!hasChildren) return "";
+	}
+
+	const depth = chain.length - 1;
+	const branch = chain.join(" → ");
+	const depthLabel = depth === 0 ? "root" : `depth ${depth}`;
+	return `Session position: you are in ${activeSessionId} (${depthLabel}, branch: ${branch}). Use \`history_tree list\` to see all branches.`;
+}
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+function findFirstUserMessage(store: EventStore, session: SessionDescriptor): string | undefined {
+	const { start_event_id, end_event_id } = session.event_range;
+	const events = store.query({
+		after: start_event_id === "ORIGIN" ? undefined : start_event_id,
+		before: end_event_id === "HEAD" ? undefined : end_event_id,
+		types: ["USER_MESSAGE"],
+		limit: 20,
+	});
+	for (const event of events) {
+		if (event.thread_id && event.thread_id !== session.thread_id) continue;
+		const payload = event.payload as { content?: string | unknown[] };
+		const text =
+			typeof payload.content === "string"
+				? payload.content
+				: Array.isArray(payload.content)
+					? payload.content
+							.map((block) =>
+								block && typeof block === "object" && "text" in block ? String((block as { text: unknown }).text) : "",
+							)
+							.join(" ")
+					: "";
+		const trimmed = text.replace(/\s+/g, " ").trim();
+		if (trimmed) return trimmed.length > 80 ? `${trimmed.slice(0, 80)}...` : trimmed;
+	}
+	return undefined;
+}
