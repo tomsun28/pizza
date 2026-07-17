@@ -38,11 +38,9 @@ export async function sendCommandAwait<T = unknown>(
 	command: Record<string, unknown>,
 	timeoutMs = 15000,
 ): Promise<RpcResponse<T>> {
-	// Generate a unique id so we can correlate response
-	const id = (command.id as string) ?? crypto.randomUUID();
-	command.id = id;
-
 	if (isTauri()) {
+		// Let the Rust bridge generate the id — it returns the id it used.
+		// Don't pre-set command.id, otherwise Rust returns a different id than pizza echoes back.
 		const { listen } = await import("@tauri-apps/api/event");
 		const sentId = await sendCommandRaw(command);
 		return new Promise((resolve, reject) => {
@@ -64,7 +62,9 @@ export async function sendCommandAwait<T = unknown>(
 			});
 		});
 	}
-	// Browser: register waiter BEFORE sending command to avoid race
+	// Browser: generate id, register waiter BEFORE sending to avoid race
+	const id = (command.id as string) ?? crypto.randomUUID();
+	command.id = id;
 	ensureSse();
 	const promise = waitForResponse<T>(id, timeoutMs);
 	await sendCommandRaw(command);

@@ -186,11 +186,14 @@ pub fn stop_sidecar() -> Result<(), String> {
 #[tauri::command]
 pub fn rpc_command(command: Value) -> Result<String, String> {
 	log_file(&format!("rpc_command: {}", command));
-	let id = uuid::Uuid::new_v4().to_string();
 	let mut obj = command.as_object().cloned().ok_or("command must be an object")?;
-	if !obj.contains_key("id") {
+	let id = if let Some(existing) = obj.get("id").and_then(|v| v.as_str()) {
+		existing.to_string()
+	} else {
+		let id = uuid::Uuid::new_v4().to_string();
 		obj.insert("id".to_string(), Value::String(id.clone()));
-	}
+		id
+	};
 	let line = serde_json::to_string(&Value::Object(obj)).map_err(|e| e.to_string())?;
 	log_file(&format!("rpc_command sending: {}", line));
 
