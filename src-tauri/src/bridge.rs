@@ -1,9 +1,10 @@
 use serde_json::Value;
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Mutex;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 fn log_file(msg: &str) {
 	use std::io::Write;
@@ -30,15 +31,44 @@ fn resolve_pizza_command() -> (String, Vec<String>) {
 	("node".to_string(), vec![cli_js.to_string_lossy().to_string(), "--mode".to_string(), "rpc".to_string()])
 }
 
-static SIDECAR_STDIN: Mutex<Option<std::process::ChildStdin>> = Mutex::new(None);
-static SIDECAR_CHILD: Mutex<Option<Child>> = Mutex::new(None);
-pub static APP_HANDLE: Mutex<Option<AppHandle>> = Mutex::new(None);
+struct SidecarState {
+	child: Child,
+	stdin: ChildStdin,
+}
 
-/// One-shot init: spawns sidecar, sends get_state. Returns state JSON.
+pub struct BridgeState {
+	sidecars: Mutex<HashMap<String, SidecarState>>,
+}
+
+impl Default for BridgeState {
+	fn default() -> Self {
+		Self {
+			sidecars: Mutex::new(HashMap::new()),
+		}
+	}
+}
+
+/// Kill and remove the sidecar for a specific window label.
+pub fn kill_sidecar_for_window(state: &BridgeState, window_label: &str) {
+	log_file(&format!("kill_sidecar_for_window: label={}", window_label));
+	let mut sidecars = state.sidecars.lock().unwrap();
+	if let Some(mut sidecar) = sidecars.remove(window_label) {
+		let _ = sidecar.child.kill();
+		let _ = sidecar.child.wait();
+		log_file(&format!("kill_sidecar_for_window: killed sidecar for {}", window_label));
+	}
+}
+
+/// One-shot init: spawns sidecar for the calling window, sends get_state. Returns state JSON.
 /// `cwd` is the working directory for the pizza rpc process (the user's project).
 #[tauri::command]
-pub async fn init_sidecar(cwd: Option<String>) -> Result<String, String> {
-	log_file("init_sidecar: start");
+pub async fn init_sidecar(
+	window: tauri::Window,
+	state: tauri::State<'_, BridgeState>,
+	cwd: Option<String>,
+) -> Result<String, String> {
+	let window_label = window.label().to_string();
+	log_file(&format!("init_sidecar: start, window={}", window_label));
 
 	let cwd = cwd.unwrap_or_else(|| {
 		PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -49,17 +79,8 @@ pub async fn init_sidecar(cwd: Option<String>) -> Result<String, String> {
 	});
 	log_file(&format!("init_sidecar: cwd={}", cwd));
 
-	{
-		let mut g = SIDECAR_STDIN.lock().unwrap();
-		*g = None;
-	}
-	{
-		let mut g = SIDECAR_CHILD.lock().unwrap();
-		if let Some(mut child) = g.take() {
-			let _ = child.kill();
-			let _ = child.wait();
-		}
-	}
+	// Kill existing sidecar for this window if any
+	kill_sidecar_for_window(&state, &window_label);
 
 	let (program, args) = resolve_pizza_command();
 	let mut cmd = Command::new(&program);
@@ -105,20 +126,17 @@ pub async fn init_sidecar(cwd: Option<String>) -> Result<String, String> {
 		}
 	};
 
-	// Store stdin and child.
+	// Store sidecar in the per-window map.
 	{
-		let mut g = SIDECAR_STDIN.lock().unwrap();
-		*g = Some(stdin);
-	}
-	{
-		let mut g = SIDECAR_CHILD.lock().unwrap();
-		*g = Some(child);
+		let mut sidecars = state.sidecars.lock().unwrap();
+		sidecars.insert(window_label.clone(), SidecarState { child, stdin });
 	}
 
-	// Spawn reader thread for subsequent events.
-	let app = APP_HANDLE.lock().unwrap().clone();
+	// Spawn reader thread for subsequent events — emit to this specific window.
+	let app = window.app_handle().clone();
+	let label = window_label.clone();
 	std::thread::spawn(move || {
-		log_file("reader thread: started");
+		log_file(&format!("reader thread: started for window={}", label));
 		for line in reader.lines() {
 			match line {
 				Ok(line) => {
@@ -130,65 +148,50 @@ pub async fn init_sidecar(cwd: Option<String>) -> Result<String, String> {
 						Ok(v) => v,
 						Err(_) => continue,
 					};
-					log_file(&format!("sidecar stdout: {}", trimmed));
-					if let Some(app) = &app {
+					log_file(&format!("sidecar stdout [{}]: {}", label, trimmed));
+					// Emit to the specific window only
+					if let Some(win) = app.get_webview_window(&label) {
 						let etype = parsed.get("type").and_then(|t| t.as_str()).unwrap_or("");
 						match etype {
-							"response" => { let _ = app.emit("rpc_response", parsed); }
-							"extension_ui_request" => { let _ = app.emit("extension_ui_request", parsed); }
-							_ => { let _ = app.emit("rpc_event", parsed); }
+							"response" => { let _ = win.emit("rpc_response", parsed); }
+							"extension_ui_request" => { let _ = win.emit("extension_ui_request", parsed); }
+							_ => { let _ = win.emit("rpc_event", parsed); }
 						}
 					}
 				}
 				Err(e) => {
-					log_file(&format!("reader error: {e}"));
+					log_file(&format!("reader error [{}]: {e}", label));
 					break;
 				}
 			}
 		}
-		log_file("reader thread: EOF");
-		// Diagnostics: why did sidecar stdout close?
-		{
-			let mut g = SIDECAR_CHILD.lock().unwrap();
-			if let Some(child) = g.as_mut() {
-				match child.try_wait() {
-					Ok(Some(status)) => log_file(&format!("sidecar exited: status={status}")),
-					Ok(None) => log_file("sidecar still running but stdout closed (stdin pipe may be broken)"),
-					Err(e) => log_file(&format!("sidecar try_wait error: {e}")),
-				}
-			} else {
-				log_file("sidecar child is None on EOF (taken/killed elsewhere)");
-			}
-			let stdin_alive = SIDECAR_STDIN.lock().unwrap().is_some();
-			log_file(&format!("stdin still held: {stdin_alive}"));
-		}
-		if let Some(app) = &app {
-			let _ = app.emit("sidecar_exit", serde_json::json!({ "code": null }));
+		log_file(&format!("reader thread: EOF for window={}", label));
+		if let Some(win) = app.get_webview_window(&label) {
+			let _ = win.emit("sidecar_exit", serde_json::json!({ "code": null }));
 		}
 	});
 
 	log_file("init_sidecar: done");
-	// Return the state data as JSON string.
 	Ok(state_data.to_string())
 }
 
 #[tauri::command]
-pub fn stop_sidecar() -> Result<(), String> {
-	{
-		let mut g = SIDECAR_STDIN.lock().unwrap();
-		*g = None;
-	}
-	let mut g = SIDECAR_CHILD.lock().unwrap();
-	if let Some(mut child) = g.take() {
-		let _ = child.kill();
-		let _ = child.wait();
-	}
+pub fn stop_sidecar(
+	window: tauri::Window,
+	state: tauri::State<'_, BridgeState>,
+) -> Result<(), String> {
+	kill_sidecar_for_window(&state, window.label());
 	Ok(())
 }
 
 #[tauri::command]
-pub fn rpc_command(command: Value) -> Result<String, String> {
-	log_file(&format!("rpc_command: {}", command));
+pub fn rpc_command(
+	window: tauri::Window,
+	state: tauri::State<'_, BridgeState>,
+	command: Value,
+) -> Result<String, String> {
+	let window_label = window.label();
+	log_file(&format!("rpc_command [{}]: {}", window_label, command));
 	let mut obj = command.as_object().cloned().ok_or("command must be an object")?;
 	let id = if let Some(existing) = obj.get("id").and_then(|v| v.as_str()) {
 		existing.to_string()
@@ -198,12 +201,30 @@ pub fn rpc_command(command: Value) -> Result<String, String> {
 		id
 	};
 	let line = serde_json::to_string(&Value::Object(obj)).map_err(|e| e.to_string())?;
-	log_file(&format!("rpc_command sending: {}", line));
+	log_file(&format!("rpc_command [{}] sending: {}", window_label, line));
 
-	let mut g = SIDECAR_STDIN.lock().unwrap();
-	let stdin = g.as_mut().ok_or("Sidecar is not running")?;
-	stdin.write_all(line.as_bytes()).map_err(|e| format!("write: {e}"))?;
-	stdin.write_all(b"\n").map_err(|e| format!("write nl: {e}"))?;
-	stdin.flush().map_err(|e| format!("flush: {e}"))?;
+	let mut sidecars = state.sidecars.lock().unwrap();
+	let sidecar = sidecars.get_mut(window_label).ok_or("Sidecar is not running")?;
+	sidecar.stdin.write_all(line.as_bytes()).map_err(|e| format!("write: {e}"))?;
+	sidecar.stdin.write_all(b"\n").map_err(|e| format!("write nl: {e}"))?;
+	sidecar.stdin.flush().map_err(|e| format!("flush: {e}"))?;
 	Ok(id)
+}
+
+/// Create a new workspace window with its own independent sidecar.
+#[tauri::command]
+pub async fn new_workspace(app: AppHandle) -> Result<String, String> {
+	let label = format!("workspace-{}", uuid::Uuid::new_v4().simple());
+	log_file(&format!("new_workspace: creating window={}", label));
+	let _window = tauri::WebviewWindowBuilder::new(
+		&app,
+		&label,
+		tauri::WebviewUrl::App("index.html".into()),
+	)
+	.title("Pizza")
+	.inner_size(1200.0, 800.0)
+	.min_inner_size(720.0, 480.0)
+	.build()
+	.map_err(|e| format!("Failed to create window: {e}"))?;
+	Ok(label)
 }

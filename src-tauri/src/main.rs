@@ -10,16 +10,14 @@ fn main() {
 	tauri::Builder::default()
 		.plugin(tauri_plugin_shell::init())
 		.plugin(tauri_plugin_dialog::init())
+		.manage(bridge::BridgeState::default())
 		.invoke_handler(tauri::generate_handler![
 			bridge::init_sidecar,
 			bridge::stop_sidecar,
 			bridge::rpc_command,
+			bridge::new_workspace,
 		])
 		.setup(|_app| {
-			{
-				let mut g = bridge::APP_HANDLE.lock().unwrap();
-				*g = Some(_app.handle().clone());
-			}
 			#[cfg(debug_assertions)]
 			{
 				if let Some(window) = _app.get_webview_window("main") {
@@ -30,10 +28,10 @@ fn main() {
 		})
 		.on_window_event(|window, event| {
 			if let WindowEvent::CloseRequested { .. } = event {
-				if window.label() == "main" {
-					log::info!("main window closed, stopping sidecar");
-					let _ = bridge::stop_sidecar();
-				}
+				let label = window.label().to_string();
+				log::info!("window {} closed, stopping its sidecar", label);
+				let state = window.app_handle().state::<bridge::BridgeState>();
+				bridge::kill_sidecar_for_window(state.inner(), &label);
 			}
 		})
 		.run(tauri::generate_context!())

@@ -1,9 +1,19 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { MessageSquare, Settings as SettingsIcon, Square } from "lucide-react";
-import { StatusDot, ThemeToggle } from "./ui";
+import { MessageSquare, Settings as SettingsIcon, Square, Plus, FolderOpen } from "lucide-react";
+import { StatusDot, ThemeToggle, Button } from "./ui";
 import { BrandIcon } from "./BrandIcon";
 import { cn } from "@/lib/utils";
+import { newWorkspace } from "@/lib/transport";
 import type { RpcSessionState } from "@/lib/types";
+
+function isTauri(): boolean {
+	return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+function basename(path: string): string {
+	const parts = path.replace(/\/+$/, "").split("/");
+	return parts[parts.length - 1] || path;
+}
 
 const NAV_KEYS = ["chat", "history", "settings"] as const;
 const NAV_ICONS = {
@@ -16,10 +26,12 @@ export default function Layout({
 	state,
 	sidecarReady,
 	sidecarExitCode,
+	workspace,
 }: {
 	state: RpcSessionState | null;
 	sidecarReady: boolean;
 	sidecarExitCode: number | null;
+	workspace?: string | null;
 }) {
 	const online = sidecarReady && sidecarExitCode === null;
 
@@ -70,7 +82,29 @@ export default function Layout({
 					})}
 				</nav>
 
+				{isTauri() && (
+					<div className="px-3 pb-1">
+						<Button
+							tone="neutral"
+							size="sm"
+							iconLeft={<Plus className="h-3.5 w-3.5" />}
+							onClick={() => newWorkspace()}
+							className="w-full"
+						>
+							New Workspace
+						</Button>
+					</div>
+				)}
+
 				<div className="border-t border-border px-3 py-3">
+					{workspace && (
+						<div className="mb-2 flex items-center gap-2 rounded-md px-2 py-1.5">
+							<FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted" />
+							<span className="truncate font-mono text-xs text-muted" title={workspace}>
+								{basename(workspace)}
+							</span>
+						</div>
+					)}
 					<div className="flex items-center justify-between rounded-md px-2 py-1.5">
 						<div className="flex items-center gap-2 font-mono text-xs">
 							<StatusDot tone={online ? "success" : "danger"} />

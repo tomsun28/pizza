@@ -143,6 +143,7 @@ export default function App() {
 								state={state}
 								sidecarReady={sidecarReady}
 								sidecarExitCode={sidecarExitCode}
+								workspace={workspace}
 							/>
 						}
 					>

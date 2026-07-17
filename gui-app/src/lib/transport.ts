@@ -122,6 +122,14 @@ export async function initSidecar(cwd?: string): Promise<Record<string, unknown>
 	}
 }
 
+// --- New workspace (Tauri only) ---
+
+export async function newWorkspace(): Promise<void> {
+	if (!isTauri()) return;
+	const core = await import("@tauri-apps/api/core");
+	await core.invoke("new_workspace");
+}
+
 // --- SSE implementation for browser mode ---
 
 let sseSource: EventSource | null = null;
