@@ -96,15 +96,15 @@ export async function subscribeSidecarExit(handler: ExitHandler): Promise<() => 
 
 // --- Init ---
 
-export async function initSidecar(): Promise<Record<string, unknown> | null> {
+export async function initSidecar(cwd?: string): Promise<Record<string, unknown> | null> {
 	if (isTauri()) {
 		const core = await import("@tauri-apps/api/core");
-		const result = await core.invoke("init_sidecar");
+		const result = await core.invoke<string>("init_sidecar", { cwd: cwd ?? null });
 		let parsed = result;
 		if (typeof parsed === "string") {
 			parsed = JSON.parse(parsed);
 		}
-		const state = (parsed as Record<string, unknown>)?.data ?? parsed ?? null;
+		const state = (parsed as unknown as Record<string, unknown>)?.data ?? parsed ?? null;
 		return state as Record<string, unknown> | null;
 	}
 	// Browser: simple GET /rpc/init — bridge sends get_state and returns response
@@ -115,7 +115,6 @@ export async function initSidecar(): Promise<Record<string, unknown> | null> {
 			return null;
 		}
 		const json = await resp.json();
-		// Response is { type: "response", command: "get_state", success: true, data: {...state} }
 		return json.data ?? null;
 	} catch (e) {
 		console.error("[init] fetch /rpc/init error:", e);

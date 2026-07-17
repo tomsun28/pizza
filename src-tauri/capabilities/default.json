@@ -6,6 +6,7 @@
 	"permissions": [
 		"core:default",
 		"core:event:default",
-		"shell:allow-execute"
+		"shell:allow-execute",
+		"dialog:default"
 	]
 }

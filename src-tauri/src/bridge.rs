@@ -34,16 +34,19 @@ static SIDECAR_STDIN: Mutex<Option<std::process::ChildStdin>> = Mutex::new(None)
 static SIDECAR_CHILD: Mutex<Option<Child>> = Mutex::new(None);
 pub static APP_HANDLE: Mutex<Option<AppHandle>> = Mutex::new(None);
 
-/// One-shot init: spawns sidecar, sends get_state. Returns cwd.
+/// One-shot init: spawns sidecar, sends get_state. Returns state JSON.
+/// `cwd` is the working directory for the pizza rpc process (the user's project).
 #[tauri::command]
-pub async fn init_sidecar() -> Result<String, String> {
+pub async fn init_sidecar(cwd: Option<String>) -> Result<String, String> {
 	log_file("init_sidecar: start");
 
-	let cwd = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-		.join("..")
-		.canonicalize()
-		.map(|p| p.to_string_lossy().to_string())
-		.unwrap_or_else(|_| ".".to_string());
+	let cwd = cwd.unwrap_or_else(|| {
+		PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+			.join("..")
+			.canonicalize()
+			.map(|p| p.to_string_lossy().to_string())
+			.unwrap_or_else(|_| ".".to_string())
+	});
 	log_file(&format!("init_sidecar: cwd={}", cwd));
 
 	{

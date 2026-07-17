@@ -1,32 +1,66 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { PxlKitSurfaceProvider } from "@pxlkit/ui-kit";
+import { FolderOpen } from "lucide-react";
 import Layout from "@/components/Layout";
 import ChatView from "@/views/ChatView";
 import HistoryView from "@/views/HistoryView";
 import SettingsView from "@/views/SettingsView";
 import { subscribeSidecarExit, subscribeEvents, initSidecar, sendCommandAwait } from "@/lib/transport";
+import { Button, EmptyState } from "@/components/ui";
+import { BrandIcon } from "@/components/BrandIcon";
 import type { RpcSessionState } from "@/lib/types";
+
+function isTauri(): boolean {
+	return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
 
 export default function App() {
 	const [state, setState] = useState<RpcSessionState | null>(null);
 	const [sidecarReady, setSidecarReady] = useState(false);
 	const [sidecarExitCode, setSidecarExitCode] = useState<number | null>(null);
+	const [workspace, setWorkspace] = useState<string | null>(null);
+	const [waitingForWorkspace, setWaitingForWorkspace] = useState(false);
 	const sidecarStartedRef = useRef(false);
+
+	const startWithWorkspace = useCallback(async (cwd?: string) => {
+		setWaitingForWorkspace(true);
+		try {
+			const initialState = await initSidecar(cwd);
+			setState(initialState as RpcSessionState | null);
+			setSidecarReady(true);
+			if (cwd) setWorkspace(cwd);
+		} catch (e) {
+			console.error("[init] FAILED:", e);
+		} finally {
+			setWaitingForWorkspace(false);
+		}
+	}, []);
 
 	useEffect(() => {
 		if (sidecarStartedRef.current) return;
 		sidecarStartedRef.current = true;
-		(async () => {
-			try {
-				const initialState = await initSidecar();
-				setState(initialState as RpcSessionState | null);
-				setSidecarReady(true);
-			} catch (e) {
-				console.error("[init] FAILED:", e);
+		if (isTauri()) {
+			// In Tauri: show workspace picker, don't auto-init
+			setWaitingForWorkspace(false);
+		} else {
+			// Browser: auto-init with dev bridge
+			startWithWorkspace();
+		}
+	}, [startWithWorkspace]);
+
+	const handlePickDirectory = useCallback(async () => {
+		if (!isTauri()) return;
+		try {
+			const dialog = await import("@tauri-apps/plugin-dialog");
+			const selected = await dialog.open({ directory: true, multiple: false, title: "Select project directory" });
+			if (typeof selected === "string") {
+				await startWithWorkspace(selected);
 			}
-		})();
-	}, []);
+		} catch (e) {
+			console.error("[workspace] dialog error:", e);
+		}
+	}, [startWithWorkspace]);
 
 	useEffect(() => {
 		if (!sidecarReady) return;
@@ -56,6 +90,48 @@ export default function App() {
 			.then((r) => setState(r.data?.state ?? null))
 			.catch(() => {});
 	}, [sidecarReady]);
+
+	// In Tauri mode, show workspace picker before loading main UI
+	const showWorkspacePicker = isTauri() && !sidecarReady && !waitingForWorkspace;
+
+	if (showWorkspacePicker) {
+		return (
+			<PxlKitSurfaceProvider surface="pixel">
+				<div className="flex h-screen items-center justify-center bg-bg">
+					<div className="flex flex-col items-center gap-6">
+						<BrandIcon size={48} className="text-accent" />
+						<div className="text-center">
+							<h1 className="font-mono text-xl font-bold uppercase tracking-widest text-fg">Pizza</h1>
+							<p className="mt-2 font-mono text-sm text-muted">Select a project directory to start</p>
+						</div>
+						<Button
+							tone="accent"
+							iconLeft={<FolderOpen className="h-4 w-4" />}
+							onClick={handlePickDirectory}
+						>
+							Open Directory
+						</Button>
+						{sidecarExitCode !== null && (
+							<p className="text-sm text-danger">Sidecar exited (code {sidecarExitCode})</p>
+						)}
+					</div>
+				</div>
+			</PxlKitSurfaceProvider>
+		);
+	}
+
+	if (waitingForWorkspace && !sidecarReady) {
+		return (
+			<PxlKitSurfaceProvider surface="pixel">
+				<div className="flex h-screen items-center justify-center bg-bg">
+					<div className="flex flex-col items-center gap-4">
+						<BrandIcon size={48} className="text-accent" />
+						<p className="font-mono text-sm text-muted">Starting...</p>
+					</div>
+				</div>
+			</PxlKitSurfaceProvider>
+		);
+	}
 
 	return (
 		<BrowserRouter>
