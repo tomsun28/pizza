@@ -271,3 +271,16 @@ pub async fn list_workspaces() -> Result<Vec<Value>, String> {
 
 	Ok(workspaces)
 }
+
+/// Set the window background color (for theme adaptation).
+#[tauri::command]
+pub async fn set_window_background(app: AppHandle, r: u8, g: u8, b: u8) -> Result<(), String> {
+	let window = app.get_webview_window("main").or_else(|| {
+		app.webview_windows().into_iter().next().map(|(_, w)| w)
+	});
+	if let Some(window) = window {
+		window.set_background_color(Some(tauri::webview::Color(r, g, b, 255)))
+			.map_err(|e| format!("set_background_color: {e}"))?;
+	}
+	Ok(())
+}

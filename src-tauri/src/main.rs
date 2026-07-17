@@ -17,6 +17,7 @@ fn main() {
 			bridge::rpc_command,
 			bridge::new_workspace,
 			bridge::list_workspaces,
+			bridge::set_window_background,
 		])
 		.setup(|_app| {
 			#[cfg(debug_assertions)]
