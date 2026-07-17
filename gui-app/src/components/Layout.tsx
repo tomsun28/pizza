@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { MessageSquare, Settings as SettingsIcon, Plus, FolderOpen, Folder } from "lucide-react";
+import { Settings as SettingsIcon, Plus, FolderOpen, Folder } from "lucide-react";
 import { StatusDot, ThemeToggle, Button } from "./ui";
 import { BrandIcon } from "./BrandIcon";
 import { cn } from "@/lib/utils";
@@ -132,37 +132,11 @@ export default function Layout({
 					)}
 				</div>
 
-				{/* Nav: chat + settings */}
-				<div className="space-y-1 px-3 py-1">
-					<NavLink
-						to="/"
-						className={({ isActive }) =>
-							cn(
-								"flex items-center gap-3 rounded-md border px-3 py-2 font-mono text-sm uppercase tracking-wide transition-colors",
-								isActive
-									? "border-accent bg-accent/10 text-accent"
-									: "border-transparent text-muted hover:bg-surface-2 hover:text-fg",
-							)
-						}
-					>
-						<MessageSquare className="h-4 w-4" />
-						chat
-					</NavLink>
-					<NavLink
-						to="/settings"
-						className={({ isActive }) =>
-							cn(
-								"flex items-center gap-3 rounded-md border px-3 py-2 font-mono text-sm uppercase tracking-wide transition-colors",
-								isActive
-									? "border-accent bg-accent/10 text-accent"
-									: "border-transparent text-muted hover:bg-surface-2 hover:text-fg",
-							)
-						}
-					>
-						<SettingsIcon className="h-4 w-4" />
-						settings
-					</NavLink>
-				</div>
+				{isTauri() && (
+					<div className="mb-2 px-1">
+						<Button tone="neutral" size="sm" iconLeft={<Plus className="h-3.5 w-3.5" />} onClick={() => newWorkspace()} className="w-full">New Workspace</Button>
+					</div>
+				)}
 
 				<div className="border-t border-border px-3 py-3">
 					{workspace && (
@@ -181,6 +155,7 @@ export default function Layout({
 							</span>
 						</div>
 						<div className="flex items-center gap-1">
+							<NavLink to="/settings" className={({ isActive }) => cn("flex items-center justify-center rounded-md p-1.5 transition-colors", isActive ? "text-accent" : "text-muted hover:text-fg")} title="Settings"><SettingsIcon className="h-4 w-4" /></NavLink>
 							<ThemeToggle />
 						</div>
 					</div>
