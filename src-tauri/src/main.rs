@@ -3,6 +3,8 @@
 
 mod bridge;
 
+use tauri::{Manager, WindowEvent};
+
 fn main() {
 	env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 	tauri::Builder::default()
@@ -20,12 +22,19 @@ fn main() {
 			}
 			#[cfg(debug_assertions)]
 			{
-				use tauri::Manager;
 				if let Some(window) = _app.get_webview_window("main") {
 					window.open_devtools();
 				}
 			}
 			Ok(())
+		})
+		.on_window_event(|window, event| {
+			if let WindowEvent::CloseRequested { .. } = event {
+				if window.label() == "main" {
+					log::info!("main window closed, stopping sidecar");
+					let _ = bridge::stop_sidecar();
+				}
+			}
 		})
 		.run(tauri::generate_context!())
 		.expect("error while running tauri application");
