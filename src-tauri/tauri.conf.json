@@ -24,8 +24,9 @@
 				"minWidth": 720,
 				"minHeight": 480,
 				"resizable": true,
-				"titleBarStyle": "Overlay",
-				"hiddenTitle": true
+				"titleBarStyle": "Transparent",
+				"hiddenTitle": true,
+				"backgroundColor": [18, 18, 18, 255]
 			}
 		],
 		"security": {

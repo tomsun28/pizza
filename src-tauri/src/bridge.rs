@@ -224,6 +224,9 @@ pub async fn new_workspace(app: AppHandle) -> Result<String, String> {
 	.title("Pizza")
 	.inner_size(1200.0, 800.0)
 	.min_inner_size(720.0, 480.0)
+	.title_bar_style(tauri::TitleBarStyle::Transparent)
+	.hidden_title(true)
+	.background_color(tauri::webview::Color(18, 18, 18, 255))
 	.build()
 	.map_err(|e| format!("Failed to create window: {e}"))?;
 	Ok(label)
