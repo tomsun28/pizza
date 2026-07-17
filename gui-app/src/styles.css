@@ -1,0 +1,515 @@
+@import "tailwindcss";
+
+/* ============================================================
+   Pizza GUI — "Claude warmth × Pixel-art skeleton"
+   - Claude: warm cream canvas, soft coral accent, airy layout
+   - Pixel: hard 0-blur shadows, 2px solid borders, pixel fonts
+   ============================================================ */
+
+@theme {
+	/* Claude-ish warm palette */
+	--color-canvas: #f5f4ee;
+	--color-surface: #fffdf8;
+	--color-surface-2: #efece3;
+	--color-ink: #1f1e1b;
+	--color-ink-soft: #6b685f;
+	--color-muted: #9b988e;
+	--color-line: #1f1e1b; /* pixel borders are solid ink */
+	--color-coral: #d97757; /* Claude coral */
+	--color-coral-deep: #c9613e;
+	--color-olive: #6b7a3a;
+	--color-teal: #2f6e6a;
+	--color-danger: #b42318;
+	--color-gold: #d4a017;
+
+	--font-pixel: "Press Start 2P", monospace;
+	--font-mono-pixel: "VT323", "Press Start 2P", monospace;
+
+	--shadow-pixel: 4px 4px 0 0 var(--color-ink);
+	--shadow-pixel-sm: 2px 2px 0 0 var(--color-ink);
+	--shadow-pixel-lg: 6px 6px 0 0 var(--color-ink);
+}
+
+:root {
+	color-scheme: light;
+	--bg: #f5f4ee;
+	--panel: #fffdf8;
+	--line: #1f1e1b;
+	--ink: #1f1e1b;
+	--ink-soft: #6b685f;
+	--coral: #d97757;
+	--coral-deep: #c9613e;
+	--danger: #b42318;
+	--shadow-pixel: 4px 4px 0 0 #1f1e1b;
+	--shadow-pixel-sm: 2px 2px 0 0 #1f1e1b;
+	--shadow-pixel-lg: 6px 6px 0 0 #1f1e1b;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html,
+body {
+	width: 100%;
+	height: 100%;
+	margin: 0;
+	background: var(--bg);
+	color: var(--ink);
+	font-family: "VT323", "Press Start 2P", monospace;
+	/* keep pixel edges crisp */
+	-webkit-font-smoothing: none;
+	font-smooth: never;
+	image-rendering: pixelated;
+}
+body {
+	overflow: hidden;
+	font-size: 18px; /* VT323 reads small, bump up */
+}
+button,
+textarea,
+input {
+	font: inherit;
+	color: inherit;
+}
+
+/* pixel border helper */
+.px-border {
+	border: 2px solid var(--line);
+}
+
+/* ============================================================ TOPBAR */
+.app {
+	display: grid;
+	grid-template-rows: 60px 1fr auto;
+	height: 100vh;
+}
+
+.topbar {
+	display: grid;
+	grid-template-columns: minmax(220px, 1fr) auto;
+	align-items: center;
+	gap: 16px;
+	padding: 0 20px;
+	border-bottom: 2px solid var(--line);
+	background: var(--panel);
+	position: relative;
+}
+/* little pixel corner ticks for flavor */
+.topbar::after {
+	content: "";
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: -6px;
+	height: 4px;
+	background-image: linear-gradient(90deg, var(--coral) 0 8px, transparent 8px 16px);
+	background-size: 16px 100%;
+	opacity: 0.6;
+}
+
+.brand {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	min-width: 0;
+}
+/* pixel pizza logo — CSS only, 8x8-ish blocky slice */
+.logo {
+	width: 34px;
+	height: 34px;
+	position: relative;
+	flex: 0 0 auto;
+	image-rendering: pixelated;
+	background: var(--coral);
+	border: 2px solid var(--line);
+	border-radius: 4px 4px 0 0;
+	box-shadow: var(--shadow-pixel-sm);
+}
+/* pepperoni dots */
+.logo::before {
+	content: "";
+	position: absolute;
+	top: 6px;
+	left: 6px;
+	width: 5px;
+	height: 5px;
+	background: var(--ink);
+	box-shadow: 12px 2px 0 var(--ink), 4px 12px 0 var(--gold), 14px 13px 0 var(--ink);
+}
+/* crust line */
+.logo::after {
+	content: "";
+	position: absolute;
+	left: -2px;
+	right: -2px;
+	bottom: -2px;
+	height: 6px;
+	background: var(--gold);
+	border: 2px solid var(--line);
+	border-top: 0;
+}
+
+.title {
+	font-family: "Press Start 2P", monospace;
+	font-weight: 400;
+	line-height: 1;
+	font-size: 16px;
+	letter-spacing: 0.5px;
+}
+.path {
+	color: var(--ink-soft);
+	font-size: 15px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: 50vw;
+	margin-top: 4px;
+	font-family: "VT323", monospace;
+}
+
+.meta {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	justify-content: flex-end;
+}
+
+/* pixel pill (solid border, hard shadow on hover) */
+.pill {
+	display: inline-flex;
+	align-items: center;
+	height: 30px;
+	padding: 0 12px;
+	border: 2px solid var(--line);
+	background: var(--surface-2, #efece3);
+	color: var(--ink);
+	font-size: 15px;
+	font-family: "VT323", monospace;
+	letter-spacing: 0.5px;
+	max-width: 240px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.pill.running {
+	color: var(--panel);
+	background: var(--coral);
+	animation: blink-bg 1.1s steps(2, end) infinite;
+}
+@keyframes blink-bg {
+	50% {
+		background: var(--coral-deep);
+	}
+}
+
+/* ============================================================ BUTTONS */
+button {
+	border: 2px solid var(--line);
+	background: var(--surface-2, #efece3);
+	color: var(--ink);
+	min-height: 38px;
+	padding: 0 16px;
+	border-radius: 0;
+	cursor: pointer;
+	font-family: "VT323", monospace;
+	font-size: 18px;
+	letter-spacing: 0.5px;
+	box-shadow: var(--shadow-pixel-sm);
+	transition: transform 0.06s steps(2), box-shadow 0.06s steps(2);
+}
+button:hover:not(:disabled) {
+	transform: translate(-1px, -1px);
+	box-shadow: var(--shadow-pixel);
+}
+button:active:not(:disabled) {
+	transform: translate(2px, 2px);
+	box-shadow: 0 0 0 0 var(--line);
+}
+button:disabled {
+	color: var(--muted);
+	cursor: not-allowed;
+	background: #e7e4db;
+	box-shadow: 2px 2px 0 0 #bdbab1;
+}
+.primary {
+	background: var(--coral);
+	border-color: var(--line);
+	color: #fffdf8;
+	font-family: "Press Start 2P", monospace;
+	font-size: 11px;
+	letter-spacing: 1px;
+}
+.primary:hover:not(:disabled) {
+	background: var(--coral-deep);
+}
+.danger {
+	color: var(--danger);
+	background: #fffdf8;
+}
+.danger:hover:not(:disabled) {
+	background: #fde9e6;
+}
+
+/* ============================================================ TIMELINE */
+.timeline-wrap {
+	overflow: hidden;
+	display: grid;
+	grid-template-columns: minmax(0, 880px);
+	justify-content: center;
+	padding: 24px 18px;
+}
+.timeline {
+	overflow: auto;
+	padding: 0 2px 120px;
+	scroll-behavior: smooth;
+}
+/* subtle dotted bg like graph paper */
+.timeline {
+	background-image: radial-gradient(var(--ink) 1px, transparent 1px);
+	background-size: 20px 20px;
+	background-position: 0 0;
+}
+
+.empty {
+	min-height: calc(100vh - 240px);
+	display: grid;
+	align-content: center;
+	justify-items: center;
+	gap: 16px;
+	color: var(--ink-soft);
+	text-align: center;
+}
+.empty-logo {
+	width: 64px;
+	height: 64px;
+	position: relative;
+	background: var(--coral);
+	border: 3px solid var(--line);
+	border-radius: 8px 8px 0 0;
+	box-shadow: var(--shadow-pixel);
+}
+.empty-logo::before {
+	content: "";
+	position: absolute;
+	top: 12px;
+	left: 12px;
+	width: 9px;
+	height: 9px;
+	background: var(--ink);
+	box-shadow: 22px 4px 0 var(--ink), 8px 22px 0 var(--gold), 26px 24px 0 var(--ink);
+}
+.empty-logo::after {
+	content: "";
+	position: absolute;
+	left: -3px;
+	right: -3px;
+	bottom: -12px;
+	height: 12px;
+	background: var(--gold);
+	border: 3px solid var(--line);
+	border-top: 0;
+}
+.empty-title {
+	color: var(--ink);
+	font-family: "Press Start 2P", monospace;
+	font-size: 28px;
+	font-weight: 400;
+	margin-top: 18px;
+	letter-spacing: 1px;
+}
+.empty-sub {
+	font-size: 20px;
+	color: var(--ink-soft);
+}
+.empty-hint {
+	font-size: 16px;
+	color: var(--muted);
+	font-family: "Press Start 2P", monospace;
+	font-size: 10px;
+	margin-top: 8px;
+	letter-spacing: 0.5px;
+}
+
+/* ============================================================ MESSAGE ITEMS */
+.item {
+	margin: 0 0 18px;
+	border: 2px solid var(--line);
+	background: var(--panel);
+	box-shadow: var(--shadow-pixel-sm);
+	overflow: hidden;
+	border-radius: 0;
+}
+.item:hover {
+	box-shadow: var(--shadow-pixel);
+}
+/* assistant = cream surface; user = coral fill, white text */
+.item.user {
+	background: var(--coral);
+	color: #fffdf8;
+}
+.item-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	min-height: 40px;
+	padding: 8px 14px;
+	border-bottom: 2px solid var(--line);
+	background: var(--surface-2, #efece3);
+	color: var(--ink-soft);
+	font-size: 16px;
+	font-family: "VT323", monospace;
+	letter-spacing: 0.5px;
+}
+.user .item-head {
+	border-bottom-color: var(--line);
+	background: var(--coral-deep);
+	color: #fffdf8;
+}
+.item-title {
+	font-weight: 400;
+	color: inherit;
+	font-family: "Press Start 2P", monospace;
+	font-size: 11px;
+	letter-spacing: 1px;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+/* pixel avatar squares before the name */
+.avatar {
+	display: inline-block;
+	width: 12px;
+	height: 12px;
+	border: 2px solid var(--line);
+	background: var(--coral);
+}
+.user .avatar {
+	background: #fffdf8;
+}
+.assistant .avatar {
+	background: var(--gold);
+}
+.item-status {
+	color: inherit;
+	white-space: nowrap;
+	opacity: 0.8;
+	font-size: 15px;
+}
+.item-body {
+	padding: 16px 16px 18px;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	line-height: 1.45;
+	font-size: 19px;
+	font-family: "VT323", monospace;
+}
+
+/* streaming caret — blocky blink */
+.streaming-caret::after {
+	content: "▋";
+	display: inline-block;
+	margin-left: 2px;
+	color: var(--coral);
+	animation: blink-caret 0.9s steps(2, end) infinite;
+}
+@keyframes blink-caret {
+	50% {
+		opacity: 0;
+	}
+}
+.item.user .streaming-caret::after {
+	color: #fffdf8;
+}
+
+/* ============================================================ COMPOSER */
+.composer {
+	border-top: 2px solid var(--line);
+	background: var(--panel);
+	padding: 16px 18px 20px;
+	display: grid;
+	grid-template-columns: minmax(0, 880px);
+	justify-content: center;
+	position: relative;
+}
+.composer::before {
+	content: "";
+	position: absolute;
+	left: 0;
+	right: 0;
+	top: -4px;
+	height: 2px;
+	background-image: linear-gradient(90deg, var(--coral) 0 8px, transparent 8px 16px);
+	background-size: 16px 100%;
+}
+.composer-inner {
+	display: grid;
+	grid-template-columns: 1fr auto;
+	gap: 12px;
+	align-items: stretch;
+	border: 2px solid var(--line);
+	background: var(--surface-2, #efece3);
+	padding: 8px;
+	box-shadow: var(--shadow-pixel);
+}
+textarea {
+	width: 100%;
+	min-height: 52px;
+	max-height: 180px;
+	resize: vertical;
+	padding: 12px;
+	border: 2px solid var(--line);
+	background: var(--panel);
+	color: var(--ink);
+	line-height: 1.4;
+	outline: none;
+	font-size: 19px;
+	font-family: "VT323", monospace;
+	border-radius: 0;
+}
+textarea:focus {
+	border-color: var(--coral);
+	box-shadow: inset 0 0 0 2px var(--coral);
+}
+textarea::placeholder {
+	color: var(--muted);
+}
+.composer-inner button {
+	align-self: stretch;
+}
+
+.error-line {
+	margin-top: 10px;
+	color: var(--danger);
+	font-size: 16px;
+	min-height: 18px;
+	font-family: "VT323", monospace;
+	border: 2px solid var(--danger);
+	background: #fde9e6;
+	padding: 6px 10px;
+	box-shadow: var(--shadow-pixel-sm);
+}
+
+/* ============================================================ SCROLLBAR (chunky pixel) */
+::-webkit-scrollbar {
+	width: 14px;
+	height: 14px;
+}
+::-webkit-scrollbar-track {
+	background: var(--surface-2, #efece3);
+	border-left: 2px solid var(--line);
+}
+::-webkit-scrollbar-thumb {
+	background: var(--coral);
+	border: 2px solid var(--line);
+}
+::-webkit-scrollbar-thumb:hover {
+	background: var(--coral-deep);
+}
+
+/* selection */
+::selection {
+	background: var(--gold);
+	color: var(--ink);
+}

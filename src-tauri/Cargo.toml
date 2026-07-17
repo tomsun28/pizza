@@ -1,0 +1,21 @@
+[package]
+name = "pizza-gui"
+version = "0.0.0"
+description = "Pizza desktop GUI"
+edition = "2021"
+rust-version = "1.77"
+
+[build-dependencies]
+tauri-build = { version = "2.0", features = [] }
+
+[dependencies]
+tauri = { version = "2.1", features = [] }
+tauri-plugin-shell = "2.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+log = "0.4"
+env_logger = "0.11"
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]

@@ -5,6 +5,8 @@ dist/
 *.log
 .DS_Store
 *.tsbuildinfo
+# Ignore all .target directories
+*/.target/
 # packages/*/node_modules/
 packages/*/dist/
 packages/*/dist-chrome/
@@ -45,3 +47,4 @@ collect.sh
 
 # Downloaded vendor tool archives
 .vendor-tools/
+/src-tauri/target/
