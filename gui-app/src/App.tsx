@@ -4,12 +4,11 @@ import { PxlKitSurfaceProvider } from "@pxlkit/ui-kit";
 import { FolderOpen } from "lucide-react";
 import Layout from "@/components/Layout";
 import ChatView from "@/views/ChatView";
-import HistoryView from "@/views/HistoryView";
 import SettingsView from "@/views/SettingsView";
-import { subscribeSidecarExit, subscribeEvents, initSidecar, sendCommandAwait } from "@/lib/transport";
-import { Button, EmptyState } from "@/components/ui";
+import { subscribeSidecarExit, subscribeEvents, initSidecar, sendCommandAwait, listWorkspaces } from "@/lib/transport";
+import { Button } from "@/components/ui";
 import { BrandIcon } from "@/components/BrandIcon";
-import type { RpcSessionState } from "@/lib/types";
+import type { RpcSessionState, WorkspaceMeta } from "@/lib/types";
 
 function isTauri(): boolean {
 	return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -21,7 +20,22 @@ export default function App() {
 	const [sidecarExitCode, setSidecarExitCode] = useState<number | null>(null);
 	const [workspace, setWorkspace] = useState<string | null>(null);
 	const [waitingForWorkspace, setWaitingForWorkspace] = useState(false);
+	const [workspaces, setWorkspaces] = useState<WorkspaceMeta[]>([]);
 	const sidecarStartedRef = useRef(false);
+
+	const refreshWorkspaces = useCallback(async () => {
+		if (!isTauri()) return;
+		try {
+			const list = await listWorkspaces();
+			setWorkspaces(list);
+		} catch (e) {
+			console.error("[workspaces] list error:", e);
+		}
+	}, []);
+
+	useEffect(() => {
+		refreshWorkspaces();
+	}, [refreshWorkspaces]);
 
 	const startWithWorkspace = useCallback(async (cwd?: string) => {
 		setWaitingForWorkspace(true);
@@ -30,12 +44,14 @@ export default function App() {
 			setState(initialState as RpcSessionState | null);
 			setSidecarReady(true);
 			if (cwd) setWorkspace(cwd);
+			// Refresh workspace list (last_accessed_at will have updated)
+			refreshWorkspaces();
 		} catch (e) {
 			console.error("[init] FAILED:", e);
 		} finally {
 			setWaitingForWorkspace(false);
 		}
-	}, []);
+	}, [refreshWorkspaces]);
 
 	useEffect(() => {
 		if (sidecarStartedRef.current) return;
@@ -61,6 +77,11 @@ export default function App() {
 			console.error("[workspace] dialog error:", e);
 		}
 	}, [startWithWorkspace]);
+
+	const handleSelectWorkspace = useCallback(async (cwd: string) => {
+		if (workspace === cwd && sidecarReady) return;
+		await startWithWorkspace(cwd);
+	}, [workspace, sidecarReady, startWithWorkspace]);
 
 	useEffect(() => {
 		if (!sidecarReady) return;
@@ -144,6 +165,8 @@ export default function App() {
 								sidecarReady={sidecarReady}
 								sidecarExitCode={sidecarExitCode}
 								workspace={workspace}
+								workspaces={workspaces}
+								onSelectWorkspace={handleSelectWorkspace}
 							/>
 						}
 					>
@@ -157,7 +180,6 @@ export default function App() {
 								/>
 							}
 						/>
-						<Route path="/history" element={<HistoryView />} />
 						<Route path="/settings" element={<SettingsView state={state} />} />
 						<Route path="*" element={<Navigate to="/" replace />} />
 					</Route>

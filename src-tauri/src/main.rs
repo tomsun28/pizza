@@ -16,6 +16,7 @@ fn main() {
 			bridge::stop_sidecar,
 			bridge::rpc_command,
 			bridge::new_workspace,
+			bridge::list_workspaces,
 		])
 		.setup(|_app| {
 			#[cfg(debug_assertions)]

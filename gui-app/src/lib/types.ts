@@ -78,3 +78,11 @@ export interface AgentMessage {
 	timestamp?: number;
 	[key: string]: unknown;
 }
+
+// ---- Workspace metadata (from ~/.pizza/agent/workspaces/*/meta.json) ----
+export interface WorkspaceMeta {
+	workspace_id: string;
+	cwd: string;
+	created_at: number;
+	last_accessed_at: number;
+}

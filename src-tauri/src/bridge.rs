@@ -228,3 +228,43 @@ pub async fn new_workspace(app: AppHandle) -> Result<String, String> {
 	.map_err(|e| format!("Failed to create window: {e}"))?;
 	Ok(label)
 }
+
+/// List all workspaces from ~/.pizza/agent/workspaces/*/meta.json
+#[tauri::command]
+pub async fn list_workspaces() -> Result<Vec<Value>, String> {
+	let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
+	let workspaces_dir = PathBuf::from(&home).join(".pizza").join("agent").join("workspaces");
+
+	if !workspaces_dir.exists() {
+		return Ok(Vec::new());
+	}
+
+	let entries = std::fs::read_dir(&workspaces_dir).map_err(|e| format!("read_dir: {e}"))?;
+	let mut workspaces: Vec<Value> = Vec::new();
+
+	for entry in entries {
+		let entry = entry.map_err(|e| format!("entry: {e}"))?;
+		let meta_path = entry.path().join("meta.json");
+		if !meta_path.exists() {
+			continue;
+		}
+		let raw = match std::fs::read_to_string(&meta_path) {
+			Ok(s) => s,
+			Err(_) => continue,
+		};
+		let meta: Value = match serde_json::from_str(&raw) {
+			Ok(v) => v,
+			Err(_) => continue,
+		};
+		workspaces.push(meta);
+	}
+
+	// Sort by last_accessed_at descending
+	workspaces.sort_by(|a, b| {
+		let a_time = a.get("last_accessed_at").and_then(|v| v.as_i64()).unwrap_or(0);
+		let b_time = b.get("last_accessed_at").and_then(|v| v.as_i64()).unwrap_or(0);
+		b_time.cmp(&a_time)
+	});
+
+	Ok(workspaces)
+}

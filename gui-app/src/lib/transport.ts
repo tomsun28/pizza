@@ -6,6 +6,8 @@
  * In browser: uses HTTP POST + SSE to the dev bridge plugin.
  */
 
+import type { WorkspaceMeta } from "./types";
+
 function isTauri(): boolean {
 	return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
@@ -128,6 +130,15 @@ export async function newWorkspace(): Promise<void> {
 	if (!isTauri()) return;
 	const core = await import("@tauri-apps/api/core");
 	await core.invoke("new_workspace");
+}
+
+// --- List workspaces (Tauri only) ---
+
+export async function listWorkspaces(): Promise<WorkspaceMeta[]> {
+	if (!isTauri()) return [];
+	const core = await import("@tauri-apps/api/core");
+	const result = await core.invoke<WorkspaceMeta[]>("list_workspaces");
+	return result;
 }
 
 // --- SSE implementation for browser mode ---

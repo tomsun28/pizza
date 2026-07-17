@@ -2,7 +2,7 @@
 	"$schema": "../gen/schemas/desktop-schema.json",
 	"identifier": "default",
 	"description": "Default capabilities for Pizza GUI",
-	"windows": ["main"],
+	"windows": ["main", "workspace-*"],
 	"permissions": [
 		"core:default",
 		"core:event:default",
