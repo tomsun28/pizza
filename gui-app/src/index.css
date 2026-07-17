@@ -1,0 +1,130 @@
+@import "tailwindcss";
+@import "@pxlkit/ui-kit/styles.css";
+
+@source "../node_modules/@pxlkit/ui-kit";
+@source "../node_modules/@pxlkit/core";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+	--color-bg: var(--bg);
+	--color-surface: var(--surface);
+	--color-surface-2: var(--surface-2);
+	--color-border: var(--border);
+	--color-fg: var(--fg);
+	--color-muted: var(--muted);
+	--color-accent: var(--accent);
+	--color-accent-fg: var(--accent-fg);
+	--color-success: var(--success);
+	--color-warning: var(--warning);
+	--color-danger: var(--danger);
+
+	--font-sans: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+	--font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+	--font-pixel: "Press Start 2P", "JetBrains Mono", monospace;
+}
+
+:root {
+	--bg: #f5f4ee;
+	--surface: #fffdf8;
+	--surface-2: #efece3;
+	--border: #d6d2c7;
+	--fg: #1f1e1b;
+	--muted: #6b685f;
+	--accent: #d97757;
+	--accent-fg: #fffdf8;
+	--success: #6b7a3a;
+	--warning: #d4a017;
+	--danger: #b42318;
+}
+
+.dark {
+	--bg: #0a0a0f;
+	--surface: #12121a;
+	--surface-2: #1a1a2e;
+	--border: #2a2a3e;
+	--fg: #dcd8d0;
+	--muted: #8888aa;
+	--accent: #d97757;
+	--accent-fg: #fffdf8;
+	--success: #00cc6a;
+	--warning: #d4a82b;
+	--danger: #ff5c68;
+}
+
+@layer base {
+	html,
+	body,
+	#root {
+		height: 100%;
+	}
+	body {
+		background: var(--color-bg);
+		color: var(--color-fg);
+		font-family: var(--font-sans);
+		-webkit-font-smoothing: antialiased;
+		text-rendering: optimizeLegibility;
+	}
+	h1,
+	h2,
+	.font-pixel {
+		font-family: var(--font-pixel);
+		letter-spacing: 0.05em;
+	}
+	img {
+		image-rendering: pixelated;
+	}
+	::selection {
+		background: color-mix(in srgb, var(--accent) 25%, transparent);
+	}
+	* {
+		scrollbar-width: thin;
+		scrollbar-color: var(--border) transparent;
+	}
+	*::-webkit-scrollbar {
+		width: 8px;
+		height: 8px;
+	}
+	*::-webkit-scrollbar-thumb {
+		background: var(--border);
+		border-radius: 9999px;
+	}
+}
+
+@layer components {
+	[data-tauri-drag-region] {
+		-webkit-app-region: drag;
+	}
+	[data-tauri-drag-region] button,
+	[data-tauri-drag-region] a,
+	[data-tauri-drag-region] input,
+	[data-tauri-drag-region] [data-no-drag] {
+		-webkit-app-region: no-drag;
+	}
+
+	.btn-retro,
+	.btn-retro:hover {
+		box-shadow:
+			0 1px 2px rgb(0 0 0 / 0.08),
+			0 1px 1px rgb(0 0 0 / 0.04) !important;
+		transform: none !important;
+	}
+	.btn-retro:active {
+		transform: translateY(1px) !important;
+	}
+
+	.card {
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: 0.75rem;
+	}
+	.label {
+		margin-bottom: 0.375rem;
+		display: block;
+		font-size: 0.75rem;
+		font-weight: 500;
+		color: var(--muted);
+		font-family: var(--font-mono);
+		letter-spacing: 0.04em;
+	}
+}

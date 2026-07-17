@@ -11,7 +11,11 @@
 		"noEmit": true,
 		"isolatedModules": true,
 		"resolveJsonModule": true,
-		"allowImportingTsExtensions": true
+		"allowImportingTsExtensions": true,
+		"baseUrl": ".",
+		"paths": {
+			"@/*": ["./src/*"]
+		}
 	},
 	"include": ["src"]
 }
