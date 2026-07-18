@@ -499,6 +499,136 @@ pub async fn reveal_workspace(cwd: String) -> Result<(), String> {
 	Ok(())
 }
 
+/// Provider info returned to the frontend.
+#[derive(serde::Serialize)]
+pub struct ProviderInfo {
+	id: String,
+	has_api_key: bool,
+	auth_type: Option<String>, // "api_key" | "oauth"
+}
+
+/// List all known providers and their auth status from auth.json.
+#[tauri::command]
+pub async fn list_providers() -> Result<Vec<ProviderInfo>, String> {
+	let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
+	let auth_path = PathBuf::from(&home).join(".pizza").join("agent").join("auth.json");
+
+	let mut auth_data: serde_json::Map<String, Value> = serde_json::Map::new();
+	if auth_path.exists() {
+		if let Ok(raw) = std::fs::read_to_string(&auth_path) {
+			if let Ok(parsed) = serde_json::from_str::<Value>(&raw) {
+				if let Some(obj) = parsed.as_object() {
+					auth_data = obj.clone();
+				}
+			}
+		}
+	}
+
+	// Built-in known providers (from pi-ai)
+	let builtin = [
+		"anthropic", "openai", "google", "zai", "openrouter",
+		"groq", "mistral", "deepseek", "xai", "fireworks",
+		"together", "perplexity", "cohere", "amazon-bedrock",
+	];
+
+	let mut providers: Vec<ProviderInfo> = Vec::new();
+
+	for id in &builtin {
+		let cred = auth_data.get(*id);
+		let has_api_key = cred.is_some();
+		let auth_type = cred.and_then(|c| c.get("type")).and_then(|t| t.as_str()).map(|s| s.to_string());
+		providers.push(ProviderInfo {
+			id: id.to_string(),
+			has_api_key,
+			auth_type,
+		});
+	}
+
+	// Add any custom providers from auth.json not in builtin list
+	for (key, _val) in &auth_data {
+		if !builtin.contains(&key.as_str()) {
+			let cred = auth_data.get(key);
+			let auth_type = cred.and_then(|c| c.get("type")).and_then(|t| t.as_str()).map(|s| s.to_string());
+			providers.push(ProviderInfo {
+				id: key.clone(),
+				has_api_key: true,
+				auth_type,
+			});
+		}
+	}
+
+	Ok(providers)
+}
+
+/// Set an API key for a provider in auth.json.
+#[tauri::command]
+pub async fn set_provider_api_key(provider: String, api_key: String) -> Result<(), String> {
+	let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
+	let auth_dir = PathBuf::from(&home).join(".pizza").join("agent");
+	let auth_path = auth_dir.join("auth.json");
+
+	// Ensure directory exists
+	if !auth_dir.exists() {
+		std::fs::create_dir_all(&auth_dir).map_err(|e| format!("create_dir: {e}"))?;
+	}
+
+	// Read existing auth.json
+	let mut auth_data: serde_json::Map<String, Value> = serde_json::Map::new();
+	if auth_path.exists() {
+		if let Ok(raw) = std::fs::read_to_string(&auth_path) {
+			if let Ok(parsed) = serde_json::from_str::<Value>(&raw) {
+				if let Some(obj) = parsed.as_object() {
+					auth_data = obj.clone();
+				}
+			}
+		}
+	}
+
+	// Set the API key
+	auth_data.insert(
+		provider.clone(),
+		serde_json::json!({ "type": "api_key", "key": api_key }),
+	);
+
+	// Write back
+	let json = serde_json::to_string_pretty(&Value::Object(auth_data)).map_err(|e| format!("serialize: {e}"))?;
+	std::fs::write(&auth_path, &json).map_err(|e| format!("write: {e}"))?;
+
+	// Set file permissions to 600
+	#[cfg(unix)]
+	{
+		use std::os::unix::fs::PermissionsExt;
+		let _ = std::fs::set_permissions(&auth_path, std::fs::Permissions::from_mode(0o600));
+	}
+
+	log_file(&format!("set_provider_api_key: set key for {}", provider));
+	Ok(())
+}
+
+/// Remove a provider's credentials from auth.json.
+#[tauri::command]
+pub async fn remove_provider_api_key(provider: String) -> Result<(), String> {
+	let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
+	let auth_path = PathBuf::from(&home).join(".pizza").join("agent").join("auth.json");
+
+	if !auth_path.exists() {
+		return Ok(()); // Nothing to remove
+	}
+
+	let raw = std::fs::read_to_string(&auth_path).map_err(|e| format!("read: {e}"))?;
+	let mut parsed: Value = serde_json::from_str(&raw).map_err(|e| format!("parse: {e}"))?;
+
+	if let Some(obj) = parsed.as_object_mut() {
+		obj.remove(&provider);
+	}
+
+	let json = serde_json::to_string_pretty(&parsed).map_err(|e| format!("serialize: {e}"))?;
+	std::fs::write(&auth_path, &json).map_err(|e| format!("write: {e}"))?;
+
+	log_file(&format!("remove_provider_api_key: removed key for {}", provider));
+	Ok(())
+}
+
 /// Set the window background color (for theme adaptation).
 #[tauri::command]
 pub async fn set_window_background(app: AppHandle, r: u8, g: u8, b: u8) -> Result<(), String> {

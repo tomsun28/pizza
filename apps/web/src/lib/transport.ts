@@ -165,6 +165,32 @@ export async function revealWorkspace(cwd: string): Promise<void> {
 	await core.invoke("reveal_workspace", { cwd });
 }
 
+// --- Provider management (Tauri only) ---
+
+export interface ProviderInfo {
+	id: string;
+	has_api_key: boolean;
+	auth_type: string | null;
+}
+
+export async function listProviders(): Promise<ProviderInfo[]> {
+	if (!isTauri()) return [];
+	const core = await import("@tauri-apps/api/core");
+	return core.invoke<ProviderInfo[]>("list_providers");
+}
+
+export async function setProviderApiKey(provider: string, apiKey: string): Promise<void> {
+	if (!isTauri()) return;
+	const core = await import("@tauri-apps/api/core");
+	await core.invoke("set_provider_api_key", { provider, apiKey });
+}
+
+export async function removeProviderApiKey(provider: string): Promise<void> {
+	if (!isTauri()) return;
+	const core = await import("@tauri-apps/api/core");
+	await core.invoke("remove_provider_api_key", { provider });
+}
+
 // --- SSE implementation for browser mode ---
 
 let sseSource: EventSource | null = null;
