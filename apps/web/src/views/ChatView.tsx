@@ -344,6 +344,7 @@ export default function ChatView({
 				</div>
 			)}
 			<Composer
+				state={state}
 				sidecarReady={sidecarReady}
 				isRunning={isRunning}
 				onSend={handleSend}

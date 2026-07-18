@@ -16,32 +16,36 @@ export function BrandIcon({
 			role="img"
 			aria-label="pizza"
 		>
-			{/* Pizza slice silhouette — triangle pointing up */}
-			<g fill="currentColor">
-				{/* Crust base (rows 12-13, full width tapering) */}
-				<rect x="3" y="12" width="10" height="1" />
-				<rect x="4" y="13" width="8" height="1" />
-				{/* Cheese body (rows 3-11, tapering triangle) */}
-				<rect x="7" y="2" width="2" height="1" />
-				<rect x="6" y="3" width="4" height="1" />
+			{/* Pixel-art pizza slice pointing down */}
+			<g fill="#D4A373">
+				{/* Crust (rows 1-2) */}
+				<rect x="3" y="1" width="10" height="1" />
+				<rect x="4" y="2" width="8" height="1" />
+			</g>
+			<g fill="#F9C74F">
+				{/* Cheese body tapering to the tip */}
+				<rect x="5" y="3" width="6" height="1" />
 				<rect x="5" y="4" width="6" height="1" />
-				<rect x="5" y="5" width="6" height="1" />
+				<rect x="4" y="5" width="8" height="1" />
 				<rect x="4" y="6" width="8" height="1" />
 				<rect x="4" y="7" width="8" height="1" />
-				<rect x="4" y="8" width="8" height="1" />
+				<rect x="3" y="8" width="10" height="1" />
 				<rect x="3" y="9" width="10" height="1" />
 				<rect x="3" y="10" width="10" height="1" />
-				<rect x="3" y="11" width="10" height="1" />
+				<rect x="5" y="11" width="6" height="1" />
+				<rect x="6" y="12" width="4" height="1" />
+				<rect x="7" y="13" width="2" height="1" />
 			</g>
-			{/* Pepperoni dots */}
-			<g fill="#c9613e" fillOpacity="0.9">
-				<rect x="6" y="6" width="2" height="2" />
-				<rect x="9" y="8" width="2" height="2" />
-				<rect x="5" y="9" width="2" height="2" />
+			{/* Pepperoni */}
+			<g fill="#BC4749">
+				<rect x="6" y="5" width="2" height="2" />
+				<rect x="9" y="7" width="2" height="2" />
+				<rect x="5" y="8" width="2" height="2" />
 			</g>
-			{/* Highlight stripe (light from upper-left) */}
-			<g fill="#ffffff" fillOpacity="0.25">
-				<rect x="5" y="4" width="1" height="7" />
+			{/* Basil */}
+			<g fill="#43AA8B">
+				<rect x="9" y="4" width="1" height="1" />
+				<rect x="5" y="10" width="1" height="1" />
 			</g>
 		</svg>
 	);
