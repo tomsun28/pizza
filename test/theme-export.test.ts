@@ -3,7 +3,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ENV_AGENT_DIR } from "../src/config.js";
-import { getThemeExportColors } from "../src/modes/interactive/theme/theme.js";
+import { getThemeExportColors } from "../packages/tui/theme/theme.js";
 
 type ThemeFile = {
 	name: string;
@@ -38,7 +38,7 @@ describe("getThemeExportColors", () => {
 
 	it("resolves export variable references using the same syntax as colors", () => {
 		const darkTheme = JSON.parse(
-			readFileSync(new URL("../src/modes/interactive/theme/dark.json", import.meta.url), "utf-8"),
+			readFileSync(new URL("../packages/tui/theme/dark.json", import.meta.url), "utf-8"),
 		) as ThemeFile;
 
 		const customTheme: ThemeFile = {
@@ -72,7 +72,7 @@ describe("getThemeExportColors", () => {
 
 	it("resolves recursive vars and converts 256-color export values to hex", () => {
 		const darkTheme = JSON.parse(
-			readFileSync(new URL("../src/modes/interactive/theme/dark.json", import.meta.url), "utf-8"),
+			readFileSync(new URL("../packages/tui/theme/dark.json", import.meta.url), "utf-8"),
 		) as ThemeFile;
 
 		const customTheme: ThemeFile = {

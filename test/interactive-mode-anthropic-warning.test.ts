@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import { InteractiveMode } from "../src/modes/interactive/interactive-mode.js";
+import { InteractiveMode } from "../packages/tui/interactive-mode.js";
 
 describe("InteractiveMode.maybeWarnAboutAnthropicSubscriptionAuth", () => {
 	test("warns once when Anthropic subscription auth is detected", async () => {

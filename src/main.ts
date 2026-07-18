@@ -13,10 +13,10 @@ function supportsXhigh(model: Model<Api>): boolean {
 	return getSupportedThinkingLevels(model).includes("xhigh" as any);
 }
 import chalk from "chalk";
-import { type Args, type Mode, parseArgs, printHelp } from "./cli/args.js";
-import { processFileArguments } from "./cli/file-processor.js";
-import { buildInitialMessage } from "./cli/initial-message.js";
-import { listModels } from "./cli/list-models.js";
+import { type Args, type Mode, parseArgs, printHelp } from "../packages/cli/args.js";
+import { processFileArguments } from "../packages/cli/file-processor.js";
+import { buildInitialMessage } from "../packages/cli/initial-message.js";
+import { listModels } from "../packages/cli/list-models.js";
 import { getAgentDir, getModelsPath, VERSION } from "./config.js";
 import {
 	type SessionServices,
@@ -37,7 +37,7 @@ import { SettingsManager } from "./core/settings-manager.js";
 import { printTimings, resetTimings, time } from "./core/timings.js";
 
 import { InteractiveMode, runGuiModeWithFacade, runPrintModeWithFacade, runRpcModeWithFacade } from "./modes/index.js";
-import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.js";
+import { initTheme, stopThemeWatcher } from "../packages/tui/theme/theme.js";
 import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.js";
 import { isLocalPath } from "./utils/paths.js";
 

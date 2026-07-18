@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { parseArgs } from "../src/cli/args.js";
+import { parseArgs } from "../packages/cli/args.js";
 
 describe("parseArgs", () => {
 	describe("--version flag", () => {

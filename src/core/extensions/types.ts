@@ -39,7 +39,7 @@ import type {
 	TUI,
 } from "@earendil-works/pi-tui";
 import type { Static, TSchema } from "@sinclair/typebox";
-import type { Theme } from "../../modes/interactive/theme/theme.js";
+import type { Theme } from "../../../packages/tui/theme/theme.js";
 import type { BashResult } from "../bash-executor.js";
 import type { CompactionPreparation, CompactionResult } from "../compaction/index.js";
 import type { EventBus } from "../event-bus.js";

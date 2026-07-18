@@ -6,7 +6,7 @@ import type { ThinkingLevel } from "./agent/types.js";
 import { type Api, type Model, modelsAreEqual } from "@earendil-works/pi-ai/compat";
 import chalk from "chalk";
 import { minimatch } from "minimatch";
-import { isValidThinkingLevel } from "../cli/args.js";
+import { isValidThinkingLevel } from "../../packages/cli/args.js";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
 import type { ModelRegistry } from "./model-registry.js";
 

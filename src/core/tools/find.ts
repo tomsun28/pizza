@@ -7,7 +7,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import ignore from "ignore";
 import { minimatch } from "minimatch";
 import path from "path";
-import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
+import { keyHint } from "../../../packages/tui/components/keybinding-hints.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { resolveToCwd } from "./path-utils.js";
@@ -189,7 +189,7 @@ export interface FindToolOptions {
 
 function formatFindCall(
 	args: { pattern: string; path?: string; limit?: number } | undefined,
-	theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+	theme: typeof import("../../../packages/tui/theme/theme.js").theme,
 ): string {
 	const pattern = str(args?.pattern);
 	const rawPath = str(args?.path);
@@ -213,7 +213,7 @@ function formatFindResult(
 		details?: FindToolDetails;
 	},
 	options: ToolRenderResultOptions,
-	theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+	theme: typeof import("../../../packages/tui/theme/theme.js").theme,
 	showImages: boolean,
 ): string {
 	const output = getTextOutput(result, showImages).trim();

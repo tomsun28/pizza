@@ -7,8 +7,8 @@ import type {
 	SessionMessageEntry,
 	SessionTreeNode,
 } from "../src/core/types/session-types.js";
-import { TreeSelectorComponent } from "../src/modes/interactive/components/tree-selector.js";
-import { initTheme } from "../src/modes/interactive/theme/theme.js";
+import { TreeSelectorComponent } from "../packages/tui/components/tree-selector.js";
+import { initTheme } from "../packages/tui/theme/theme.js";
 
 beforeAll(() => {
 	initTheme("dark");

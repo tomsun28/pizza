@@ -3,7 +3,7 @@ import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "@sinclair/typebox";
 import { constants } from "fs";
 import { access as fsAccess, readFile as fsReadFile, writeFile as fsWriteFile } from "fs/promises";
-import { renderDiff } from "../../modes/interactive/components/diff.js";
+import { renderDiff } from "../../../packages/tui/components/diff.js";
 import type { ToolDefinition } from "../extensions/types.js";
 import {
 	applyEditsToNormalizedContent,
@@ -225,7 +225,7 @@ function getRenderablePreviewInput(args: RenderableEditArgs | undefined): { path
 
 function formatEditCall(
 	args: RenderableEditArgs | undefined,
-	theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+	theme: typeof import("../../../packages/tui/theme/theme.js").theme,
 ): string {
 	const invalidArg = invalidArgText(theme);
 	const rawPath = str(args?.file_path ?? args?.path);
@@ -238,7 +238,7 @@ function formatEditResult(
 	args: RenderableEditArgs | undefined,
 	preview: EditPreview | undefined,
 	result: EditToolResultLike,
-	theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+	theme: typeof import("../../../packages/tui/theme/theme.js").theme,
 	isError: boolean,
 ): string | undefined {
 	const rawPath = str(args?.file_path ?? args?.path);
@@ -266,7 +266,7 @@ function formatEditResult(
 function getEditHeaderBg(
 	preview: EditPreview | undefined,
 	settledError: boolean | undefined,
-	theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+	theme: typeof import("../../../packages/tui/theme/theme.js").theme,
 ): (text: string) => string {
 	if (preview) {
 		if ("error" in preview) {
@@ -283,7 +283,7 @@ function getEditHeaderBg(
 function buildEditCallComponent(
 	component: EditCallRenderComponent,
 	args: RenderableEditArgs | undefined,
-	theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+	theme: typeof import("../../../packages/tui/theme/theme.js").theme,
 ): EditCallRenderComponent {
 	component.setBgFn(getEditHeaderBg(component.preview, component.settledError, theme));
 	component.clear();

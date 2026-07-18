@@ -1,5 +1,5 @@
 import chalk from "chalk";
-import { selectConfig } from "./cli/config-selector.js";
+import { selectConfig } from "../packages/cli/config-selector.js";
 import { APP_NAME, CONFIG_DIR_NAME, getAgentDir } from "./config.js";
 import { DefaultPackageManager } from "./core/package-manager.js";
 import { SettingsManager } from "./core/settings-manager.js";

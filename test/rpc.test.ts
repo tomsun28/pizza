@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentEvent } from "../src/core/agent/index.js";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { RpcClient } from "../src/modes/rpc/rpc-client.js";
+import { RpcClient } from "../packages/rpc/rpc-client.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 

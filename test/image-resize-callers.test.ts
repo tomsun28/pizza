@@ -8,7 +8,7 @@ vi.mock("../src/utils/image-resize.js", () => ({
 	formatDimensionNote: vi.fn(() => undefined),
 }));
 
-import { processFileArguments } from "../src/cli/file-processor.js";
+import { processFileArguments } from "../packages/cli/file-processor.js";
 import { createReadTool } from "../src/core/tools/read.js";
 import { resizeImage } from "../src/utils/image-resize.js";
 

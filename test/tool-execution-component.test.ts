@@ -10,8 +10,8 @@ import { type BashOperations, createBashToolDefinition } from "../src/core/tools
 import { formatLineAnchor } from "../src/core/tools/line-anchors.js";
 import { createReadTool, createReadToolDefinition } from "../src/core/tools/read.js";
 import { createWriteToolDefinition } from "../src/core/tools/write.js";
-import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.js";
-import { initTheme } from "../src/modes/interactive/theme/theme.js";
+import { ToolExecutionComponent } from "../packages/tui/components/tool-execution.js";
+import { initTheme } from "../packages/tui/theme/theme.js";
 
 function createBaseToolDefinition(name = "custom_tool"): ToolDefinition {
 	return {

@@ -6,9 +6,9 @@ import type { AgentTool } from "../agent/types.js";
 import { Container, Text, truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import { type Static, Type } from "@sinclair/typebox";
 import { spawn } from "child_process";
-import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
-import { truncateToVisualLines } from "../../modes/interactive/components/visual-truncate.js";
-import { theme } from "../../modes/interactive/theme/theme.js";
+import { keyHint } from "../../../packages/tui/components/keybinding-hints.js";
+import { truncateToVisualLines } from "../../../packages/tui/components/visual-truncate.js";
+import { theme } from "../../../packages/tui/theme/theme.js";
 import { waitForChildProcess } from "../../utils/child-process.js";
 import { injectPizzaPathShims } from "../../utils/path-shims.js";
 import {

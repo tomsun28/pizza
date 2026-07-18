@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
-import type { Args } from "../src/cli/args.js";
-import { buildInitialMessage } from "../src/cli/initial-message.js";
+import type { Args } from "../packages/cli/args.js";
+import { buildInitialMessage } from "../packages/cli/initial-message.js";
 
 function createArgs(messages: string[] = []): Args {
 	return {

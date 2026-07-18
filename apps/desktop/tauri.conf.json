@@ -1,0 +1,47 @@
+{
+	"$schema": "https://schema.tauri.app/config/2",
+	"productName": "Pizza",
+	"version": "0.0.0",
+	"identifier": "ai.pizza.gui",
+	"build": {
+		"beforeDevCommand": {
+			"script": "bun run dev",
+			"cwd": "../web"
+		},
+		"devUrl": "http://127.0.0.1:1420",
+		"beforeBuildCommand": {
+			"script": "bun run build",
+			"cwd": "../web"
+		},
+		"frontendDist": "../web/dist"
+	},
+	"app": {
+		"windows": [
+			{
+				"title": "Pizza",
+				"width": 1200,
+				"height": 800,
+				"minWidth": 720,
+				"minHeight": 480,
+				"resizable": true,
+				"titleBarStyle": "Transparent",
+				"hiddenTitle": true,
+				"backgroundColor": [18, 18, 18, 255]
+			}
+		],
+		"security": {
+			"csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self' 'unsafe-inline' 'unsafe-eval'; connect-src 'self' ipc: http://ipc.localhost"
+		}
+	},
+	"bundle": {
+		"active": true,
+		"targets": "all",
+		"icon": [
+			"icons/32x32.png",
+			"icons/128x128.png",
+			"icons/128x128@2x.png",
+			"icons/icon.icns",
+			"icons/icon.ico"
+		]
+	}
+}

@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import chalk from "chalk";
 import { CONFIG_DIR_NAME } from "../config.js";
-import { loadThemeFromPath, type Theme } from "../modes/interactive/theme/theme.js";
+import { loadThemeFromPath, type Theme } from "../../packages/tui/theme/theme.js";
 import type { ResourceDiagnostic } from "./diagnostics.js";
 
 export type { ResourceCollision, ResourceDiagnostic } from "./diagnostics.js";

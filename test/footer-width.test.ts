@@ -1,9 +1,9 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { ReadonlyFooterDataProvider } from "../src/core/footer-data-provider.js";
-import type { FooterSessionInfo } from "../src/modes/interactive/components/footer.js";
-import { FooterComponent } from "../src/modes/interactive/components/footer.js";
-import { initTheme } from "../src/modes/interactive/theme/theme.js";
+import type { FooterSessionInfo } from "../packages/tui/components/footer.js";
+import { FooterComponent } from "../packages/tui/components/footer.js";
+import { initTheme } from "../packages/tui/theme/theme.js";
 
 type AssistantUsage = {
 	input: number;

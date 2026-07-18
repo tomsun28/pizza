@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { InteractiveMode } from "../src/modes/interactive/interactive-mode.js";
+import { InteractiveMode } from "../packages/tui/interactive-mode.js";
 
 type FakeUi = {
 	start: () => void;

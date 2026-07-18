@@ -47,4 +47,4 @@ collect.sh
 
 # Downloaded vendor tool archives
 .vendor-tools/
-/src-tauri/target/
+/apps/desktop/target/

@@ -288,7 +288,7 @@ export {
 	UserMessageComponent,
 	UserMessageSelectorComponent,
 	type VisualTruncateResult,
-} from "./modes/interactive/components/index.js";
+} from "../packages/tui/components/index.js";
 // Theme utilities for custom tools and extensions
 export {
 	getLanguageFromPath,
@@ -299,7 +299,7 @@ export {
 	initTheme,
 	Theme,
 	type ThemeColor,
-} from "./modes/interactive/theme/theme.js";
+} from "../packages/tui/theme/theme.js";
 // Clipboard utilities
 export { copyToClipboard } from "./utils/clipboard.js";
 export { parseFrontmatter, stripFrontmatter } from "./utils/frontmatter.js";

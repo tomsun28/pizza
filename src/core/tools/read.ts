@@ -4,8 +4,8 @@ import { Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "@sinclair/typebox";
 import { constants } from "fs";
 import { access as fsAccess, readFile as fsReadFile } from "fs/promises";
-import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
-import { getLanguageFromPath, highlightCode } from "../../modes/interactive/theme/theme.js";
+import { keyHint } from "../../../packages/tui/components/keybinding-hints.js";
+import { getLanguageFromPath, highlightCode } from "../../../packages/tui/theme/theme.js";
 import { formatDimensionNote, resizeImage } from "../../utils/image-resize.js";
 import { detectSupportedImageMimeTypeFromFile } from "../../utils/mime.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
@@ -61,7 +61,7 @@ export interface ReadToolOptions {
 
 function formatReadCall(
 	args: { path?: string; file_path?: string; offset?: number; limit?: number } | undefined,
-	theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+	theme: typeof import("../../../packages/tui/theme/theme.js").theme,
 ): string {
 	const rawPath = str(args?.file_path ?? args?.path);
 	const path = rawPath !== null ? shortenPath(rawPath) : null;
@@ -104,7 +104,7 @@ function formatReadResult(
 	args: { path?: string; file_path?: string; offset?: number; limit?: number } | undefined,
 	result: { content: (TextContent | ImageContent)[]; details?: ReadToolDetails },
 	options: ToolRenderResultOptions,
-	theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+	theme: typeof import("../../../packages/tui/theme/theme.js").theme,
 	showImages: boolean,
 ): string {
 	const rawPath = str(args?.file_path ?? args?.path);

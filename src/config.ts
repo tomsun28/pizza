@@ -108,15 +108,15 @@ export function getPackageDir(): string {
 /**
  * Get path to built-in themes directory (shipped with package)
  * - For Bun binary: theme/ next to executable
- * - For Node.js (dist/): dist/modes/interactive/theme/
- * - For tsx (src/): src/modes/interactive/theme/
+ * - For Node.js (dist/): dist/packages/tui/theme/
+ * - For tsx (src/): packages/tui/theme/ (relative to project root)
  */
 export function getThemesDir(): string {
 	if (isBunBinary) {
 		return join(getPackageDir(), "theme");
 	}
-	// __dirname is always dist/ or src/ — assets live at the same relative path from either
-	return join(__dirname, "modes", "interactive", "theme");
+	// __dirname is src/ or dist/ — themes are now in packages/tui/theme/
+	return join(__dirname, "..", "packages", "tui", "theme");
 }
 
 /**
@@ -152,15 +152,15 @@ export function getChangelogPath(): string {
 /**
  * Get path to built-in interactive assets directory.
  * - For Bun binary: assets/ next to executable
- * - For Node.js (dist/): dist/modes/interactive/assets/
- * - For tsx (src/): src/modes/interactive/assets/
+ * - For Node.js (dist/): dist/packages/tui/assets/
+ * - For tsx (src/): packages/tui/assets/ (relative to project root)
  */
 export function getInteractiveAssetsDir(): string {
 	if (isBunBinary) {
 		return join(getPackageDir(), "assets");
 	}
-	// __dirname is always dist/ or src/ — assets live at the same relative path from either
-	return join(__dirname, "modes", "interactive", "assets");
+	// __dirname is src/ or dist/ — assets are now in packages/tui/assets/
+	return join(__dirname, "..", "packages", "tui", "assets");
 }
 
 /** Get path to a bundled interactive asset */

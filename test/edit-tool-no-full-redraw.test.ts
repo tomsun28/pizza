@@ -6,8 +6,8 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createEditToolDefinition } from "../src/core/tools/edit.js";
 import { computeEditsDiff, type Edit } from "../src/core/tools/edit-diff.js";
 import { formatLineAnchor } from "../src/core/tools/line-anchors.js";
-import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.js";
-import { initTheme } from "../src/modes/interactive/theme/theme.js";
+import { ToolExecutionComponent } from "../packages/tui/components/tool-execution.js";
+import { initTheme } from "../packages/tui/theme/theme.js";
 
 class FakeTerminal implements Terminal {
 	columns = 80;

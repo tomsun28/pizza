@@ -4,7 +4,7 @@ import { type Static, Type } from "@sinclair/typebox";
 import { existsSync, readdirSync, statSync } from "fs";
 import { minimatch } from "minimatch";
 import nodePath from "path";
-import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
+import { keyHint } from "../../../packages/tui/components/keybinding-hints.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { resolveToCwd } from "./path-utils.js";
 import { getTextOutput, invalidArgText, shortenPath, str } from "./render-utils.js";
@@ -147,7 +147,7 @@ export interface LsToolOptions {
 
 function formatLsCall(
 	args: { path?: string; limit?: number } | undefined,
-	theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+	theme: typeof import("../../../packages/tui/theme/theme.js").theme,
 ): string {
 	const rawPath = str(args?.path);
 	const path = rawPath !== null ? shortenPath(rawPath || ".") : null;
@@ -166,7 +166,7 @@ function formatLsResult(
 		details?: LsToolDetails;
 	},
 	options: ToolRenderResultOptions,
-	theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+	theme: typeof import("../../../packages/tui/theme/theme.js").theme,
 	showImages: boolean,
 ): string {
 	const output = getTextOutput(result, showImages).trim();

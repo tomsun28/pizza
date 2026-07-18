@@ -3,8 +3,8 @@ import { Container, Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "@sinclair/typebox";
 import { mkdir as fsMkdir, writeFile as fsWriteFile } from "fs/promises";
 import { dirname } from "path";
-import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
-import { getLanguageFromPath, highlightCode } from "../../modes/interactive/theme/theme.js";
+import { keyHint } from "../../../packages/tui/components/keybinding-hints.js";
+import { getLanguageFromPath, highlightCode } from "../../../packages/tui/theme/theme.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { withFileMutationQueue } from "./file-mutation-queue.js";
 import { resolveToCwd } from "./path-utils.js";
@@ -131,7 +131,7 @@ function trimTrailingEmptyLines(lines: string[]): string[] {
 function formatWriteCall(
 	args: { path?: string; file_path?: string; content?: string } | undefined,
 	options: ToolRenderResultOptions,
-	theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+	theme: typeof import("../../../packages/tui/theme/theme.js").theme,
 	cache: WriteHighlightCache | undefined,
 ): string {
 	const rawPath = str(args?.file_path ?? args?.path);
@@ -163,7 +163,7 @@ function formatWriteCall(
 
 function formatWriteResult(
 	result: { content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>; isError?: boolean },
-	theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+	theme: typeof import("../../../packages/tui/theme/theme.js").theme,
 ): string | undefined {
 	if (!result.isError) {
 		return undefined;

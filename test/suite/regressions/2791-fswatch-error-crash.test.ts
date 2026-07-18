@@ -32,7 +32,7 @@ describe.skip("issue #2791 fs.watch error event crashes process", () => {
 		mkdirSync(themesDir, { recursive: true });
 
 		// Copy dark.json as "custom-test" theme
-		const darkThemePath = join(__dirname, "../../../src/modes/interactive/theme/dark.json");
+		const darkThemePath = join(__dirname, "../../../packages/tui/theme/dark.json");
 		const darkTheme = JSON.parse(readFileSync(darkThemePath, "utf-8"));
 		darkTheme.name = "custom-test";
 		writeFileSync(join(themesDir, "custom-test.json"), JSON.stringify(darkTheme, null, 2));
@@ -43,7 +43,7 @@ describe.skip("issue #2791 fs.watch error event crashes process", () => {
 	});
 
 	it("process should survive an error event on the theme FSWatcher", () => {
-		const themeModulePath = join(__dirname, "../../../src/modes/interactive/theme/theme.js").replace(/\\/g, "/");
+		const themeModulePath = join(__dirname, "../../../packages/tui/theme/theme.js").replace(/\\/g, "/");
 		const agentDir = join(tempRoot, "agent").replace(/\\/g, "/");
 
 		// Script that sets up the watcher and emits a synthetic error on it.

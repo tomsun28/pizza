@@ -1,8 +1,8 @@
 import { setKeybindings, visibleWidth } from "@earendil-works/pi-tui";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.js";
-import { BrandHeaderComponent } from "../src/modes/interactive/components/brand-header.js";
-import { initTheme } from "../src/modes/interactive/theme/theme.js";
+import { BrandHeaderComponent } from "../packages/tui/components/brand-header.js";
+import { initTheme } from "../packages/tui/theme/theme.js";
 
 function stripAnsi(text: string): string {
 	return text.replace(/\u001b\[[0-9;]*m/g, "");

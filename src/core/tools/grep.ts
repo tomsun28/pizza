@@ -6,7 +6,7 @@ import { spawn } from "child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { minimatch } from "minimatch";
 import path from "path";
-import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
+import { keyHint } from "../../../packages/tui/components/keybinding-hints.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { resolveToCwd } from "./path-utils.js";
@@ -111,7 +111,7 @@ export interface GrepToolOptions {
 
 function formatGrepCall(
 	args: { pattern: string; path?: string; glob?: string; limit?: number } | undefined,
-	theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+	theme: typeof import("../../../packages/tui/theme/theme.js").theme,
 ): string {
 	const pattern = str(args?.pattern);
 	const rawPath = str(args?.path);
@@ -135,7 +135,7 @@ function formatGrepResult(
 		details?: GrepToolDetails;
 	},
 	options: ToolRenderResultOptions,
-	theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+	theme: typeof import("../../../packages/tui/theme/theme.js").theme,
 	showImages: boolean,
 ): string {
 	const output = getTextOutput(result, showImages).trim();

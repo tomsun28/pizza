@@ -11,7 +11,7 @@ import type { LLMClient, LLMResponse } from "../src/core/runtime/llm-types.js";
 import { EventSourcedRuntime } from "../src/core/runtime/runtime.js";
 import { SessionFacade } from "../src/core/session-facade.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
-import { runRpcModeWithFacade } from "../src/modes/rpc/rpc-mode.js";
+import { runRpcModeWithFacade } from "../packages/rpc/rpc-mode.js";
 
 const rpcIo = vi.hoisted(() => ({
 	outputLines: [] as string[],
@@ -25,9 +25,9 @@ vi.mock("../src/core/output-guard.js", () => ({
 	},
 }));
 
-vi.mock("../src/modes/interactive/theme/theme.js", () => ({ theme: {} }));
+vi.mock("../packages/tui/theme/theme.js", () => ({ theme: {} }));
 
-vi.mock("../src/modes/rpc/jsonl.js", () => ({
+vi.mock("../packages/rpc/jsonl.js", () => ({
 	attachJsonlLineReader: vi.fn((_stream: NodeJS.ReadableStream, onLine: (line: string) => void) => {
 		rpcIo.lineHandler = onLine;
 		return () => {};
