@@ -6,28 +6,6 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 
-fn load_shell_env() -> std::collections::HashMap<String, String> {
-	use std::process::Command as StdCommand;
-	// Try to get env from user's login shell.
-	let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
-	let output = StdCommand::new(&shell)
-		.args(["-l", "-c", "env"])
-		.output();
-	match output {
-		Ok(out) => {
-			let env_str = String::from_utf8_lossy(&out.stdout);
-			let mut env_map = std::collections::HashMap::new();
-			for line in env_str.lines() {
-				if let Some((key, val)) = line.split_once('=') {
-					env_map.insert(key.to_string(), val.to_string());
-				}
-			}
-			env_map
-		}
-		Err(_) => std::env::vars().collect(),
-	}
-}
-
 fn log_file(msg: &str) {
 	use std::io::Write;
 	if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/pizza-gui-bridge.log") {
@@ -220,13 +198,6 @@ pub async fn init_sidecar(
 	cmd.stdin(Stdio::piped());
 	cmd.stdout(Stdio::piped());
 	cmd.stderr(Stdio::inherit());
-
-	// Load env from user's login shell (so .app inherits API keys etc).
-	let shell_env = load_shell_env();
-	cmd.env_clear();
-	for (k, v) in &shell_env {
-		cmd.env(k, v);
-	}
 
 	log_file(&format!("init_sidecar: spawning {} {:?}", program, args));
 	let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn: {e}"))?;
