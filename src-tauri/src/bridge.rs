@@ -13,6 +13,42 @@ fn log_file(msg: &str) {
 	}
 }
 
+fn find_node() -> Option<String> {
+	// Check PIZZA_NODE env var first.
+	if let Ok(node) = std::env::var("PIZZA_NODE") {
+		if std::path::Path::new(&node).exists() {
+			return Some(node);
+		}
+	}
+	// Try nvm first — nvm versions are usually newer and have node:sqlite.
+	if let Ok(home) = std::env::var("HOME") {
+		let nvm_node = format!("{}/.nvm/versions/node", home);
+		if let Ok(entries) = std::fs::read_dir(&nvm_node) {
+			let mut versions: Vec<_> = entries.filter_map(|e| e.ok()).collect();
+			versions.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+			for v in versions {
+				let node_path = v.path().join("bin/node");
+				if node_path.exists() {
+					return Some(node_path.to_string_lossy().to_string());
+				}
+			}
+		}
+	}
+	// Check common locations (homebrew, system).
+	let candidates = [
+		"/opt/homebrew/bin/node",
+		"/usr/local/bin/node",
+		"/usr/bin/node",
+	];
+	for c in &candidates {
+		if std::path::Path::new(c).exists() {
+			return Some(c.to_string());
+		}
+	}
+	// Fallback to "node" and hope PATH works.
+	Some("node".to_string())
+}
+
 fn resolve_pizza_command() -> (String, Vec<String>) {
 	if let Ok(bin) = std::env::var("PIZZA_BIN") {
 		let parts: Vec<&str> = bin.split_whitespace().collect();
@@ -28,7 +64,9 @@ fn resolve_pizza_command() -> (String, Vec<String>) {
 		.join("..")
 		.join("dist")
 		.join("cli.js");
-	("node".to_string(), vec![cli_js.to_string_lossy().to_string(), "--mode".to_string(), "rpc".to_string()])
+	let node = find_node().unwrap_or_else(|| "node".to_string());
+	log_file(&format!("resolve_pizza_command: node={}, cli_js={}", node, cli_js.display()));
+	(node, vec![cli_js.to_string_lossy().to_string(), "--mode".to_string(), "rpc".to_string()])
 }
 
 /// Sidecar entry: the process + which windows are using it.
