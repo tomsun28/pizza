@@ -150,30 +150,8 @@ pub async fn init_sidecar(
 		return Ok(serde_json::json!({}).to_string());
 	}
 
-	// Kill existing sidecar for this window's previous cwd if switching.
-	let old_cwd_to_kill: Option<String> = {
-		let active = state.active.lock().unwrap();
-		if let Some(old_cwd) = active.get(&window_label) {
-			if old_cwd != &cwd {
-				log_file(&format!("init_sidecar: switching from old cwd={}", old_cwd));
-				// Don't kill the old sidecar — it may be used by other windows.
-				// Just check if any other window still uses it.
-				let old_still_in_use = active.values().any(|c| c == old_cwd);
-				if !old_still_in_use {
-					Some(old_cwd.clone())
-				} else {
-					None
-				}
-			} else {
-				None
-			}
-		} else {
-			None
-		}
-	};
-	if let Some(old_cwd) = old_cwd_to_kill {
-		kill_sidecar_for_cwd(&state, &old_cwd);
-	}
+	// Multi-sidecar: never kill the old sidecar on switch — it persists.
+	// Just update the active workspace mapping for this window (done below).
 
 	let (program, args) = resolve_pizza_command();
 	let mut cmd = Command::new(&program);
@@ -243,7 +221,7 @@ pub async fn init_sidecar(
 					if trimmed.is_empty() || !trimmed.starts_with('{') {
 						continue;
 					}
-					let parsed: Value = match serde_json::from_str(trimmed) {
+					let mut parsed: Value = match serde_json::from_str(trimmed) {
 						Ok(v) => v,
 						Err(_) => continue,
 					};
@@ -252,14 +230,32 @@ pub async fn init_sidecar(
 					let app_ref = &app;
 					let active = app_ref.state::<BridgeState>();
 					let active_map = active.active.lock().unwrap();
-					for (label, ac_cwd) in active_map.iter() {
-						if ac_cwd == &reader_cwd {
-							if let Some(win) = app_ref.get_webview_window(label) {
-								let etype = parsed.get("type").and_then(|t| t.as_str()).unwrap_or("");
-								match etype {
-									"response" => { let _ = win.emit("rpc_response", parsed.clone()); }
-									"extension_ui_request" => { let _ = win.emit("extension_ui_request", parsed.clone()); }
-									_ => { let _ = win.emit("rpc_event", parsed.clone()); }
+					// Emit to ALL windows — include _cwd so frontend can filter.
+					// This ensures events are received even when the workspace is not active.
+					let etype = parsed.get("type").and_then(|t| t.as_str()).unwrap_or("").to_string();
+					if etype == "response" {
+						// Add _cwd to response for frontend routing.
+						if let Some(obj) = parsed.as_object_mut() {
+							obj.insert("_cwd".to_string(), Value::String(reader_cwd.clone()));
+						}
+					}
+					for (label, _ac_cwd) in active_map.iter() {
+						if let Some(win) = app_ref.get_webview_window(label) {
+							match etype.as_str() {
+								"response" => {
+									let mut tagged = parsed.clone();
+									if let Some(obj) = tagged.as_object_mut() {
+										obj.insert("_cwd".to_string(), Value::String(reader_cwd.clone()));
+									}
+									let _ = win.emit("rpc_response", tagged);
+								}
+								"extension_ui_request" => { let _ = win.emit("extension_ui_request", parsed.clone()); }
+								_ => {
+									let mut tagged = parsed.clone();
+									if let Some(obj) = tagged.as_object_mut() {
+										obj.insert("_cwd".to_string(), Value::String(reader_cwd.clone()));
+									}
+									let _ = win.emit("rpc_event", tagged);
 								}
 							}
 						}
@@ -272,15 +268,13 @@ pub async fn init_sidecar(
 			}
 		}
 		log_file(&format!("reader thread: EOF for cwd={}", reader_cwd));
-		// Notify all windows that had this cwd active.
+		// Notify all windows — sidecar_exit includes cwd for frontend filtering.
 		let app_ref = &app;
 		let active = app_ref.state::<BridgeState>();
 		let active_map = active.active.lock().unwrap();
-		for (label, ac_cwd) in active_map.iter() {
-			if ac_cwd == &reader_cwd {
-				if let Some(win) = app_ref.get_webview_window(label) {
-					let _ = win.emit("sidecar_exit", serde_json::json!({ "code": null, "cwd": reader_cwd }));
-				}
+		for (label, _ac_cwd) in active_map.iter() {
+			if let Some(win) = app_ref.get_webview_window(label) {
+				let _ = win.emit("sidecar_exit", serde_json::json!({ "code": null, "cwd": reader_cwd }));
 			}
 		}
 	});

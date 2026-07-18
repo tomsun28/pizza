@@ -42,12 +42,32 @@ export default function ChatView({
 	const seenIdsRef = useRef<Set<string>>(new Set());
 	const scrollRef = useRef<HTMLDivElement>(null);
 
-	// Reset conversation when workspace changes.
+	// Per-workspace conversation persistence.
+	const itemsByWs = useRef<Map<string, TimelineItem[]>>(new Map());
+	const seenIdsByWs = useRef<Map<string, Set<string>>>(new Map());
+	const activeAssistantByWs = useRef<Map<string, string | null>>(new Map());
+	const itemsRef = useRef<TimelineItem[]>([]);
+	itemsRef.current = items;
+	const prevWsRef = useRef<string | null>(null);
+
+	// Save/restore conversation on workspace switch.
 	useEffect(() => {
-		setItems([]);
-		setError("");
-		seenIdsRef.current = new Set();
-		activeAssistantRef.current = null;
+		const prevWs = prevWsRef.current;
+		const newWs = workspace ?? "";
+		if (prevWs !== newWs) {
+			// Save current conversation under the old workspace.
+			if (prevWs) {
+				itemsByWs.current.set(prevWs, itemsRef.current);
+				seenIdsByWs.current.set(prevWs, seenIdsRef.current);
+				activeAssistantByWs.current.set(prevWs, activeAssistantRef.current);
+			}
+			// Restore conversation for the new workspace.
+			setItems(itemsByWs.current.get(newWs) ?? []);
+			seenIdsRef.current = seenIdsByWs.current.get(newWs) ?? new Set();
+			activeAssistantRef.current = activeAssistantByWs.current.get(newWs) ?? null;
+			setError("");
+			prevWsRef.current = newWs;
+		}
 	}, [workspace]);
 
 	useEffect(() => {
@@ -56,14 +76,34 @@ export default function ChatView({
 		}
 	}, [items]);
 
-	const handleEvent = useCallback((event: TypedEvent) => {
-		const seenRef = seenIdsRef;
+	const handleEvent = useCallback((event: TypedEvent & { _cwd?: string }) => {
+		const eventCwd = event._cwd ?? "";
+		const currentWs = workspace ?? "";
+		const isForCurrent = eventCwd === currentWs;
+
+		// Determine which seenIds and activeAssistant to use.
+		const seenRef = isForCurrent ? seenIdsRef : { current: seenIdsByWs.current.get(eventCwd) ?? new Set<string>() };
 		if (seenRef.current.has(event.event_id)) return;
 		seenRef.current.add(event.event_id);
+		if (!isForCurrent) {
+			seenIdsByWs.current.set(eventCwd, seenRef.current);
+		}
+
+		const activeRef = isForCurrent ? activeAssistantRef : { current: activeAssistantByWs.current.get(eventCwd) ?? null };
+
+		const updateItems = (fn: (prev: TimelineItem[]) => TimelineItem[]) => {
+			if (isForCurrent) {
+				setItems(fn);
+			} else {
+				const cached = itemsByWs.current.get(eventCwd) ?? [];
+				itemsByWs.current.set(eventCwd, fn(cached));
+			}
+		};
+
 		switch (event.type) {
 			case "USER_MESSAGE": {
 				const text = messageText(event.payload);
-				setItems((prev) => [
+				updateItems((prev) => [
 					...prev,
 					{ id: event.event_id, role: "user", title: "You", text, status: "" },
 				]);
@@ -71,43 +111,48 @@ export default function ChatView({
 			}
 			case "AGENT_MESSAGE_START": {
 				const id = event.event_id;
-				activeAssistantRef.current = id;
-				setItems((prev) => [
+				activeRef.current = id;
+				if (isForCurrent) {
+					activeAssistantRef.current = id;
+				} else {
+					activeAssistantByWs.current.set(eventCwd, id);
+				}
+				updateItems((prev) => [
 					...prev,
 					{ id, role: "assistant", title: "Pizza", text: "", status: "STREAMING", streaming: true },
 				]);
 				break;
 			}
 			case "AGENT_MESSAGE_CHUNK": {
-				const id = activeAssistantRef.current;
+				const id = activeRef.current;
 				if (!id) break;
 				const chunk = (event.payload as Record<string, unknown>)?.chunk as Record<string, unknown> | undefined;
 				if (!chunk) break;
 				if (chunk.kind === "text_delta" && typeof chunk.delta === "string") {
-					setItems((prev) =>
+					updateItems((prev) =>
 						prev.map((it) => (it.id === id ? { ...it, text: it.text + chunk.delta } : it)),
 					);
 				}
 				break;
 			}
 			case "AGENT_MESSAGE_END": {
-				const id = activeAssistantRef.current;
+				const id = activeRef.current;
 				if (id) {
 					const payload = event.payload as Record<string, unknown> | undefined;
 					const content = payload?.content;
 					if (content) {
 						const text = messageText({ content });
 						if (text) {
-							setItems((prev) =>
+							updateItems((prev) =>
 								prev.map((it) => (it.id === id ? { ...it, text, status: "DONE", streaming: false } : it)),
 							);
 						} else {
-							setItems((prev) =>
+							updateItems((prev) =>
 								prev.map((it) => (it.id === id ? { ...it, status: "DONE", streaming: false } : it)),
 							);
 						}
 					} else {
-						setItems((prev) =>
+						updateItems((prev) =>
 							prev.map((it) => (it.id === id ? { ...it, status: "DONE", streaming: false } : it)),
 						);
 					}
@@ -115,19 +160,77 @@ export default function ChatView({
 				break;
 			}
 			case "AGENT_TURN_COMPLETED": {
-				const id = activeAssistantRef.current;
+				const id = activeRef.current;
 				if (id) {
-					setItems((prev) =>
+					updateItems((prev) =>
 						prev.map((it) => (it.id === id ? { ...it, status: "DONE", streaming: false } : it)),
 					);
-					activeAssistantRef.current = null;
+					if (isForCurrent) {
+						activeAssistantRef.current = null;
+					} else {
+						activeAssistantByWs.current.set(eventCwd, null);
+					}
 				}
+				break;
+			}
+			case "INTENT_TOOL_CALL":
+			case "TOOL_EXECUTION_START": {
+				const payload = event.payload as Record<string, unknown>;
+				const toolCallId = payload.tool_call_id as string;
+				const toolName = payload.tool_name as string;
+				const args = payload.arguments as Record<string, unknown> | undefined;
+				const argsStr = args ? JSON.stringify(args, null, 2) : "";
+				updateItems((prev) => [
+					...prev,
+					{
+						id: toolCallId,
+						role: "tool",
+						title: toolName,
+						text: "",
+						status: "RUNNING",
+						streaming: true,
+						toolName,
+						toolArgs: argsStr,
+					},
+				]);
+				break;
+			}
+			case "TOOL_EXECUTION_UPDATE": {
+				const payload = event.payload as Record<string, unknown>;
+				const toolCallId = payload.tool_call_id as string;
+				const update = payload.update as string | undefined;
+				if (update) {
+					updateItems((prev) =>
+						prev.map((it) =>
+							it.id === toolCallId && it.role === "tool"
+								? { ...it, toolResult: (it.toolResult ?? "") + update }
+								: it,
+						),
+					);
+				}
+				break;
+			}
+			case "TOOL_EXECUTION_END": {
+				const payload = event.payload as Record<string, unknown>;
+				const toolCallId = payload.tool_call_id as string;
+				const result = payload.result as Array<Record<string, unknown>> | undefined;
+				const resultText = result
+					? result.map((r) => (r.type === "text" ? String(r.text ?? "") : JSON.stringify(r))).join("\n")
+					: "";
+				const isError = result?.some((r) => r.type === "text" && String(r.text ?? "").toLowerCase().includes("error"));
+				updateItems((prev) =>
+					prev.map((it) =>
+						it.id === toolCallId && it.role === "tool"
+							? { ...it, status: isError ? "ERROR" : "DONE", streaming: false, toolResult: resultText || it.toolResult, isError }
+							: it,
+					),
+				);
 				break;
 			}
 			default:
 				break;
 		}
-	}, []);
+	}, [workspace]);
 
 	useEffect(() => {
 		if (!sidecarReady) return;

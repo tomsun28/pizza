@@ -60,10 +60,7 @@ export function ensureWorkspaceMeta(workspaceId: string, cwd: string, agentDir?:
 	if (existsSync(path)) {
 		try {
 			const raw = readFileSync(path, "utf8");
-			const meta = JSON.parse(raw) as WorkspaceMeta;
-			meta.last_accessed_at = Date.now();
-			writeFileSync(path, JSON.stringify(meta, null, 2));
-			return meta;
+			return JSON.parse(raw) as WorkspaceMeta;
 		} catch {
 			// fall through to create
 		}

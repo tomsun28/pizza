@@ -41,18 +41,18 @@ export async function sendCommandAwait<T = unknown>(
 	timeoutMs = 15000,
 ): Promise<RpcResponse<T>> {
 	if (isTauri()) {
-		// Let the Rust bridge generate the id — it returns the id it used.
-		// Don't pre-set command.id, otherwise Rust returns a different id than pizza echoes back.
 		const { listen } = await import("@tauri-apps/api/event");
-		const sentId = await sendCommandRaw(command);
+		// Register listener BEFORE sending to avoid race condition where
+		// the response arrives before we start listening.
 		return new Promise((resolve, reject) => {
+			let sentId: string | undefined;
 			const timer = setTimeout(() => {
 				unlisten.then((fn) => fn()).catch(() => {});
 				reject(new Error(`Command "${command.type}" timed out after ${timeoutMs}ms`));
 			}, timeoutMs);
 			const unlisten = listen<RpcResponse<T>>("rpc_response", (event) => {
 				const payload = event.payload;
-				if (payload.id === sentId) {
+				if (sentId !== undefined && payload.id === sentId) {
 					clearTimeout(timer);
 					unlisten.then((fn) => fn()).catch(() => {});
 					if (payload.success) {
@@ -61,6 +61,14 @@ export async function sendCommandAwait<T = unknown>(
 						reject(new Error(payload.error ?? `Command "${command.type}" failed`));
 					}
 				}
+			});
+			// Now send the command — sentId will be set once invoke returns.
+			sendCommandRaw(command).then((id) => {
+				sentId = id;
+			}).catch((e) => {
+				clearTimeout(timer);
+				unlisten.then((fn) => fn()).catch(() => {});
+				reject(e);
 			});
 		});
 	}

@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
@@ -8,6 +8,7 @@ import type { EventAppendInput, EventQuery, EventStore, SubscribeOptions } from 
 import type { SessionIndex } from "../projection/types.js";
 import type { SessionStore } from "./session-store.js";
 import { SqliteSessionStore } from "./sqlite-session-store.js";
+import { getWorkspaceMetaPath } from "./workspace.js";
 import { deriveWorkspaceId, getEventDatabasePath } from "./workspace.js";
 
 const require = createRequire(import.meta.url);
@@ -62,6 +63,7 @@ export class SqliteEventStore implements EventStore, SessionStore {
 		this._insert(event);
 		const inserted = this.get(event.event_id) ?? event;
 		this._notify(inserted);
+		this._touchMetaOnMessage(event.type);
 		return inserted;
 	}
 
@@ -97,9 +99,24 @@ export class SqliteEventStore implements EventStore, SessionStore {
 
 		for (const event of newEvents) {
 			this._notify(event);
+			this._touchMetaOnMessage(event.type);
 		}
 
 		return events.map((event) => this.get(event.event_id) ?? event);
+	}
+
+	/** Update workspace meta.json last_accessed_at when a message event is appended. */
+	private _touchMetaOnMessage(eventType: string): void {
+		if (eventType !== "USER_MESSAGE" && eventType !== "AGENT_MESSAGE_START") return;
+		try {
+			const metaPath = getWorkspaceMetaPath(this.workspace_id);
+			const raw = readFileSync(metaPath, "utf8");
+			const meta = JSON.parse(raw) as { last_accessed_at?: number };
+			meta.last_accessed_at = Date.now();
+			writeFileSync(metaPath, JSON.stringify(meta, null, 2));
+		} catch {
+			// meta.json might not exist yet — ignore.
+		}
 	}
 
 	query(filter: EventQuery): EventBase[] {

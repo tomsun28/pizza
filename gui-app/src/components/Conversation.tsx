@@ -7,6 +7,10 @@ export interface TimelineItem {
 	text: string;
 	status: string;
 	streaming?: boolean;
+	toolName?: string;
+	toolArgs?: string;
+	toolResult?: string;
+	isError?: boolean;
 }
 
 export function Conversation({
@@ -35,7 +39,7 @@ export function Conversation({
 						item.role === "user"
 							? "border-accent/30 bg-accent/5"
 							: item.role === "tool"
-								? "border-border bg-surface-2/50"
+								? cn("border-border bg-surface-2/50", item.isError && "border-danger/30")
 								: "border-border bg-surface",
 					)}
 				>
@@ -43,18 +47,36 @@ export function Conversation({
 						<span className="flex items-center gap-2 font-mono text-xs font-semibold uppercase tracking-wide text-fg">
 							{item.title}
 						</span>
-						<span className="font-mono text-[10px] uppercase tracking-widest text-muted">
+						<span className={cn("font-mono text-[10px] uppercase tracking-widest", item.isError ? "text-danger" : "text-muted")}>
 							{item.status}
 						</span>
 					</div>
-					<div
-						className={cn(
-							"px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap break-words",
-							item.streaming && "after:content-['▋'] after:ml-0.5 after:text-accent after:animate-pulse",
-						)}
-					>
-						{item.text || (item.streaming ? "" : "")}
-					</div>
+					{item.role === "tool" ? (
+						<div className="px-4 py-3 text-sm leading-relaxed">
+							{item.toolArgs && (
+								<div className="mb-2 rounded-md bg-bg/50 px-3 py-2 font-mono text-xs text-muted whitespace-pre-wrap break-words">
+									{item.toolArgs}
+								</div>
+							)}
+							{item.toolResult && (
+								<div className={cn("rounded-md px-3 py-2 font-mono text-xs whitespace-pre-wrap break-words", item.isError ? "bg-danger/5 text-danger" : "bg-bg/50 text-muted")}>
+									{item.toolResult}
+								</div>
+							)}
+							{item.streaming && !item.toolResult && (
+								<span className="text-accent animate-pulse">running...</span>
+							)}
+						</div>
+					) : (
+						<div
+							className={cn(
+								"px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap break-words",
+								item.streaming && "after:content-['▋'] after:ml-0.5 after:text-accent after:animate-pulse",
+							)}
+						>
+							{item.text || (item.streaming ? "" : "")}
+						</div>
+					)}
 				</div>
 			))}
 		</div>

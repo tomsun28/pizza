@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { Settings as SettingsIcon, Plus, FolderOpen, Folder, MessageSquare } from "lucide-react";
+import { Settings as SettingsIcon, Plus, Folder, MessageSquare } from "lucide-react";
 import { StatusDot, ThemeToggle, Button } from "./ui";
 import { BrandIcon } from "./BrandIcon";
 import { cn } from "@/lib/utils";
@@ -187,19 +187,16 @@ export default function Layout({
 				)}
 
 				<div className="border-t border-border px-3 py-3">
-					{workspace && (
-						<div className="mb-2 flex items-center gap-2 rounded-md px-2 py-1.5">
-							<FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted" />
-							<span className="truncate font-mono text-xs text-muted" title={workspace}>
-								{basename(workspace)}
-							</span>
-						</div>
-					)}
+
 					<div className="flex items-center justify-between rounded-md px-2 py-1.5">
 						<div className="flex items-center gap-2 font-mono text-xs">
-							<StatusDot tone={online ? "success" : "danger"} />
+							{online && state?.isStreaming ? (
+								<span className="h-2 w-2 shrink-0 rounded-full bg-accent animate-pulse" />
+							) : (
+								<StatusDot tone={online ? "success" : "danger"} />
+							)}
 							<span className="uppercase tracking-wide text-fg">
-								{online ? "online" : "offline"}
+								{online ? (state?.isStreaming ? "running" : "online") : "offline"}
 							</span>
 						</div>
 						<div className="flex items-center gap-1">

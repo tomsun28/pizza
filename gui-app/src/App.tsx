@@ -123,7 +123,9 @@ function AppInner() {
 			});
 			unlisteners.push(un1);
 			const un2 = await subscribeEvents((event) => {
-				const typed = event as { type: string };
+				const typed = event as { type: string; _cwd?: string };
+				// Only process state updates for the active workspace.
+				if (typed._cwd && typed._cwd !== workspace) return;
 				if (typed.type === "MODEL_CHANGED" || typed.type === "THINKING_LEVEL_CHANGED" || typed.type === "AGENT_TURN_COMPLETED") {
 					void sendCommandAwait<{ state?: RpcSessionState }>({ type: "get_state" })
 						.then((r) => setState(r.data?.state ?? null))
