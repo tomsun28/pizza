@@ -70,6 +70,44 @@ export default function ChatView({
 		}
 	}, [workspace]);
 
+	// Load history from sidecar when sidecar becomes ready or workspace changes.
+	useEffect(() => {
+		if (!sidecarReady || !workspace) return;
+		// If we already have cached items for this workspace, don't reload.
+		if (itemsByWs.current.has(workspace)) return;
+		let cancelled = false;
+		(async () => {
+			try {
+				const r = await sendCommandAwait({ type: "get_messages" });
+				if (cancelled) return;
+				const data = (r as unknown as Record<string, unknown>)?.data as Record<string, unknown> | undefined;
+				const messages = (data?.messages as Array<Record<string, unknown>> | undefined) ?? [];
+				const history: TimelineItem[] = [];
+				for (const msg of messages) {
+					const role = msg.role as string;
+					if (role === "user") {
+						const text = messageText(msg);
+						history.push({ id: `hist-${history.length}`, role: "user", title: "You", text, status: "" });
+					} else if (role === "assistant") {
+						const text = messageText(msg);
+						history.push({ id: `hist-${history.length}`, role: "assistant", title: "Pizza", text, status: "DONE", streaming: false });
+					} else if (role === "tool") {
+						const toolName = String(msg.name ?? "tool");
+						const result = msg.content as Array<Record<string, unknown>> | undefined;
+						const resultText = result ? result.map((r) => (r.type === "text" ? String(r.text ?? "") : JSON.stringify(r))).join("\n") : "";
+						history.push({ id: `hist-${history.length}`, role: "tool", title: toolName, text: "", status: "DONE", streaming: false, toolName, toolArgs: "", toolResult: resultText });
+					}
+				}
+				if (!cancelled && history.length > 0) {
+					setItems(history);
+				}
+			} catch (e) {
+				console.error("[ChatView] loadHistory failed:", e);
+			}
+		})();
+		return () => { cancelled = true; };
+	}, [sidecarReady, workspace]);
+
 	useEffect(() => {
 		if (scrollRef.current) {
 			scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
