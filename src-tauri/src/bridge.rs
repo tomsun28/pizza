@@ -106,6 +106,16 @@ pub async fn init_sidecar(
 			.map(|p| p.to_string_lossy().to_string())
 			.unwrap_or_else(|_| ".".to_string())
 	});
+	// Expand ~ to home directory.
+	let cwd = if cwd.starts_with("~") {
+		if let Ok(home) = std::env::var("HOME") {
+			format!("{}{}", home, &cwd[1..])
+		} else {
+			cwd
+		}
+	} else {
+		cwd
+	};
 	log_file(&format!("init_sidecar: cwd={}", cwd));
 
 	// Check if sidecar for this cwd already exists.

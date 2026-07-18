@@ -41,7 +41,16 @@ export default function App() {
 		setWaitingForWorkspace(true);
 		try {
 			const initialState = await initSidecar(cwd);
-			if (cwd) setWorkspace(cwd);
+			// Expand ~ to home directory so workspace state matches Rust side.
+			let expandedCwd = cwd;
+			if (cwd && cwd.startsWith("~") && isTauri()) {
+				try {
+					const { homeDir } = await import("@tauri-apps/api/path");
+					const home = await homeDir();
+					expandedCwd = cwd.replace("~", home);
+				} catch { /* keep ~ */ }
+			}
+			if (expandedCwd) setWorkspace(expandedCwd);
 			// If we got a non-empty state, it's a freshly spawned sidecar.
 			// If empty, the sidecar was already running — state will arrive via rpc_response event.
 			const hasState = initialState && Object.keys(initialState).length > 0;

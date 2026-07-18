@@ -28,6 +28,13 @@ function timeAgo(ts: number): string {
 
 const MAIN_CHAT_CWD = "~/.pizza/main";
 
+function isMainChatCwd(cwd: string | null | undefined): boolean {
+	if (!cwd) return false;
+	if (cwd === MAIN_CHAT_CWD) return true;
+	// Match expanded path like /Users/tom/.pizza/main
+	return cwd.endsWith("/.pizza/main");
+}
+
 export default function Layout({
 	state,
 	sidecarReady,
@@ -44,7 +51,7 @@ export default function Layout({
 	onSelectWorkspace?: (cwd: string) => void;
 }) {
 	const online = sidecarReady && sidecarExitCode === null;
-	const isMainChat = workspace === MAIN_CHAT_CWD;
+	const isMainChat = isMainChatCwd(workspace);
 
 	return (
 		<div className="flex h-full bg-bg">
