@@ -1,12 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { PxlKitSurfaceProvider } from "@pxlkit/ui-kit";
-import { FolderOpen } from "lucide-react";
 import Layout from "@/components/Layout";
 import ChatView from "@/views/ChatView";
 import SettingsView from "@/views/SettingsView";
 import { subscribeSidecarExit, subscribeEvents, initSidecar, sendCommandAwait, listWorkspaces } from "@/lib/transport";
-import { Button } from "@/components/ui";
 import { BrandIcon } from "@/components/BrandIcon";
 import type { RpcSessionState, WorkspaceMeta } from "@/lib/types";
 
@@ -76,15 +74,15 @@ export default function App() {
 		if (sidecarStartedRef.current) return;
 		sidecarStartedRef.current = true;
 		if (isTauri()) {
-			// In Tauri: show workspace picker, don't auto-init
-			setWaitingForWorkspace(false);
+			// In Tauri: auto-start with Chat (persistent agent at ~/.pizza/main)
+			startWithWorkspace("~/.pizza/main");
 		} else {
 			// Browser: auto-init with dev bridge
 			startWithWorkspace();
 		}
 	}, [startWithWorkspace]);
 
-	const handlePickDirectory = useCallback(async () => {
+	const handleNewWorkspace = useCallback(async () => {
 		if (!isTauri()) return;
 		try {
 			const dialog = await import("@tauri-apps/plugin-dialog");
@@ -140,35 +138,6 @@ export default function App() {
 			.catch(() => {});
 	}, [sidecarReady]);
 
-	// In Tauri mode, show workspace picker before loading main UI
-	const showWorkspacePicker = isTauri() && !sidecarReady && !waitingForWorkspace;
-
-	if (showWorkspacePicker) {
-		return (
-			<PxlKitSurfaceProvider surface="pixel">
-				<div className="flex h-screen items-center justify-center bg-bg">
-					<div className="flex flex-col items-center gap-6">
-						<BrandIcon size={48} className="text-accent" />
-						<div className="text-center">
-							<h1 className="font-mono text-xl font-bold uppercase tracking-widest text-fg">Pizza</h1>
-							<p className="mt-2 font-mono text-sm text-muted">Select a project directory to start</p>
-						</div>
-						<Button
-							tone="accent"
-							iconLeft={<FolderOpen className="h-4 w-4" />}
-							onClick={handlePickDirectory}
-						>
-							Open Directory
-						</Button>
-						{sidecarExitCode !== null && (
-							<p className="text-sm text-danger">Sidecar exited (code {sidecarExitCode})</p>
-						)}
-					</div>
-				</div>
-			</PxlKitSurfaceProvider>
-		);
-	}
-
 	if (waitingForWorkspace && !sidecarReady) {
 		return (
 			<PxlKitSurfaceProvider surface="pixel">
@@ -195,6 +164,7 @@ export default function App() {
 								workspace={workspace}
 								workspaces={workspaces}
 								onSelectWorkspace={handleSelectWorkspace}
+								onNewWorkspace={handleNewWorkspace}
 							/>
 						}
 					>

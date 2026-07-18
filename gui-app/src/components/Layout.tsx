@@ -3,7 +3,6 @@ import { Settings as SettingsIcon, Plus, FolderOpen, Folder, MessageSquare } fro
 import { StatusDot, ThemeToggle, Button } from "./ui";
 import { BrandIcon } from "./BrandIcon";
 import { cn } from "@/lib/utils";
-import { newWorkspace } from "@/lib/transport";
 import type { RpcSessionState, WorkspaceMeta } from "@/lib/types";
 
 function isTauri(): boolean {
@@ -42,6 +41,7 @@ export default function Layout({
 	workspace,
 	workspaces,
 	onSelectWorkspace,
+	onNewWorkspace,
 }: {
 	state: RpcSessionState | null;
 	sidecarReady: boolean;
@@ -49,6 +49,7 @@ export default function Layout({
 	workspace?: string | null;
 	workspaces?: WorkspaceMeta[];
 	onSelectWorkspace?: (cwd: string) => void;
+	onNewWorkspace?: () => void;
 }) {
 	const online = sidecarReady && sidecarExitCode === null;
 	const isMainChat = isMainChatCwd(workspace);
@@ -122,7 +123,7 @@ export default function Layout({
 						</span>
 						{isTauri() && (
 							<button
-								onClick={() => newWorkspace()}
+								onClick={() => onNewWorkspace?.()}
 								className="text-muted hover:text-accent transition-colors"
 								title="New workspace"
 							>
@@ -181,7 +182,7 @@ export default function Layout({
 
 				{isTauri() && (
 					<div className="mb-2 px-1">
-						<Button tone="neutral" size="sm" iconLeft={<Plus className="h-3.5 w-3.5" />} onClick={() => newWorkspace()} className="w-full">New Workspace</Button>
+						<Button tone="neutral" size="sm" iconLeft={<Plus className="h-3.5 w-3.5" />} onClick={() => onNewWorkspace?.()} className="w-full">New Workspace</Button>
 					</div>
 				)}
 
