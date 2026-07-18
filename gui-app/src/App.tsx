@@ -25,7 +25,8 @@ export default function App() {
 		if (!isTauri()) return;
 		try {
 			const list = await listWorkspaces();
-			setWorkspaces(list);
+			// Filter out the Chat workspace (~/.pizza/main) — it's shown separately as Chat.
+			setWorkspaces(list.filter((ws) => !ws.cwd.endsWith("/.pizza/main")));
 		} catch (e) {
 			console.error("[workspaces] list error:", e);
 		}
