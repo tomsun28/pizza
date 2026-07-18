@@ -106,6 +106,10 @@ function AppInner() {
 		await startWithWorkspace(cwd);
 	}, [workspace, sidecarReady, startWithWorkspace, navigate]);
 
+	const handleDeleteWorkspace = useCallback((workspaceId: string) => {
+		setWorkspaces((prev) => prev.filter((ws) => ws.workspace_id !== workspaceId));
+	}, []);
+
 	useEffect(() => {
 		if (!sidecarReady) return;
 		const unlisteners: Array<() => void> = [];
@@ -166,6 +170,7 @@ function AppInner() {
 								workspaces={workspaces}
 								onSelectWorkspace={handleSelectWorkspace}
 								onNewWorkspace={handleNewWorkspace}
+							onDeleteWorkspace={handleDeleteWorkspace}
 							/>
 						}
 					>

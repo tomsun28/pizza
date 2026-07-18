@@ -149,6 +149,22 @@ export async function listWorkspaces(): Promise<WorkspaceMeta[]> {
 	return result;
 }
 
+// --- Delete workspace (Tauri only) ---
+
+export async function deleteWorkspace(workspaceId: string): Promise<void> {
+	if (!isTauri()) return;
+	const core = await import("@tauri-apps/api/core");
+	await core.invoke("delete_workspace", { workspaceId });
+}
+
+// --- Reveal workspace in file manager (Tauri only) ---
+
+export async function revealWorkspace(cwd: string): Promise<void> {
+	if (!isTauri()) return;
+	const core = await import("@tauri-apps/api/core");
+	await core.invoke("reveal_workspace", { cwd });
+}
+
 // --- SSE implementation for browser mode ---
 
 let sseSource: EventSource | null = null;

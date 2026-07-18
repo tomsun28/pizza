@@ -427,6 +427,78 @@ pub async fn list_workspaces() -> Result<Vec<Value>, String> {
 	Ok(workspaces)
 }
 
+/// Delete a workspace by its workspace_id — removes the workspace meta directory
+/// and kills any running sidecar for that workspace's cwd.
+#[tauri::command]
+pub async fn delete_workspace(
+	state: tauri::State<'_, BridgeState>,
+	workspace_id: String,
+) -> Result<(), String> {
+	let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
+	let ws_dir = PathBuf::from(&home)
+		.join(".pizza")
+		.join("agent")
+		.join("workspaces")
+		.join(&workspace_id);
+
+	if !ws_dir.exists() {
+		return Err(format!("Workspace {} not found", workspace_id));
+	}
+
+	// Read the cwd from meta.json before deleting, so we can kill the sidecar.
+	let meta_path = ws_dir.join("meta.json");
+	let cwd: Option<String> = if meta_path.exists() {
+		if let Ok(raw) = std::fs::read_to_string(&meta_path) {
+			if let Ok(meta) = serde_json::from_str::<Value>(&raw) {
+				meta.get("cwd").and_then(|v| v.as_str()).map(|s| s.to_string())
+			} else { None }
+		} else { None }
+	} else { None };
+
+	// Kill sidecar if running.
+	if let Some(ref cwd) = cwd {
+		kill_sidecar_for_cwd(state.inner(), cwd);
+	}
+
+	// Remove the workspace directory.
+	std::fs::remove_dir_all(&ws_dir).map_err(|e| format!("Failed to delete workspace: {e}"))?;
+
+	log_file(&format!("delete_workspace: deleted {}", workspace_id));
+	Ok(())
+}
+
+/// Reveal a workspace's cwd in the system file manager (Finder on macOS).
+#[tauri::command]
+pub async fn reveal_workspace(cwd: String) -> Result<(), String> {
+	let path = if cwd.starts_with("~") {
+		if let Ok(home) = std::env::var("HOME") {
+			format!("{}{}", home, &cwd[1..])
+		} else {
+			cwd.clone()
+		}
+	} else {
+		cwd.clone()
+	};
+
+	if !std::path::Path::new(&path).exists() {
+		return Err(format!("Path does not exist: {}", path));
+	}
+
+	#[cfg(target_os = "macos")]
+	let opener = "open";
+	#[cfg(target_os = "linux")]
+	let opener = "xdg-open";
+	#[cfg(target_os = "windows")]
+	let opener = "explorer";
+
+	std::process::Command::new(opener)
+		.arg(&path)
+		.spawn()
+		.map_err(|e| format!("Failed to open file manager: {e}"))?;
+
+	Ok(())
+}
+
 /// Set the window background color (for theme adaptation).
 #[tauri::command]
 pub async fn set_window_background(app: AppHandle, r: u8, g: u8, b: u8) -> Result<(), String> {
