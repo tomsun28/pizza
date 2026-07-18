@@ -41,10 +41,20 @@ export default function App() {
 		setWaitingForWorkspace(true);
 		try {
 			const initialState = await initSidecar(cwd);
-			setState(initialState as RpcSessionState | null);
-			setSidecarReady(true);
 			if (cwd) setWorkspace(cwd);
-			// Refresh workspace list (last_accessed_at will have updated)
+			// If we got a non-empty state, it's a freshly spawned sidecar.
+			// If empty, the sidecar was already running — state will arrive via rpc_response event.
+			const hasState = initialState && Object.keys(initialState).length > 0;
+			if (hasState) {
+				setState(initialState as unknown as RpcSessionState);
+			}
+			setSidecarReady(true);
+			// For already-running sidecar, request state explicitly.
+			if (!hasState) {
+				void sendCommandAwait<{ state?: RpcSessionState }>({ type: "get_state" })
+					.then((r) => setState(r.data?.state ?? null))
+					.catch(() => {});
+			}
 			refreshWorkspaces();
 		} catch (e) {
 			console.error("[init] FAILED:", e);
@@ -80,16 +90,25 @@ export default function App() {
 
 	const handleSelectWorkspace = useCallback(async (cwd: string) => {
 		if (workspace === cwd && sidecarReady) return;
-		await startWithWorkspace(cwd);
+		// If sidecar is already running, switching is instant — no loading screen.
+		if (sidecarReady) {
+			setWorkspace(cwd);
+			await startWithWorkspace(cwd);
+		} else {
+			await startWithWorkspace(cwd);
+		}
 	}, [workspace, sidecarReady, startWithWorkspace]);
 
 	useEffect(() => {
 		if (!sidecarReady) return;
 		const unlisteners: Array<() => void> = [];
 		(async () => {
-			const un1 = await subscribeSidecarExit((code) => {
-				setSidecarExitCode(code);
-				setSidecarReady(false);
+			const un1 = await subscribeSidecarExit((code, cwd) => {
+				// Only mark as not ready if the exited sidecar was the active one.
+				if (!cwd || cwd === workspace) {
+					setSidecarExitCode(code);
+					setSidecarReady(false);
+				}
 			});
 			unlisteners.push(un1);
 			const un2 = await subscribeEvents((event) => {
@@ -103,7 +122,7 @@ export default function App() {
 			unlisteners.push(un2);
 		})();
 		return () => unlisteners.forEach((fn) => fn());
-	}, [sidecarReady]);
+	}, [sidecarReady, workspace]);
 
 	useEffect(() => {
 		if (!sidecarReady) return;

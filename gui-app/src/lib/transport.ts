@@ -76,7 +76,7 @@ export async function sendCommandAwait<T = unknown>(
 // --- Event subscription ---
 
 export type EventHandler = (event: Record<string, unknown>) => void;
-export type ExitHandler = (code: number | null) => void;
+export type ExitHandler = (code: number | null, cwd?: string) => void;
 
 export async function subscribeEvents(handler: EventHandler): Promise<() => void> {
 	if (isTauri()) {
@@ -90,7 +90,7 @@ export async function subscribeEvents(handler: EventHandler): Promise<() => void
 export async function subscribeSidecarExit(handler: ExitHandler): Promise<() => void> {
 	if (isTauri()) {
 		const { listen } = await import("@tauri-apps/api/event");
-		return listen<{ code: number | null }>("sidecar_exit", (event) => handler(event.payload.code));
+		return listen<{ code: number | null; cwd?: string }>("sidecar_exit", (event) => handler(event.payload.code, event.payload.cwd));
 	}
 	// Browser: no sidecar exit concept, but we can detect fetch errors
 	return () => {};

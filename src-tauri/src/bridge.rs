@@ -31,35 +31,64 @@ fn resolve_pizza_command() -> (String, Vec<String>) {
 	("node".to_string(), vec![cli_js.to_string_lossy().to_string(), "--mode".to_string(), "rpc".to_string()])
 }
 
-struct SidecarState {
+/// Sidecar entry: the process + which windows are using it.
+struct SidecarEntry {
 	child: Child,
 	stdin: ChildStdin,
 }
 
 pub struct BridgeState {
-	sidecars: Mutex<HashMap<String, SidecarState>>,
+	/// Sidecars keyed by cwd.
+	sidecars: Mutex<HashMap<String, SidecarEntry>>,
+	/// Active cwd per window label.
+	active: Mutex<HashMap<String, String>>,
 }
 
 impl Default for BridgeState {
 	fn default() -> Self {
 		Self {
 			sidecars: Mutex::new(HashMap::new()),
+			active: Mutex::new(HashMap::new()),
 		}
 	}
 }
 
-/// Kill and remove the sidecar for a specific window label.
-pub fn kill_sidecar_for_window(state: &BridgeState, window_label: &str) {
-	log_file(&format!("kill_sidecar_for_window: label={}", window_label));
+/// Kill and remove the sidecar for a specific cwd.
+pub fn kill_sidecar_for_cwd(state: &BridgeState, cwd: &str) {
+	log_file(&format!("kill_sidecar_for_cwd: cwd={}", cwd));
 	let mut sidecars = state.sidecars.lock().unwrap();
-	if let Some(mut sidecar) = sidecars.remove(window_label) {
+	if let Some(mut sidecar) = sidecars.remove(cwd) {
 		let _ = sidecar.child.kill();
 		let _ = sidecar.child.wait();
-		log_file(&format!("kill_sidecar_for_window: killed sidecar for {}", window_label));
+		log_file(&format!("kill_sidecar_for_cwd: killed sidecar for {}", cwd));
+	}
+}
+
+/// Kill all sidecars for a given window (by active cwd).
+pub fn kill_sidecar_for_window(state: &BridgeState, window_label: &str) {
+	let cwd = {
+		let active = state.active.lock().unwrap();
+		active.get(window_label).cloned()
+	};
+	if let Some(cwd) = cwd {
+		// Remove this window from active map.
+		{
+			let mut active = state.active.lock().unwrap();
+			active.remove(window_label);
+		}
+		// Check if any other window is using this sidecar.
+		let still_in_use = {
+			let active = state.active.lock().unwrap();
+			active.values().any(|c| c == &cwd)
+		};
+		if !still_in_use {
+			kill_sidecar_for_cwd(state, &cwd);
+		}
 	}
 }
 
 /// One-shot init: spawns sidecar for the calling window, sends get_state. Returns state JSON.
+/// If a sidecar for this cwd already exists, just switches the active pointer (no restart).
 /// `cwd` is the working directory for the pizza rpc process (the user's project).
 #[tauri::command]
 pub async fn init_sidecar(
@@ -79,8 +108,62 @@ pub async fn init_sidecar(
 	});
 	log_file(&format!("init_sidecar: cwd={}", cwd));
 
-	// Kill existing sidecar for this window if any
-	kill_sidecar_for_window(&state, &window_label);
+	// Check if sidecar for this cwd already exists.
+	let already_running = {
+		let sidecars = state.sidecars.lock().unwrap();
+		sidecars.contains_key(&cwd)
+	};
+
+	if already_running {
+		// Just switch active pointer.
+		log_file(&format!("init_sidecar: sidecar already running for cwd={}, switching active", cwd));
+		{
+			let mut active = state.active.lock().unwrap();
+			active.insert(window_label.clone(), cwd.clone());
+		}
+		// Send get_state to get current state.
+		let id = uuid::Uuid::new_v4().to_string();
+		let cmd = serde_json::json!({ "id": id, "type": "get_state" });
+		let line = serde_json::to_string(&cmd).map_err(|e| e.to_string())?;
+		{
+			let mut sidecars = state.sidecars.lock().unwrap();
+			let sidecar = sidecars.get_mut(&cwd).ok_or("Sidecar disappeared")?;
+			use std::io::Write;
+			sidecar.stdin.write_all(line.as_bytes()).map_err(|e| format!("write: {e}"))?;
+			sidecar.stdin.write_all(b"\n").map_err(|e| format!("write nl: {e}"))?;
+			sidecar.stdin.flush().map_err(|e| format!("flush: {e}"))?;
+		}
+		// We can't easily read the response synchronously here since the reader
+		// thread is already consuming stdout. The frontend will get the state
+		// via the rpc_response event. Return empty state.
+		log_file("init_sidecar: switched, returning empty (state will come via event)");
+		return Ok(serde_json::json!({}).to_string());
+	}
+
+	// Kill existing sidecar for this window's previous cwd if switching.
+	let old_cwd_to_kill: Option<String> = {
+		let active = state.active.lock().unwrap();
+		if let Some(old_cwd) = active.get(&window_label) {
+			if old_cwd != &cwd {
+				log_file(&format!("init_sidecar: switching from old cwd={}", old_cwd));
+				// Don't kill the old sidecar — it may be used by other windows.
+				// Just check if any other window still uses it.
+				let old_still_in_use = active.values().any(|c| c == old_cwd);
+				if !old_still_in_use {
+					Some(old_cwd.clone())
+				} else {
+					None
+				}
+			} else {
+				None
+			}
+		} else {
+			None
+		}
+	};
+	if let Some(old_cwd) = old_cwd_to_kill {
+		kill_sidecar_for_cwd(&state, &old_cwd);
+	}
 
 	let (program, args) = resolve_pizza_command();
 	let mut cmd = Command::new(&program);
@@ -126,17 +209,23 @@ pub async fn init_sidecar(
 		}
 	};
 
-	// Store sidecar in the per-window map.
+	// Store sidecar keyed by cwd.
 	{
 		let mut sidecars = state.sidecars.lock().unwrap();
-		sidecars.insert(window_label.clone(), SidecarState { child, stdin });
+		sidecars.insert(cwd.clone(), SidecarEntry { child, stdin });
 	}
 
-	// Spawn reader thread for subsequent events — emit to this specific window.
+	// Set active cwd for this window.
+	{
+		let mut active = state.active.lock().unwrap();
+		active.insert(window_label.clone(), cwd.clone());
+	}
+
+	// Spawn reader thread for subsequent events — emit to all windows that have this cwd active.
 	let app = window.app_handle().clone();
-	let label = window_label.clone();
+	let reader_cwd = cwd.clone();
 	std::thread::spawn(move || {
-		log_file(&format!("reader thread: started for window={}", label));
+		log_file(&format!("reader thread: started for cwd={}", reader_cwd));
 		for line in reader.lines() {
 			match line {
 				Ok(line) => {
@@ -148,26 +237,41 @@ pub async fn init_sidecar(
 						Ok(v) => v,
 						Err(_) => continue,
 					};
-					log_file(&format!("sidecar stdout [{}]: {}", label, trimmed));
-					// Emit to the specific window only
-					if let Some(win) = app.get_webview_window(&label) {
-						let etype = parsed.get("type").and_then(|t| t.as_str()).unwrap_or("");
-						match etype {
-							"response" => { let _ = win.emit("rpc_response", parsed); }
-							"extension_ui_request" => { let _ = win.emit("extension_ui_request", parsed); }
-							_ => { let _ = win.emit("rpc_event", parsed); }
+					log_file(&format!("sidecar stdout [cwd={}]: {}", reader_cwd, trimmed));
+					// Emit to all windows that have this cwd as active.
+					let app_ref = &app;
+					let active = app_ref.state::<BridgeState>();
+					let active_map = active.active.lock().unwrap();
+					for (label, ac_cwd) in active_map.iter() {
+						if ac_cwd == &reader_cwd {
+							if let Some(win) = app_ref.get_webview_window(label) {
+								let etype = parsed.get("type").and_then(|t| t.as_str()).unwrap_or("");
+								match etype {
+									"response" => { let _ = win.emit("rpc_response", parsed.clone()); }
+									"extension_ui_request" => { let _ = win.emit("extension_ui_request", parsed.clone()); }
+									_ => { let _ = win.emit("rpc_event", parsed.clone()); }
+								}
+							}
 						}
 					}
 				}
 				Err(e) => {
-					log_file(&format!("reader error [{}]: {e}", label));
+					log_file(&format!("reader error [cwd={}]: {e}", reader_cwd));
 					break;
 				}
 			}
 		}
-		log_file(&format!("reader thread: EOF for window={}", label));
-		if let Some(win) = app.get_webview_window(&label) {
-			let _ = win.emit("sidecar_exit", serde_json::json!({ "code": null }));
+		log_file(&format!("reader thread: EOF for cwd={}", reader_cwd));
+		// Notify all windows that had this cwd active.
+		let app_ref = &app;
+		let active = app_ref.state::<BridgeState>();
+		let active_map = active.active.lock().unwrap();
+		for (label, ac_cwd) in active_map.iter() {
+			if ac_cwd == &reader_cwd {
+				if let Some(win) = app_ref.get_webview_window(label) {
+					let _ = win.emit("sidecar_exit", serde_json::json!({ "code": null, "cwd": reader_cwd }));
+				}
+			}
 		}
 	});
 
@@ -180,7 +284,7 @@ pub fn stop_sidecar(
 	window: tauri::Window,
 	state: tauri::State<'_, BridgeState>,
 ) -> Result<(), String> {
-	kill_sidecar_for_window(&state, window.label());
+	kill_sidecar_for_window(state.inner(), window.label());
 	Ok(())
 }
 
@@ -203,8 +307,15 @@ pub fn rpc_command(
 	let line = serde_json::to_string(&Value::Object(obj)).map_err(|e| e.to_string())?;
 	log_file(&format!("rpc_command [{}] sending: {}", window_label, line));
 
+	// Route to the active sidecar for this window.
+	let cwd = {
+		let active = state.active.lock().unwrap();
+		active.get(window_label).cloned()
+	};
+	let cwd = cwd.ok_or("No active workspace for this window")?;
+
 	let mut sidecars = state.sidecars.lock().unwrap();
-	let sidecar = sidecars.get_mut(window_label).ok_or("Sidecar is not running")?;
+	let sidecar = sidecars.get_mut(&cwd).ok_or("Sidecar is not running")?;
 	sidecar.stdin.write_all(line.as_bytes()).map_err(|e| format!("write: {e}"))?;
 	sidecar.stdin.write_all(b"\n").map_err(|e| format!("write nl: {e}"))?;
 	sidecar.stdin.flush().map_err(|e| format!("flush: {e}"))?;
