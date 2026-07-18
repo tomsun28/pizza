@@ -11,6 +11,8 @@ export interface TimelineItem {
 	toolArgs?: string;
 	toolResult?: string;
 	isError?: boolean;
+	/** Attached images as data URLs (for user messages). */
+	images?: string[];
 }
 
 export function Conversation({
@@ -68,13 +70,29 @@ export function Conversation({
 							)}
 						</div>
 					) : (
-						<div
-							className={cn(
-								"px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap break-words",
-								item.streaming && "after:content-['▋'] after:ml-0.5 after:text-accent after:animate-pulse",
+						<div className="px-4 py-3">
+							{item.images && item.images.length > 0 && (
+								<div className="mb-2 flex flex-wrap gap-2">
+									{item.images.map((src, i) => (
+										<img
+											key={i}
+											src={src}
+											alt="attachment"
+											className="max-h-48 rounded-md border border-border object-contain"
+										/>
+									))}
+								</div>
 							)}
-						>
-							{item.text || (item.streaming ? "" : "")}
+							{(item.text || item.streaming) && (
+								<div
+									className={cn(
+										"text-sm leading-relaxed whitespace-pre-wrap break-words",
+										item.streaming && "after:content-['▋'] after:ml-0.5 after:text-accent after:animate-pulse",
+									)}
+								>
+									{item.text}
+								</div>
+							)}
 						</div>
 					)}
 				</div>

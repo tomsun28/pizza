@@ -333,11 +333,6 @@ export default function Layout({
 							<ThemeToggle />
 						</div>
 					</div>
-					{state?.model && (
-						<div className="mt-1 px-2 font-mono text-[10px] uppercase tracking-widest text-muted">
-							{state.model.provider}/{state.model.id}
-						</div>
-					)}
 				</div>
 			</aside>
 

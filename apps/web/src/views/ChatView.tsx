@@ -2,8 +2,39 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { sendCommandAwait, subscribeEvents, subscribeSidecarExit } from "@/lib/transport";
 import type { RpcSessionState, TypedEvent } from "@/lib/types";
 import { Conversation, type TimelineItem } from "@/components/Conversation";
-import { Composer } from "@/components/Composer";
+import { Composer, type ComposerImage } from "@/components/Composer";
 import { EmptyState } from "@/components/ui";
+
+function blockToDataUrl(block: Record<string, unknown>): string | null {
+	const data = block.data;
+	if (typeof data !== "string" || !data) return null;
+	const mime = (block.mime_type ?? block.mimeType ?? "image/png") as string;
+	// Already a data URL?
+	if (data.startsWith("data:")) return data;
+	return `data:${mime};base64,${data}`;
+}
+
+/** Extract image data URLs from a message payload (content blocks + images array). */
+function messageImages(message: unknown): string[] {
+	if (!message || typeof message !== "object") return [];
+	const msg = message as Record<string, unknown>;
+	const out: string[] = [];
+	if (Array.isArray(msg.content)) {
+		for (const block of msg.content as Array<Record<string, unknown>>) {
+			if (block && typeof block === "object" && block.type === "image") {
+				const url = blockToDataUrl(block);
+				if (url) out.push(url);
+			}
+		}
+	}
+	if (Array.isArray(msg.images)) {
+		for (const img of msg.images as Array<Record<string, unknown>>) {
+			const url = blockToDataUrl(img);
+			if (url) out.push(url);
+		}
+	}
+	return out;
+}
 
 function messageText(message: unknown): string {
 	if (!message || typeof message !== "object") return "";
@@ -16,7 +47,7 @@ function messageText(message: unknown): string {
 				if (block.type === "text") return String(block.text ?? "");
 				if (block.type === "thinking") return "";
 				if (block.type === "toolCall") return "Tool call: " + String(block.name ?? "tool");
-				if (block.type === "image") return "[image]";
+				if (block.type === "image") return "";
 				return "";
 			})
 			.filter(Boolean)
@@ -87,10 +118,12 @@ export default function ChatView({
 					const role = msg.role as string;
 					if (role === "user") {
 						const text = messageText(msg);
-						history.push({ id: `hist-${history.length}`, role: "user", title: "You", text, status: "" });
+						const images = messageImages(msg);
+						history.push({ id: `hist-${history.length}`, role: "user", title: "You", text, status: "", images: images.length > 0 ? images : undefined });
 					} else if (role === "assistant") {
 						const text = messageText(msg);
-						history.push({ id: `hist-${history.length}`, role: "assistant", title: "Pizza", text, status: "DONE", streaming: false });
+						const images = messageImages(msg);
+						history.push({ id: `hist-${history.length}`, role: "assistant", title: "Pizza", text, status: "DONE", streaming: false, images: images.length > 0 ? images : undefined });
 					} else if (role === "tool") {
 						const toolName = String(msg.name ?? "tool");
 						const result = msg.content as Array<Record<string, unknown>> | undefined;
@@ -141,9 +174,10 @@ export default function ChatView({
 		switch (event.type) {
 			case "USER_MESSAGE": {
 				const text = messageText(event.payload);
+				const images = messageImages(event.payload);
 				updateItems((prev) => [
 					...prev,
-					{ id: event.event_id, role: "user", title: "You", text, status: "" },
+					{ id: event.event_id, role: "user", title: "You", text, status: "", images: images.length > 0 ? images : undefined },
 				]);
 				break;
 			}
@@ -178,22 +212,21 @@ export default function ChatView({
 				if (id) {
 					const payload = event.payload as Record<string, unknown> | undefined;
 					const content = payload?.content;
-					if (content) {
-						const text = messageText({ content });
-						if (text) {
-							updateItems((prev) =>
-								prev.map((it) => (it.id === id ? { ...it, text, status: "DONE", streaming: false } : it)),
-							);
-						} else {
-							updateItems((prev) =>
-								prev.map((it) => (it.id === id ? { ...it, status: "DONE", streaming: false } : it)),
-							);
-						}
-					} else {
-						updateItems((prev) =>
-							prev.map((it) => (it.id === id ? { ...it, status: "DONE", streaming: false } : it)),
-						);
-					}
+					const text = content ? messageText({ content }) : "";
+					const images = content ? messageImages({ content }) : [];
+					updateItems((prev) =>
+						prev.map((it) =>
+							it.id === id
+								? {
+										...it,
+										...(text ? { text } : {}),
+										...(images.length > 0 ? { images } : {}),
+										status: "DONE",
+										streaming: false,
+									}
+								: it,
+						),
+					);
 				}
 				break;
 			}
@@ -218,19 +251,31 @@ export default function ChatView({
 				const toolName = payload.tool_name as string;
 				const args = payload.arguments as Record<string, unknown> | undefined;
 				const argsStr = args ? JSON.stringify(args, null, 2) : "";
-				updateItems((prev) => [
-					...prev,
-					{
-						id: toolCallId,
-						role: "tool",
-						title: toolName,
-						text: "",
-						status: "RUNNING",
-						streaming: true,
-						toolName,
-						toolArgs: argsStr,
-					},
-				]);
+				// INTENT_TOOL_CALL and TOOL_EXECUTION_START share the same tool_call_id.
+				// Upsert so we don't create duplicate cards / clashing React keys.
+				updateItems((prev) => {
+					const existing = prev.find((it) => it.id === toolCallId);
+					if (existing) {
+						return prev.map((it) =>
+							it.id === toolCallId
+								? { ...it, title: toolName, toolName, toolArgs: argsStr || it.toolArgs }
+								: it,
+						);
+					}
+					return [
+						...prev,
+						{
+							id: toolCallId,
+							role: "tool",
+							title: toolName,
+							text: "",
+							status: "RUNNING",
+							streaming: true,
+							toolName,
+							toolArgs: argsStr,
+						},
+					];
+				});
 				break;
 			}
 			case "TOOL_EXECUTION_UPDATE": {
@@ -255,7 +300,7 @@ export default function ChatView({
 				const resultText = result
 					? result.map((r) => (r.type === "text" ? String(r.text ?? "") : JSON.stringify(r))).join("\n")
 					: "";
-				const isError = result?.some((r) => r.type === "text" && String(r.text ?? "").toLowerCase().includes("error"));
+				const isError = payload.is_error === true;
 				updateItems((prev) =>
 					prev.map((it) =>
 						it.id === toolCallId && it.role === "tool"
@@ -287,13 +332,14 @@ export default function ChatView({
 	}, [sidecarReady, handleEvent]);
 
 	const handleSend = useCallback(
-		async (message: string) => {
+		async (message: string, images?: ComposerImage[]) => {
 			setError("");
+			const payloadImages = images?.map((img) => ({ data: img.data, mimeType: img.mimeType }));
 			try {
 				if (state?.isStreaming) {
-					await sendCommandAwait({ type: "follow_up", message });
+					await sendCommandAwait({ type: "follow_up", message, images: payloadImages });
 				} else {
-					await sendCommandAwait({ type: "prompt", message });
+					await sendCommandAwait({ type: "prompt", message, images: payloadImages });
 				}
 			} catch (e) {
 				setError(e instanceof Error ? e.message : String(e));

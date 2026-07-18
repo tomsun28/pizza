@@ -1,8 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Square, Mic, Plus, ChevronDown, Check } from "lucide-react";
+import { ArrowUp, Square, Mic, Plus, ChevronDown, Check, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { sendCommandAwait } from "@/lib/transport";
 import type { RpcSessionState, ModelInfo } from "@/lib/types";
+
+export interface ComposerImage {
+	/** base64-encoded payload (no data URL prefix) */
+	data: string;
+	mimeType: string;
+	/** original file name, for display */
+	name: string;
+	/** data URL for preview thumbnail */
+	preview: string;
+}
 
 interface SpeechRecognitionAlternative {
 	transcript: string;
@@ -47,14 +57,16 @@ export function Composer({
 	sidecarReady: boolean;
 	isRunning: boolean;
 	state: RpcSessionState | null;
-	onSend: (message: string) => void;
+	onSend: (message: string, images?: ComposerImage[]) => void;
 	onAbort: () => void;
 }) {
 	const [input, setInput] = useState("");
+	const [images, setImages] = useState<ComposerImage[]>([]);
 	const [models, setModels] = useState<ModelInfo[]>([]);
 	const [recording, setRecording] = useState(false);
 	const [modelMenuOpen, setModelMenuOpen] = useState(false);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
+	const fileInputRef = useRef<HTMLInputElement>(null);
 	const recognitionRef = useRef<SpeechRecognition | null>(null);
 	const modelMenuRef = useRef<HTMLDivElement>(null);
 
@@ -161,15 +173,71 @@ export function Composer({
 		recognitionRef.current?.stop();
 	}, []);
 
+	const addFiles = useCallback(async (files: FileList | File[]) => {
+		const imageFiles = Array.from(files).filter((f) => f.type.startsWith("image/"));
+		const loaded = await Promise.all(
+			imageFiles.map(
+				(file) =>
+					new Promise<ComposerImage | null>((resolve) => {
+						const reader = new FileReader();
+						reader.onload = () => {
+							const result = reader.result;
+							if (typeof result !== "string") {
+								resolve(null);
+								return;
+							}
+							// result is a data URL: "data:<mime>;base64,<data>"
+							const comma = result.indexOf(",");
+							const data = comma >= 0 ? result.slice(comma + 1) : result;
+							resolve({
+								data,
+								mimeType: file.type || "image/png",
+								name: file.name,
+								preview: result,
+							});
+						};
+						reader.onerror = () => resolve(null);
+						reader.readAsDataURL(file);
+					}),
+			),
+		);
+		const valid = loaded.filter((i): i is ComposerImage => i !== null);
+		if (valid.length > 0) setImages((prev) => [...prev, ...valid]);
+	}, []);
+
+	const handleFileChange = useCallback(
+		(e: React.ChangeEvent<HTMLInputElement>) => {
+			if (e.target.files) void addFiles(e.target.files);
+			e.target.value = "";
+		},
+		[addFiles],
+	);
+
+	const handlePaste = useCallback(
+		(e: React.ClipboardEvent) => {
+			const files = Array.from(e.clipboardData.files);
+			if (files.length > 0) {
+				e.preventDefault();
+				void addFiles(files);
+			}
+		},
+		[addFiles],
+	);
+
+	const removeImage = useCallback((index: number) => {
+		setImages((prev) => prev.filter((_, i) => i !== index));
+	}, []);
+
 	const handleSend = () => {
 		const message = input.trim();
-		if (!message || !sidecarReady) return;
+		if ((!message && images.length === 0) || !sidecarReady) return;
 		if (recording) stopRecording();
-		onSend(message);
+		onSend(message, images.length > 0 ? images : undefined);
 		setInput("");
+		setImages([]);
 	};
 
-	const canSend = sidecarReady && !!input.trim();
+	const canSend = sidecarReady && (!!input.trim() || images.length > 0);
 
 	return (
 		<div className="bg-surface px-6 py-4">
@@ -180,6 +248,30 @@ export function Composer({
 						!sidecarReady && "opacity-60",
 					)}
 				>
+					{images.length > 0 && (
+						<div className="mb-2 flex flex-wrap gap-2">
+							{images.map((img, i) => (
+								<div
+									key={`${img.name}-${i}`}
+									className="group relative h-16 w-16 overflow-hidden rounded-lg border border-border"
+								>
+									<img
+										src={img.preview}
+										alt={img.name}
+										className="h-full w-full object-cover"
+									/>
+									<button
+										type="button"
+										onClick={() => removeImage(i)}
+										className="absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-black/60 text-white opacity-0 transition-opacity group-hover:opacity-100"
+										title="Remove"
+									>
+										<X className="h-3 w-3" />
+									</button>
+								</div>
+							))}
+						</div>
+					)}
 					<textarea
 						ref={textareaRef}
 						className="w-full resize-none bg-transparent px-1 py-1 text-sm text-fg outline-none placeholder:text-muted min-h-[2.5rem] max-h-80"
@@ -187,6 +279,7 @@ export function Composer({
 						value={input}
 						disabled={!sidecarReady}
 						onChange={(e) => setInput(e.target.value)}
+						onPaste={handlePaste}
 						onKeyDown={(e) => {
 							if (e.key === "Enter" && !e.shiftKey) {
 								e.preventDefault();
@@ -197,11 +290,20 @@ export function Composer({
 					<div className="mt-1 flex items-center justify-between gap-2">
 						{/* Left cluster */}
 						<div className="flex items-center gap-1">
+							<input
+								ref={fileInputRef}
+								type="file"
+								accept="image/*"
+								multiple
+								className="hidden"
+								onChange={handleFileChange}
+							/>
 							<button
 								type="button"
 								disabled={!sidecarReady}
+								onClick={() => fileInputRef.current?.click()}
 								className="flex h-8 w-8 items-center justify-center rounded-full text-muted transition-colors hover:bg-surface hover:text-fg disabled:opacity-40"
-								title="Add"
+								title="Attach image"
 							>
 								<Plus className="h-4 w-4" />
 							</button>
