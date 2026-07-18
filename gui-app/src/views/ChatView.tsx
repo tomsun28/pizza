@@ -29,16 +29,26 @@ export default function ChatView({
 	state,
 	sidecarReady,
 	sidecarExitCode,
+	workspace,
 }: {
 	state: RpcSessionState | null;
 	sidecarReady: boolean;
 	sidecarExitCode: number | null;
+	workspace?: string | null;
 }) {
 	const [items, setItems] = useState<TimelineItem[]>([]);
 	const [error, setError] = useState("");
 	const activeAssistantRef = useRef<string | null>(null);
 	const seenIdsRef = useRef<Set<string>>(new Set());
 	const scrollRef = useRef<HTMLDivElement>(null);
+
+	// Reset conversation when workspace changes.
+	useEffect(() => {
+		setItems([]);
+		setError("");
+		seenIdsRef.current = new Set();
+		activeAssistantRef.current = null;
+	}, [workspace]);
 
 	useEffect(() => {
 		if (scrollRef.current) {

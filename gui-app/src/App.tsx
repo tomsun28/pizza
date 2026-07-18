@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { PxlKitSurfaceProvider } from "@pxlkit/ui-kit";
 import Layout from "@/components/Layout";
 import ChatView from "@/views/ChatView";
@@ -12,7 +12,8 @@ function isTauri(): boolean {
 	return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
-export default function App() {
+function AppInner() {
+	const navigate = useNavigate();
 	const [state, setState] = useState<RpcSessionState | null>(null);
 	const [sidecarReady, setSidecarReady] = useState(false);
 	const [sidecarExitCode, setSidecarExitCode] = useState<number | null>(null);
@@ -98,6 +99,8 @@ export default function App() {
 
 	const handleSelectWorkspace = useCallback(async (cwd: string) => {
 		if (workspace === cwd && sidecarReady) return;
+		// Navigate back to chat page when selecting a workspace.
+		navigate("/");
 		// If sidecar is already running, switching is instant — no loading screen.
 		if (sidecarReady) {
 			setWorkspace(cwd);
@@ -105,7 +108,7 @@ export default function App() {
 		} else {
 			await startWithWorkspace(cwd);
 		}
-	}, [workspace, sidecarReady, startWithWorkspace]);
+	}, [workspace, sidecarReady, startWithWorkspace, navigate]);
 
 	useEffect(() => {
 		if (!sidecarReady) return;
@@ -153,9 +156,8 @@ export default function App() {
 	}
 
 	return (
-		<BrowserRouter>
-			<PxlKitSurfaceProvider surface="pixel">
-				<Routes>
+		<PxlKitSurfaceProvider surface="pixel">
+			<Routes>
 					<Route
 						element={
 							<Layout
@@ -176,14 +178,22 @@ export default function App() {
 									state={state}
 									sidecarReady={sidecarReady}
 									sidecarExitCode={sidecarExitCode}
+				workspace={workspace}
 								/>
 							}
 						/>
 						<Route path="/settings" element={<SettingsView state={state} />} />
 						<Route path="*" element={<Navigate to="/" replace />} />
 					</Route>
-				</Routes>
-			</PxlKitSurfaceProvider>
+			</Routes>
+		</PxlKitSurfaceProvider>
+	);
+}
+
+export default function App() {
+	return (
+		<BrowserRouter>
+			<AppInner />
 		</BrowserRouter>
 	);
 }
