@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { Settings as SettingsIcon, Plus, FolderOpen, Folder } from "lucide-react";
+import { Settings as SettingsIcon, Plus, FolderOpen, Folder, MessageSquare } from "lucide-react";
 import { StatusDot, ThemeToggle, Button } from "./ui";
 import { BrandIcon } from "./BrandIcon";
 import { cn } from "@/lib/utils";
@@ -26,6 +26,8 @@ function timeAgo(ts: number): string {
 	return `${days}d ago`;
 }
 
+const MAIN_CHAT_CWD = "~/.pizza/main";
+
 export default function Layout({
 	state,
 	sidecarReady,
@@ -42,6 +44,7 @@ export default function Layout({
 	onSelectWorkspace?: (cwd: string) => void;
 }) {
 	const online = sidecarReady && sidecarExitCode === null;
+	const isMainChat = workspace === MAIN_CHAT_CWD;
 
 	return (
 		<div className="flex h-full bg-bg">
@@ -65,6 +68,43 @@ export default function Layout({
 							agent gui
 						</div>
 					</div>
+				</div>
+
+				{/* Main chat — persistent agent */}
+				<div className="px-3 pt-2 pb-1">
+					<button
+						onClick={() => onSelectWorkspace?.(MAIN_CHAT_CWD)}
+						className={cn(
+							"flex w-full items-center gap-2 rounded-md border px-2 py-2 text-left transition-colors",
+							isMainChat
+								? "border-accent bg-accent/10"
+								: "border-transparent hover:bg-surface-2",
+						)}
+						title="Persistent agent at ~/.pizza/main"
+					>
+						<MessageSquare
+							className={cn(
+								"h-4 w-4 shrink-0",
+								isMainChat ? "text-accent" : "text-muted",
+							)}
+						/>
+						<div className="min-w-0 flex-1">
+							<div
+								className={cn(
+									"truncate font-mono text-xs font-bold uppercase tracking-wide",
+									isMainChat ? "text-accent" : "text-fg",
+								)}
+							>
+								Chat
+							</div>
+							<div className="truncate font-mono text-[10px] text-muted">
+								persistent agent
+							</div>
+						</div>
+						{isMainChat && online && (
+							<span className="h-1.5 w-1.5 shrink-0 rounded-full bg-success" />
+						)}
+					</button>
 				</div>
 
 				{/* Workspaces section */}
