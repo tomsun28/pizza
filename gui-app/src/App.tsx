@@ -101,13 +101,9 @@ function AppInner() {
 		if (workspace === cwd && sidecarReady) return;
 		// Navigate back to chat page when selecting a workspace.
 		navigate("/");
-		// If sidecar is already running, switching is instant — no loading screen.
-		if (sidecarReady) {
-			setWorkspace(cwd);
-			await startWithWorkspace(cwd);
-		} else {
-			await startWithWorkspace(cwd);
-		}
+		// startWithWorkspace sets workspace AFTER initSidecar completes,
+		// so get_messages goes to the correct sidecar.
+		await startWithWorkspace(cwd);
 	}, [workspace, sidecarReady, startWithWorkspace, navigate]);
 
 	useEffect(() => {
