@@ -453,7 +453,7 @@ export default function ChatView({
 			// Abort may not always emit AGENT_TURN_COMPLETED, so proactively
 			// refresh state to update isStreaming and flip the button back.
 			void sendCommandAwait<RpcSessionState>({ type: "get_state" })
-				.then((r) => {
+				.then((_r) => {
 					// setState lives in App.tsx — we can't call it directly, but
 					// the App-level event listener will also catch any turn-completed
 					// event. As a fallback, mark the active assistant item as done.

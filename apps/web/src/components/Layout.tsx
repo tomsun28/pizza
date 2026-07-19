@@ -23,7 +23,7 @@ function setPinnedWorkspaces(ids: Set<string>): void {
 	} catch { /* ignore */ }
 }
 
-function WorkspaceMenu({ ws, isActive, onPin, isPinned, onDelete, onClose }: {
+function WorkspaceMenu({ ws, isActive: _isActive, onPin, isPinned, onDelete, onClose }: {
 	ws: WorkspaceMeta;
 	isActive: boolean;
 	onPin: () => void;
