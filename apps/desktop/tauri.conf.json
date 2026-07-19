@@ -44,7 +44,6 @@
 			"icons/icon.ico"
 		],
 		"resources": {
-			"../../dist/pizza": "pizza",
 			"../../dist/theme/": "theme/",
 			"../../dist/assets/": "assets/",
 			"../../dist/export-html/": "export-html/",
