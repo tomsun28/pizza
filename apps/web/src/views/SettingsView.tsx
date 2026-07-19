@@ -208,19 +208,46 @@ function ProviderRow({ provider, onRefresh }: { provider: ProviderInfo; onRefres
 
 function AddProviderInline({
 	available,
-	onAdd,
+	onSaved,
 	onCancel,
 }: {
 	available: ProviderInfo[];
-	onAdd: (id: string) => void;
+	onSaved: () => void;
 	onCancel: () => void;
 }) {
 	const [selected, setSelected] = useState("");
+	const [keyValue, setKeyValue] = useState("");
+	const [showKey, setShowKey] = useState(false);
+	const [saving, setSaving] = useState(false);
+	const [error, setError] = useState("");
 
 	const providerOptions = available.map((p) => ({
 		value: p.id,
 		label: PROVIDER_LABELS[p.id] ?? p.id,
 	}));
+
+	const label = selected ? (PROVIDER_LABELS[selected] ?? selected) : "";
+
+	const handleSave = useCallback(async () => {
+		if (!selected) {
+			setError("Select a provider first");
+			return;
+		}
+		if (!keyValue.trim()) {
+			setError("API key cannot be empty");
+			return;
+		}
+		setSaving(true);
+		setError("");
+		try {
+			await setProviderApiKey(selected, keyValue.trim());
+			onSaved();
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		} finally {
+			setSaving(false);
+		}
+	}, [selected, keyValue, onSaved]);
 
 	return (
 		<div className="border-b border-border/60 py-3">
@@ -230,22 +257,45 @@ function AddProviderInline({
 					<PixelSelect
 						value={selected}
 						options={providerOptions}
-						onChange={setSelected}
+						onChange={(v) => { setSelected(v); setError(""); }}
 						placeholder="Select a provider..."
 						tone="cyan"
 						size="sm"
 					/>
 				</div>
-				<Button size="sm" tone="neutral" onClick={onCancel}>Cancel</Button>
-				<Button
-					size="sm"
-					tone="accent"
-					disabled={!selected}
-					onClick={() => { onAdd(selected); setSelected(""); }}
-				>
-					Add
-				</Button>
+				{!selected && (
+					<Button size="sm" tone="neutral" onClick={onCancel}>Cancel</Button>
+				)}
 			</div>
+			{selected && (
+				<div className="mt-3 space-y-2">
+					<div className="flex items-center gap-2">
+						<input
+							type={showKey ? "text" : "password"}
+							value={keyValue}
+							onChange={(e) => setKeyValue(e.target.value)}
+							placeholder={`Enter API key for ${label}`}
+							autoFocus
+							className="flex-1 rounded-md border border-border bg-surface px-3 py-1.5 font-mono text-xs text-fg placeholder:text-muted focus:border-accent focus:outline-none"
+							onKeyDown={(e) => e.key === "Enter" && handleSave()}
+						/>
+						<button
+							onClick={() => setShowKey(!showKey)}
+							className="text-muted hover:text-fg transition-colors"
+							title={showKey ? "Hide" : "Show"}
+						>
+							{showKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+						</button>
+					</div>
+					{error && <p className="font-mono text-[10px] text-danger">{error}</p>}
+					<div className="flex items-center gap-2">
+						<Button size="sm" tone="accent" onClick={handleSave} disabled={saving}>
+							{saving ? "Saving..." : "Save"}
+						</Button>
+						<Button size="sm" tone="neutral" onClick={onCancel}>Cancel</Button>
+					</div>
+				</div>
+			)}
 		</div>
 	);
 }
@@ -254,7 +304,6 @@ function ProviderTab() {
 	const [providers, setProviders] = useState<ProviderInfo[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState("");
-	const [addingProvider, setAddingProvider] = useState<string | null>(null);
 	const [showAddInline, setShowAddInline] = useState(false);
 
 	const refresh = useCallback(async () => {
@@ -307,12 +356,12 @@ function ProviderTab() {
 				{showAddInline && (
 					<AddProviderInline
 						available={available}
-						onAdd={(id) => { setAddingProvider(id); setShowAddInline(false); }}
+						onSaved={() => { setShowAddInline(false); refresh(); }}
 						onCancel={() => setShowAddInline(false)}
 					/>
 				)}
 
-				{configured.length === 0 && !addingProvider && !showAddInline && (
+				{configured.length === 0 && !showAddInline && (
 					<div className="py-6 text-center">
 						<p className="font-mono text-xs text-muted">No providers configured yet.</p>
 						<p className="mt-1 font-mono text-[10px] text-muted">Click "Add Provider" to get started.</p>
@@ -322,13 +371,6 @@ function ProviderTab() {
 				{configured.map((p) => (
 					<ProviderRow key={p.id} provider={p} onRefresh={refresh} />
 				))}
-
-				{addingProvider && (
-					<ProviderRow
-						provider={{ id: addingProvider, has_api_key: false, auth_type: null }}
-						onRefresh={() => { setAddingProvider(null); refresh(); }}
-					/>
-				)}
 			</Card>
 		</div>
 	);
