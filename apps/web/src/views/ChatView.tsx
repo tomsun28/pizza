@@ -36,6 +36,57 @@ function messageImages(message: unknown): string[] {
 	return out;
 }
 
+interface ExtractedToolCall {
+	id: string;
+	name: string;
+	args: string;
+}
+
+/** Extract toolCall blocks (id, name, JSON args) from an assistant message. */
+function messageToolCalls(message: unknown): ExtractedToolCall[] {
+	if (!message || typeof message !== "object") return [];
+	const msg = message as Record<string, unknown>;
+	if (!Array.isArray(msg.content)) return [];
+	const out: ExtractedToolCall[] = [];
+	for (const block of msg.content as Array<Record<string, unknown>>) {
+		if (block && typeof block === "object" && (block.type === "toolCall" || block.type === "tool_call")) {
+			const args = (block.arguments ?? {}) as unknown;
+			out.push({
+				id: String(block.id ?? block.tool_call_id ?? ""),
+				name: String(block.name ?? block.tool_name ?? "tool"),
+				args: args && typeof args === "object" ? JSON.stringify(args) : String(args ?? ""),
+			});
+		}
+	}
+	return out;
+}
+
+function toolResultText(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.map((r) => {
+			const b = r as Record<string, unknown>;
+			return b?.type === "text" ? String(b.text ?? "") : "";
+		})
+		.filter(Boolean)
+		.join("\n");
+}
+
+function messageThinking(message: unknown): string {
+	if (!message || typeof message !== "object") return "";
+	const msg = message as Record<string, unknown>;
+	if (!Array.isArray(msg.content)) return "";
+	return (msg.content as Array<Record<string, unknown>>)
+		.map((block) => {
+			if (!block || typeof block !== "object") return "";
+			if (block.type === "thinking") return String(block.thinking ?? block.text ?? "");
+			return "";
+		})
+		.filter(Boolean)
+		.join("\n");
+}
+
 function messageText(message: unknown): string {
 	if (!message || typeof message !== "object") return "";
 	const msg = message as Record<string, unknown>;
@@ -46,7 +97,7 @@ function messageText(message: unknown): string {
 				if (!block || typeof block !== "object") return "";
 				if (block.type === "text") return String(block.text ?? "");
 				if (block.type === "thinking") return "";
-				if (block.type === "toolCall") return "Tool call: " + String(block.name ?? "tool");
+				if (block.type === "toolCall") return "";
 				if (block.type === "image") return "";
 				return "";
 			})
@@ -114,6 +165,8 @@ export default function ChatView({
 				const data = (r as unknown as Record<string, unknown>)?.data as Record<string, unknown> | undefined;
 				const messages = (data?.messages as Array<Record<string, unknown>> | undefined) ?? [];
 				const history: TimelineItem[] = [];
+				// Track tool cards by tool_call_id so toolResult messages can fill them.
+				const toolCardById = new Map<string, TimelineItem>();
 				for (const msg of messages) {
 					const role = msg.role as string;
 					if (role === "user") {
@@ -122,13 +175,39 @@ export default function ChatView({
 						history.push({ id: `hist-${history.length}`, role: "user", title: "You", text, status: "", images: images.length > 0 ? images : undefined });
 					} else if (role === "assistant") {
 						const text = messageText(msg);
+						const thinking = messageThinking(msg);
 						const images = messageImages(msg);
-						history.push({ id: `hist-${history.length}`, role: "assistant", title: "Pizza", text, status: "DONE", streaming: false, images: images.length > 0 ? images : undefined });
-					} else if (role === "tool") {
-						const toolName = String(msg.name ?? "tool");
-						const result = msg.content as Array<Record<string, unknown>> | undefined;
-						const resultText = result ? result.map((r) => (r.type === "text" ? String(r.text ?? "") : JSON.stringify(r))).join("\n") : "";
-						history.push({ id: `hist-${history.length}`, role: "tool", title: toolName, text: "", status: "DONE", streaming: false, toolName, toolArgs: "", toolResult: resultText });
+						if (text || thinking || images.length > 0) {
+							history.push({ id: `hist-${history.length}`, role: "assistant", title: "Pizza", text, status: "DONE", streaming: false, thinking: thinking || undefined, images: images.length > 0 ? images : undefined });
+						}
+						// Emit a tool card for each tool call in the assistant message.
+						for (const call of messageToolCalls(msg)) {
+							const card: TimelineItem = {
+								id: call.id || `hist-tool-${history.length}`,
+								role: "tool",
+								title: call.name,
+								text: "",
+								status: "DONE",
+								streaming: false,
+								toolName: call.name,
+								toolArgs: call.args,
+							};
+							history.push(card);
+							if (call.id) toolCardById.set(call.id, card);
+						}
+					} else if (role === "toolResult" || role === "tool") {
+						const toolCallId = String(msg.toolCallId ?? msg.tool_call_id ?? "");
+						const resultText = toolResultText(msg.content);
+						const isError = msg.isError === true || msg.is_error === true;
+						const existing = toolCallId ? toolCardById.get(toolCallId) : undefined;
+						if (existing) {
+							existing.toolResult = resultText;
+							existing.isError = isError;
+							existing.status = isError ? "ERROR" : "DONE";
+						} else {
+							// Orphan result (no matching call) — still show it.
+							history.push({ id: `hist-${history.length}`, role: "tool", title: String(msg.toolName ?? msg.name ?? "tool"), text: "", status: isError ? "ERROR" : "DONE", streaming: false, toolName: String(msg.toolName ?? msg.name ?? "tool"), toolResult: resultText, isError });
+						}
 					}
 				}
 				if (!cancelled && history.length > 0) {
@@ -204,6 +283,10 @@ export default function ChatView({
 					updateItems((prev) =>
 						prev.map((it) => (it.id === id ? { ...it, text: it.text + chunk.delta } : it)),
 					);
+				} else if (chunk.kind === "thinking_delta" && typeof chunk.delta === "string") {
+					updateItems((prev) =>
+						prev.map((it) => (it.id === id ? { ...it, thinking: (it.thinking ?? "") + chunk.delta } : it)),
+					);
 				}
 				break;
 			}
@@ -213,6 +296,7 @@ export default function ChatView({
 					const payload = event.payload as Record<string, unknown> | undefined;
 					const content = payload?.content;
 					const text = content ? messageText({ content }) : "";
+					const thinking = content ? messageThinking({ content }) : "";
 					const images = content ? messageImages({ content }) : [];
 					updateItems((prev) =>
 						prev.map((it) =>
@@ -220,6 +304,7 @@ export default function ChatView({
 								? {
 										...it,
 										...(text ? { text } : {}),
+										...(thinking ? { thinking } : {}),
 										...(images.length > 0 ? { images } : {}),
 										status: "DONE",
 										streaming: false,
@@ -358,8 +443,23 @@ export default function ChatView({
 
 	const isRunning = state?.isStreaming ?? false;
 
+	// Session title: first user message (like Codex/ChatGPT), else workspace name.
+	const firstUserText = items.find((it) => it.role === "user" && it.text.trim())?.text.trim() ?? "";
+	const wsName = workspace ? workspace.replace(/\/+$/, "").split("/").pop() || "" : "";
+	const sessionTitle = firstUserText
+		? (firstUserText.length > 60 ? firstUserText.slice(0, 60).trimEnd() + "…" : firstUserText)
+		: wsName || "New Chat";
+
 	return (
 		<div className="flex h-full flex-col">
+			<div
+				data-tauri-drag-region
+				className="flex h-11 shrink-0 items-center border-b border-border bg-surface/80 px-6 backdrop-blur"
+			>
+				<span className="truncate text-sm font-medium text-fg" title={firstUserText || sessionTitle}>
+					{sessionTitle}
+				</span>
+			</div>
 			<div ref={scrollRef} className="flex-1 overflow-y-auto">
 				{items.length === 0 ? (
 					<div className="flex min-h-[calc(100vh-200px)] items-center justify-center">
