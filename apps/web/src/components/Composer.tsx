@@ -79,13 +79,14 @@ export function Composer({
 		let cancelled = false;
 		(async () => {
 			try {
-				const r = await sendCommandAwait<{ models: ModelInfo[] }>({
-					type: "get_available_models",
-				});
+				const r = await sendCommandAwait<{ models: ModelInfo[] }>(
+					{ type: "get_available_models" },
+					30000,
+				);
 				if (cancelled) return;
 				setModels(r.data?.models ?? []);
-			} catch (e) {
-				console.error("[composer] get_available_models failed:", e);
+			} catch {
+				// Silently ignore — models list will be empty until sidecar recovers.
 			}
 		})();
 		return () => {

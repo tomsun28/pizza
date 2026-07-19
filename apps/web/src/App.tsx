@@ -37,8 +37,10 @@ function AppInner() {
 		refreshWorkspaces();
 	}, [refreshWorkspaces]);
 
+	const [initError, setInitError] = useState<string | null>(null);
 	const startWithWorkspace = useCallback(async (cwd?: string) => {
 		setWaitingForWorkspace(true);
+		setInitError(null);
 		try {
 			const initialState = await initSidecar(cwd);
 			// Expand ~ to home directory so workspace state matches Rust side.
@@ -66,7 +68,14 @@ function AppInner() {
 			}
 			refreshWorkspaces();
 		} catch (e) {
-			console.error("[init] FAILED:", e);
+			const msg = e instanceof Error ? e.message : String(e);
+			console.error("[init] FAILED:", msg);
+			setInitError(msg);
+			// If the directory doesn't exist, refresh workspaces so the stale
+			// entry can be cleaned up by the user.
+			if (msg.includes("does not exist")) {
+				refreshWorkspaces();
+			}
 		} finally {
 			setWaitingForWorkspace(false);
 		}
@@ -158,6 +167,30 @@ function AppInner() {
 		}, 800);
 		return () => clearTimeout(timer);
 	}, [sidecarReady, workspace]);
+
+	if (initError) {
+		return (
+			<PxlKitSurfaceProvider surface="pixel">
+				<div className="flex h-screen items-center justify-center bg-bg">
+					<div className="flex max-w-md flex-col items-center gap-4 px-6 text-center">
+						<BrandIcon size={48} className="text-danger" />
+						<p className="font-mono text-sm text-fg">Failed to start workspace</p>
+						<p className="font-mono text-xs text-muted">{initError}</p>
+						<button
+							type="button"
+							onClick={() => {
+								setInitError(null);
+								startWithWorkspace("~/.pizza/main");
+							}}
+							className="mt-2 rounded-md border border-border bg-surface-2 px-4 py-2 text-sm text-fg transition-colors hover:bg-surface-2/80"
+						>
+							Back to Chat
+						</button>
+					</div>
+				</div>
+			</PxlKitSurfaceProvider>
+		);
+	}
 
 	if (waitingForWorkspace && !sidecarReady) {
 		return (

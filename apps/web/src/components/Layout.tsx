@@ -246,10 +246,10 @@ export default function Layout({
 								const isMenuOpen = menuOpenId === ws.workspace_id;
 								return (
 									<div key={ws.workspace_id} className="group relative">
-										<button
+										<div
 											onClick={() => onSelectWorkspace?.(ws.cwd)}
 											className={cn(
-												"flex w-full items-center gap-2 rounded-md border px-2 py-1.5 text-left transition-colors",
+												"flex w-full cursor-pointer items-center gap-2 rounded-md border px-2 py-1.5 text-left transition-colors",
 												isActive
 													? "border-accent bg-accent/10"
 													: "border-transparent hover:bg-surface-2",
@@ -287,7 +287,7 @@ export default function Layout({
 											>
 												<MoreHorizontal className="h-3.5 w-3.5" />
 											</button>
-										</button>
+										</div>
 										{isMenuOpen && (
 											<WorkspaceMenu
 												ws={ws}

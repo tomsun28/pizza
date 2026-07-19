@@ -158,6 +158,11 @@ pub async fn init_sidecar(
 	};
 	log_file(&format!("init_sidecar: cwd={}", cwd));
 
+	// Validate that the cwd directory exists before attempting to spawn.
+	if !std::path::Path::new(&cwd).is_dir() {
+		return Err(format!("Directory does not exist: {}", cwd));
+	}
+
 	// Check if sidecar for this cwd already exists.
 	let already_running = {
 		let sidecars = state.sidecars.lock().unwrap();
