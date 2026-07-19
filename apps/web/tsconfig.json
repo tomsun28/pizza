@@ -15,7 +15,7 @@
 		"baseUrl": ".",
 		"paths": {
 			"@/*": ["./src/*"],
-			"@pizza/protocol": ["../packages/protocol/index.ts"]
+			"@pizza/protocol": ["../../packages/protocol/index.ts"]
 		}
 	},
 	"include": ["src"]

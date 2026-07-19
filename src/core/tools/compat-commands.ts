@@ -463,7 +463,10 @@ async function runGrepWithNode(options: GrepOptions, context: CompatCommandConte
 		let fileMatched = false;
 		let selectedLineCount = 0;
 		let matchesForFile = 0;
-		const lines = source.content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+		// Drop the trailing empty element produced by a final newline so it
+		// is not counted as a line (matches GNU grep / ripgrep behavior).
+		const rawLines = source.content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+		const lines = rawLines.length > 0 && rawLines[rawLines.length - 1] === "" ? rawLines.slice(0, -1) : rawLines;
 		const emitted = new Set<number>();
 
 		for (let index = 0; index < lines.length; index++) {
