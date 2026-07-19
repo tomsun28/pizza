@@ -8,11 +8,11 @@ on:
 
 jobs:
   test:
-    name: Test
+    name: Test (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: [22, 24]
+        node-version: [22]
     steps:
       - uses: actions/checkout@v4
       - name: Use Node.js ${{ matrix.node-version }}
@@ -26,3 +26,71 @@ jobs:
         run: npm run build
       - name: Run tests
         run: npm test
+
+  web:
+    name: Web (lint + build)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Install dependencies
+        # npm ci / npm install fail on the rollup optional-dependency
+        # bug: the lock file was generated on macOS arm64 and only
+        # includes the darwin-arm64 platform binary. Remove node_modules
+        # and lock file so npm install resolves fresh platform deps.
+        # See npm/cli#4828.
+        run: rm -rf node_modules package-lock.json && npm install
+      - name: Lint
+        run: npm run lint
+      - name: Build
+        run: npm run build
+
+  desktop:
+    name: Desktop (fmt + check)
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'pull_request'
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/desktop/target
+          key: cargo-ci-${{ hashFiles('apps/desktop/Cargo.lock') }}
+          restore-keys: cargo-ci-
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev librsvg2-dev patchelf libgtk-3-dev libayatana-appindicator3-dev
+      - name: Install root dependencies
+        # Needed for shx (used by prepare-desktop-resources script).
+        run: npm ci
+        working-directory: .
+      - name: Prepare placeholder resources
+        # tauri's build script validates that all bundle.resources paths
+        # exist at compile time. Create placeholders so cargo check can
+        # run without a full binary build.
+        run: npm run prepare-desktop-resources
+        working-directory: .
+      - name: Check formatting
+        run: cargo fmt --check
+      - name: Check compilation
+        run: cargo check

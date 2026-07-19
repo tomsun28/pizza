@@ -8,7 +8,11 @@ use tauri::{AppHandle, Emitter, Manager};
 
 fn log_file(msg: &str) {
 	use std::io::Write;
-	if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/pizza-gui-bridge.log") {
+	if let Ok(mut f) = std::fs::OpenOptions::new()
+		.create(true)
+		.append(true)
+		.open("/tmp/pizza-gui-bridge.log")
+	{
 		let _ = writeln!(f, "{}", msg);
 	}
 }
@@ -49,25 +53,67 @@ fn find_node() -> Option<String> {
 	Some("node".to_string())
 }
 
-fn resolve_pizza_command() -> (String, Vec<String>) {
+fn resolve_pizza_command(app: &AppHandle) -> (String, Vec<String>) {
+	// 1. PIZZA_BIN env var — explicit override (any executable, including a
+	//    manually-built `dist/pizza` Bun binary).
 	if let Ok(bin) = std::env::var("PIZZA_BIN") {
 		let parts: Vec<&str> = bin.split_whitespace().collect();
 		if parts.len() >= 2 {
 			return (
 				parts[0].to_string(),
-				parts[1..].iter().map(|s| s.to_string()).chain(["--mode".to_string(), "rpc".to_string()]).collect(),
+				parts[1..]
+					.iter()
+					.map(|s| s.to_string())
+					.chain(["--mode".to_string(), "rpc".to_string()])
+					.collect(),
 			);
 		}
-		return (parts[0].to_string(), vec!["--mode".to_string(), "rpc".to_string()]);
+		return (
+			parts[0].to_string(),
+			vec!["--mode".to_string(), "rpc".to_string()],
+		);
 	}
+
+	// 2. Packaged binary bundled via tauri.conf.json `bundle.resources`.
+	//    The resource_dir is the runtime location of bundled assets
+	//    (e.g. inside the .app bundle on macOS). When present, this makes
+	//    the desktop app self-contained — no Node.js required.
+	//    On Windows the binary has a .exe extension.
+	if let Ok(resource_dir) = app.path().resource_dir() {
+		let pizza_bin = resource_dir.join(if cfg!(windows) { "pizza.exe" } else { "pizza" });
+		if pizza_bin.exists() {
+			log_file(&format!(
+				"resolve_pizza_command: using bundled binary at {}",
+				pizza_bin.display()
+			));
+			return (
+				pizza_bin.to_string_lossy().to_string(),
+				vec!["--mode".to_string(), "rpc".to_string()],
+			);
+		}
+	}
+
+	// 3. Dev fallback: run `node dist/src/cli.js` from the source tree.
 	let cli_js = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 		.join("..")
 		.join("..")
 		.join("dist")
+		.join("src")
 		.join("cli.js");
 	let node = find_node().unwrap_or_else(|| "node".to_string());
-	log_file(&format!("resolve_pizza_command: node={}, cli_js={}", node, cli_js.display()));
-	(node, vec![cli_js.to_string_lossy().to_string(), "--mode".to_string(), "rpc".to_string()])
+	log_file(&format!(
+		"resolve_pizza_command: dev fallback, node={}, cli_js={}",
+		node,
+		cli_js.display()
+	));
+	(
+		node,
+		vec![
+			cli_js.to_string_lossy().to_string(),
+			"--mode".to_string(),
+			"rpc".to_string(),
+		],
+	)
 }
 
 /// Sidecar entry: the process + which windows are using it.
@@ -171,7 +217,10 @@ pub async fn init_sidecar(
 
 	if already_running {
 		// Just switch active pointer.
-		log_file(&format!("init_sidecar: sidecar already running for cwd={}, switching active", cwd));
+		log_file(&format!(
+			"init_sidecar: sidecar already running for cwd={}, switching active",
+			cwd
+		));
 		{
 			let mut active = state.active.lock().unwrap();
 			active.insert(window_label.clone(), cwd.clone());
@@ -184,8 +233,14 @@ pub async fn init_sidecar(
 			let mut sidecars = state.sidecars.lock().unwrap();
 			let sidecar = sidecars.get_mut(&cwd).ok_or("Sidecar disappeared")?;
 			use std::io::Write;
-			sidecar.stdin.write_all(line.as_bytes()).map_err(|e| format!("write: {e}"))?;
-			sidecar.stdin.write_all(b"\n").map_err(|e| format!("write nl: {e}"))?;
+			sidecar
+				.stdin
+				.write_all(line.as_bytes())
+				.map_err(|e| format!("write: {e}"))?;
+			sidecar
+				.stdin
+				.write_all(b"\n")
+				.map_err(|e| format!("write nl: {e}"))?;
 			sidecar.stdin.flush().map_err(|e| format!("flush: {e}"))?;
 		}
 		// We can't easily read the response synchronously here since the reader
@@ -198,7 +253,7 @@ pub async fn init_sidecar(
 	// Multi-sidecar: never kill the old sidecar on switch — it persists.
 	// Just update the active workspace mapping for this window (done below).
 
-	let (program, args) = resolve_pizza_command();
+	let (program, args) = resolve_pizza_command(window.app_handle());
 	let mut cmd = Command::new(&program);
 	cmd.args(&args);
 	cmd.current_dir(&cwd);
@@ -220,8 +275,12 @@ pub async fn init_sidecar(
 	{
 		use std::io::Write;
 		let mut stdin_ref = &stdin;
-		stdin_ref.write_all(line.as_bytes()).map_err(|e| format!("write: {e}"))?;
-		stdin_ref.write_all(b"\n").map_err(|e| format!("write nl: {e}"))?;
+		stdin_ref
+			.write_all(line.as_bytes())
+			.map_err(|e| format!("write: {e}"))?;
+		stdin_ref
+			.write_all(b"\n")
+			.map_err(|e| format!("write nl: {e}"))?;
 		stdin_ref.flush().map_err(|e| format!("flush: {e}"))?;
 	}
 	log_file("init_sidecar: get_state sent, reading first response");
@@ -229,7 +288,9 @@ pub async fn init_sidecar(
 	// Read first line from stdout synchronously (the get_state response).
 	let mut reader = BufReader::new(stdout);
 	let mut first_line = String::new();
-	reader.read_line(&mut first_line).map_err(|e| format!("read response: {e}"))?;
+	reader
+		.read_line(&mut first_line)
+		.map_err(|e| format!("read response: {e}"))?;
 	log_file(&format!("init_sidecar: first line = {}", first_line.trim()));
 
 	// Parse the response.
@@ -277,7 +338,11 @@ pub async fn init_sidecar(
 					let active_map = active.active.lock().unwrap();
 					// Emit to ALL windows — include _cwd so frontend can filter.
 					// This ensures events are received even when the workspace is not active.
-					let etype = parsed.get("type").and_then(|t| t.as_str()).unwrap_or("").to_string();
+					let etype = parsed
+						.get("type")
+						.and_then(|t| t.as_str())
+						.unwrap_or("")
+						.to_string();
 					if etype == "response" {
 						// Add _cwd to response for frontend routing.
 						if let Some(obj) = parsed.as_object_mut() {
@@ -290,15 +355,23 @@ pub async fn init_sidecar(
 								"response" => {
 									let mut tagged = parsed.clone();
 									if let Some(obj) = tagged.as_object_mut() {
-										obj.insert("_cwd".to_string(), Value::String(reader_cwd.clone()));
+										obj.insert(
+											"_cwd".to_string(),
+											Value::String(reader_cwd.clone()),
+										);
 									}
 									let _ = win.emit("rpc_response", tagged);
 								}
-								"extension_ui_request" => { let _ = win.emit("extension_ui_request", parsed.clone()); }
+								"extension_ui_request" => {
+									let _ = win.emit("extension_ui_request", parsed.clone());
+								}
 								_ => {
 									let mut tagged = parsed.clone();
 									if let Some(obj) = tagged.as_object_mut() {
-										obj.insert("_cwd".to_string(), Value::String(reader_cwd.clone()));
+										obj.insert(
+											"_cwd".to_string(),
+											Value::String(reader_cwd.clone()),
+										);
 									}
 									let _ = win.emit("rpc_event", tagged);
 								}
@@ -319,7 +392,10 @@ pub async fn init_sidecar(
 		let active_map = active.active.lock().unwrap();
 		for (label, _ac_cwd) in active_map.iter() {
 			if let Some(win) = app_ref.get_webview_window(label) {
-				let _ = win.emit("sidecar_exit", serde_json::json!({ "code": null, "cwd": reader_cwd }));
+				let _ = win.emit(
+					"sidecar_exit",
+					serde_json::json!({ "code": null, "cwd": reader_cwd }),
+				);
 			}
 		}
 	});
@@ -345,7 +421,10 @@ pub fn rpc_command(
 ) -> Result<String, String> {
 	let window_label = window.label();
 	log_file(&format!("rpc_command [{}]: {}", window_label, command));
-	let mut obj = command.as_object().cloned().ok_or("command must be an object")?;
+	let mut obj = command
+		.as_object()
+		.cloned()
+		.ok_or("command must be an object")?;
 	let id = if let Some(existing) = obj.get("id").and_then(|v| v.as_str()) {
 		existing.to_string()
 	} else {
@@ -365,8 +444,14 @@ pub fn rpc_command(
 
 	let mut sidecars = state.sidecars.lock().unwrap();
 	let sidecar = sidecars.get_mut(&cwd).ok_or("Sidecar is not running")?;
-	sidecar.stdin.write_all(line.as_bytes()).map_err(|e| format!("write: {e}"))?;
-	sidecar.stdin.write_all(b"\n").map_err(|e| format!("write nl: {e}"))?;
+	sidecar
+		.stdin
+		.write_all(line.as_bytes())
+		.map_err(|e| format!("write: {e}"))?;
+	sidecar
+		.stdin
+		.write_all(b"\n")
+		.map_err(|e| format!("write nl: {e}"))?;
 	sidecar.stdin.flush().map_err(|e| format!("flush: {e}"))?;
 	Ok(id)
 }
@@ -376,19 +461,26 @@ pub fn rpc_command(
 pub async fn new_workspace(app: AppHandle) -> Result<String, String> {
 	let label = format!("workspace-{}", uuid::Uuid::new_v4().simple());
 	log_file(&format!("new_workspace: creating window={}", label));
-	let _window = tauri::WebviewWindowBuilder::new(
-		&app,
-		&label,
-		tauri::WebviewUrl::App("index.html".into()),
-	)
-	.title("Pizza")
-	.inner_size(1200.0, 800.0)
-	.min_inner_size(720.0, 480.0)
-	.title_bar_style(tauri::TitleBarStyle::Transparent)
-	.hidden_title(true)
-	.background_color(tauri::webview::Color(18, 18, 18, 255))
-	.build()
-	.map_err(|e| format!("Failed to create window: {e}"))?;
+	let _window = {
+		let mut builder = tauri::WebviewWindowBuilder::new(
+			&app,
+			&label,
+			tauri::WebviewUrl::App("index.html".into()),
+		)
+		.title("Pizza")
+		.inner_size(1200.0, 800.0)
+		.min_inner_size(720.0, 480.0)
+		.background_color(tauri::webview::Color(18, 18, 18, 255));
+		#[cfg(target_os = "macos")]
+		{
+			builder = builder
+				.title_bar_style(tauri::TitleBarStyle::Transparent)
+				.hidden_title(true);
+		}
+		builder
+			.build()
+			.map_err(|e| format!("Failed to create window: {e}"))?
+	};
 	Ok(label)
 }
 
@@ -396,7 +488,10 @@ pub async fn new_workspace(app: AppHandle) -> Result<String, String> {
 #[tauri::command]
 pub async fn list_workspaces() -> Result<Vec<Value>, String> {
 	let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
-	let workspaces_dir = PathBuf::from(&home).join(".pizza").join("agent").join("workspaces");
+	let workspaces_dir = PathBuf::from(&home)
+		.join(".pizza")
+		.join("agent")
+		.join("workspaces");
 
 	if !workspaces_dir.exists() {
 		return Ok(Vec::new());
@@ -424,8 +519,14 @@ pub async fn list_workspaces() -> Result<Vec<Value>, String> {
 
 	// Sort by last_accessed_at descending
 	workspaces.sort_by(|a, b| {
-		let a_time = a.get("last_accessed_at").and_then(|v| v.as_i64()).unwrap_or(0);
-		let b_time = b.get("last_accessed_at").and_then(|v| v.as_i64()).unwrap_or(0);
+		let a_time = a
+			.get("last_accessed_at")
+			.and_then(|v| v.as_i64())
+			.unwrap_or(0);
+		let b_time = b
+			.get("last_accessed_at")
+			.and_then(|v| v.as_i64())
+			.unwrap_or(0);
 		b_time.cmp(&a_time)
 	});
 
@@ -455,10 +556,18 @@ pub async fn delete_workspace(
 	let cwd: Option<String> = if meta_path.exists() {
 		if let Ok(raw) = std::fs::read_to_string(&meta_path) {
 			if let Ok(meta) = serde_json::from_str::<Value>(&raw) {
-				meta.get("cwd").and_then(|v| v.as_str()).map(|s| s.to_string())
-			} else { None }
-		} else { None }
-	} else { None };
+				meta.get("cwd")
+					.and_then(|v| v.as_str())
+					.map(|s| s.to_string())
+			} else {
+				None
+			}
+		} else {
+			None
+		}
+	} else {
+		None
+	};
 
 	// Kill sidecar if running.
 	if let Some(ref cwd) = cwd {
@@ -516,7 +625,10 @@ pub struct ProviderInfo {
 #[tauri::command]
 pub async fn list_providers() -> Result<Vec<ProviderInfo>, String> {
 	let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
-	let auth_path = PathBuf::from(&home).join(".pizza").join("agent").join("auth.json");
+	let auth_path = PathBuf::from(&home)
+		.join(".pizza")
+		.join("agent")
+		.join("auth.json");
 
 	let mut auth_data: serde_json::Map<String, Value> = serde_json::Map::new();
 	if auth_path.exists() {
@@ -531,9 +643,20 @@ pub async fn list_providers() -> Result<Vec<ProviderInfo>, String> {
 
 	// Built-in known providers (from pi-ai)
 	let builtin = [
-		"anthropic", "openai", "google", "zai", "openrouter",
-		"groq", "mistral", "deepseek", "xai", "fireworks",
-		"together", "perplexity", "cohere", "amazon-bedrock",
+		"anthropic",
+		"openai",
+		"google",
+		"zai",
+		"openrouter",
+		"groq",
+		"mistral",
+		"deepseek",
+		"xai",
+		"fireworks",
+		"together",
+		"perplexity",
+		"cohere",
+		"amazon-bedrock",
 	];
 
 	let mut providers: Vec<ProviderInfo> = Vec::new();
@@ -541,7 +664,10 @@ pub async fn list_providers() -> Result<Vec<ProviderInfo>, String> {
 	for id in &builtin {
 		let cred = auth_data.get(*id);
 		let has_api_key = cred.is_some();
-		let auth_type = cred.and_then(|c| c.get("type")).and_then(|t| t.as_str()).map(|s| s.to_string());
+		let auth_type = cred
+			.and_then(|c| c.get("type"))
+			.and_then(|t| t.as_str())
+			.map(|s| s.to_string());
 		providers.push(ProviderInfo {
 			id: id.to_string(),
 			has_api_key,
@@ -553,7 +679,10 @@ pub async fn list_providers() -> Result<Vec<ProviderInfo>, String> {
 	for (key, _val) in &auth_data {
 		if !builtin.contains(&key.as_str()) {
 			let cred = auth_data.get(key);
-			let auth_type = cred.and_then(|c| c.get("type")).and_then(|t| t.as_str()).map(|s| s.to_string());
+			let auth_type = cred
+				.and_then(|c| c.get("type"))
+				.and_then(|t| t.as_str())
+				.map(|s| s.to_string());
 			providers.push(ProviderInfo {
 				id: key.clone(),
 				has_api_key: true,
@@ -596,7 +725,8 @@ pub async fn set_provider_api_key(provider: String, api_key: String) -> Result<(
 	);
 
 	// Write back
-	let json = serde_json::to_string_pretty(&Value::Object(auth_data)).map_err(|e| format!("serialize: {e}"))?;
+	let json = serde_json::to_string_pretty(&Value::Object(auth_data))
+		.map_err(|e| format!("serialize: {e}"))?;
 	std::fs::write(&auth_path, &json).map_err(|e| format!("write: {e}"))?;
 
 	// Set file permissions to 600
@@ -614,7 +744,10 @@ pub async fn set_provider_api_key(provider: String, api_key: String) -> Result<(
 #[tauri::command]
 pub async fn remove_provider_api_key(provider: String) -> Result<(), String> {
 	let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
-	let auth_path = PathBuf::from(&home).join(".pizza").join("agent").join("auth.json");
+	let auth_path = PathBuf::from(&home)
+		.join(".pizza")
+		.join("agent")
+		.join("auth.json");
 
 	if !auth_path.exists() {
 		return Ok(()); // Nothing to remove
@@ -630,18 +763,22 @@ pub async fn remove_provider_api_key(provider: String) -> Result<(), String> {
 	let json = serde_json::to_string_pretty(&parsed).map_err(|e| format!("serialize: {e}"))?;
 	std::fs::write(&auth_path, &json).map_err(|e| format!("write: {e}"))?;
 
-	log_file(&format!("remove_provider_api_key: removed key for {}", provider));
+	log_file(&format!(
+		"remove_provider_api_key: removed key for {}",
+		provider
+	));
 	Ok(())
 }
 
 /// Set the window background color (for theme adaptation).
 #[tauri::command]
 pub async fn set_window_background(app: AppHandle, r: u8, g: u8, b: u8) -> Result<(), String> {
-	let window = app.get_webview_window("main").or_else(|| {
-		app.webview_windows().into_iter().next().map(|(_, w)| w)
-	});
+	let window = app
+		.get_webview_window("main")
+		.or_else(|| app.webview_windows().into_iter().next().map(|(_, w)| w));
 	if let Some(window) = window {
-		window.set_background_color(Some(tauri::webview::Color(r, g, b, 255)))
+		window
+			.set_background_color(Some(tauri::webview::Color(r, g, b, 255)))
 			.map_err(|e| format!("set_background_color: {e}"))?;
 	}
 	Ok(())

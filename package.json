@@ -8,18 +8,18 @@
 		"configDir": ".pizza"
 	},
 	"bin": {
-		"pizza": "dist/cli.js"
+		"pizza": "dist/src/cli.js"
 	},
-	"main": "./dist/index.js",
-	"types": "./dist/index.d.ts",
+	"main": "./dist/src/index.js",
+	"types": "./dist/src/index.d.ts",
 	"exports": {
 		".": {
-			"types": "./dist/index.d.ts",
-			"import": "./dist/index.js"
+			"types": "./dist/src/index.d.ts",
+			"import": "./dist/src/index.js"
 		},
 		"./hooks": {
-			"types": "./dist/core/hooks/index.d.ts",
-			"import": "./dist/core/hooks/index.js"
+			"types": "./dist/src/core/hooks/index.d.ts",
+			"import": "./dist/src/core/hooks/index.js"
 		}
 	},
 	"files": [
@@ -28,12 +28,15 @@
 	"scripts": {
 		"clean": "shx rm -rf dist",
 		"dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
-		"start": "node dist/cli.js",
-		"build": "tsc -p tsconfig.build.json && shx chmod +x dist/cli.js && npm run copy-assets",
+		"start": "node dist/src/cli.js",
+		"build": "tsc -p tsconfig.build.json && shx chmod +x dist/src/cli.js && npm run copy-assets",
 		"build:release": "npm run build && npm run vendor-tools",
-		"build:binary": "npm run build && npm run vendor-tools && bun build --compile ./dist/bun/cli.js --outfile dist/pizza && npm run copy-binary-assets",
-		"copy-assets": "shx mkdir -p dist/packages/tui/theme && shx cp packages/tui/theme/*.json dist/packages/tui/theme/ && shx mkdir -p dist/packages/tui/assets && shx cp packages/tui/assets/*.png dist/packages/tui/assets/ && shx mkdir -p dist/core/export-html/vendor && shx cp src/core/export-html/template.html src/core/export-html/template.css src/core/export-html/template.js dist/core/export-html/ && shx cp src/core/export-html/vendor/*.js dist/core/export-html/vendor/",
-		"copy-binary-assets": "shx cp package.json dist/ && shx cp README.md dist/ && if [ -f CHANGELOG.md ]; then shx cp CHANGELOG.md dist/; fi && shx mkdir -p dist/theme && shx cp packages/tui/theme/*.json dist/theme/ && shx mkdir -p dist/assets && shx cp packages/tui/assets/*.png dist/assets/ && shx mkdir -p dist/export-html/vendor && shx cp src/core/export-html/template.html dist/export-html/ && shx cp src/core/export-html/vendor/*.js dist/export-html/vendor/ && shx cp -r docs dist/ && shx cp -r examples dist/ && shx cp node_modules/@silvia-odwyer/photon-node/photon_rs_bg.wasm dist/",
+		"build:binary": "npm run build && npm run vendor-tools && bun build --compile ./dist/src/bun/cli.js --outfile dist/pizza && npm run copy-binary-assets",
+		"build:desktop": "npm run build:binary && cargo tauri build --manifest-path apps/desktop/Cargo.toml",
+		"dev:desktop": "npm run build && npm run prepare-desktop-resources && cargo tauri dev --manifest-path apps/desktop/Cargo.toml",
+		"prepare-desktop-resources": "shx mkdir -p dist/theme dist/assets dist/export-html && shx touch dist/pizza dist/photon_rs_bg.wasm && test -f dist/package.json || shx cp package.json dist/",
+		"copy-assets": "shx mkdir -p dist/packages/tui/theme && shx cp packages/tui/theme/*.json dist/packages/tui/theme/ && shx mkdir -p dist/packages/tui/assets && shx cp packages/tui/assets/*.png dist/packages/tui/assets/ && shx mkdir -p dist/src/core/export-html/vendor && shx cp src/core/export-html/template.html src/core/export-html/template.css src/core/export-html/template.js dist/src/core/export-html/ && shx cp src/core/export-html/vendor/*.js dist/src/core/export-html/vendor/",
+		"copy-binary-assets": "shx cp package.json dist/ && shx cp README.md dist/ && if [ -f CHANGELOG.md ]; then shx cp CHANGELOG.md dist/; fi && shx mkdir -p dist/theme && shx cp packages/tui/theme/*.json dist/theme/ && shx mkdir -p dist/assets && shx cp packages/tui/assets/*.png dist/assets/ && shx mkdir -p dist/export-html/vendor && shx cp src/core/export-html/template.html dist/export-html/ && shx cp src/core/export-html/vendor/*.js dist/export-html/vendor/ && if [ -d docs ]; then shx cp -r docs dist/; fi && if [ -d examples ]; then shx cp -r examples dist/; fi && shx cp node_modules/@silvia-odwyer/photon-node/photon_rs_bg.wasm dist/",
 		"vendor-tools": "node scripts/download-vendor-tools.mjs",
 		"test": "PIZZA_OFFLINE=1 vitest --run --no-file-parallelism --poolOptions.forks.singleFork",
 		"test:headless": "PIZZA_OFFLINE=1 vitest --run --no-file-parallelism --poolOptions.forks.singleFork",
