@@ -73,8 +73,10 @@ jobs:
       - name: Install web dependencies
         # Remove node_modules and lock file so npm install resolves
         # fresh platform-specific rollup optional deps (npm/cli#4828).
+        # Use bash shell for `rm -rf` compatibility on Windows.
         run: rm -rf node_modules package-lock.json && npm install
         working-directory: apps/web
+        shell: bash
 
       - name: Build and bundle
         run: npm run build:desktop
