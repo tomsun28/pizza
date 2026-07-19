@@ -137,8 +137,12 @@ function AppInner() {
 				const typed = event as { type: string; _cwd?: string };
 				// Only process state updates for the active workspace.
 				if (typed._cwd && typed._cwd !== workspace) return;
-				if (typed.type === "MODEL_CHANGED" || typed.type === "THINKING_LEVEL_CHANGED" || typed.type === "AGENT_TURN_COMPLETED") {
-					void sendCommandAwait<RpcSessionState>({ type: "get_state" })
+				// Refresh state on model/thinking changes, and when the agent
+				// turn starts (isStreaming → true) or completes (isStreaming → false).
+				// Skip intermediate AGENT_TURN_END/REQUESTED during multi-tool turns
+				// to avoid flooding get_state requests that time out.
+				if (typed.type === "MODEL_CHANGED" || typed.type === "THINKING_LEVEL_CHANGED" || typed.type === "AGENT_TURN_COMPLETED" || typed.type === "AGENT_TURN_START") {
+					void sendCommandAwait<RpcSessionState>({ type: "get_state" }, 5000)
 						.then((r) => setState(r.data ?? null))
 						.catch(() => {});
 				}

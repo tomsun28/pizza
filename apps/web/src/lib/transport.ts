@@ -42,17 +42,18 @@ export async function sendCommandAwait<T = unknown>(
 ): Promise<RpcResponse<T>> {
 	if (isTauri()) {
 		const { listen } = await import("@tauri-apps/api/event");
-		// Register listener BEFORE sending to avoid race condition where
-		// the response arrives before we start listening.
+		// Generate the ID BEFORE sending so the listener can match the response
+		// immediately, even if the sidecar responds before sendCommandRaw resolves.
+		const id = (command.id as string) ?? crypto.randomUUID();
+		command.id = id;
 		return new Promise((resolve, reject) => {
-			let sentId: string | undefined;
 			const timer = setTimeout(() => {
 				unlisten.then((fn) => fn()).catch(() => {});
 				reject(new Error(`Command "${command.type}" timed out after ${timeoutMs}ms`));
 			}, timeoutMs);
 			const unlisten = listen<RpcResponse<T>>("rpc_response", (event) => {
 				const payload = event.payload;
-				if (sentId !== undefined && payload.id === sentId) {
+				if (payload.id === id) {
 					clearTimeout(timer);
 					unlisten.then((fn) => fn()).catch(() => {});
 					if (payload.success) {
@@ -62,10 +63,7 @@ export async function sendCommandAwait<T = unknown>(
 					}
 				}
 			});
-			// Now send the command — sentId will be set once invoke returns.
-			sendCommandRaw(command).then((id) => {
-				sentId = id;
-			}).catch((e) => {
+			sendCommandRaw(command).catch((e) => {
 				clearTimeout(timer);
 				unlisten.then((fn) => fn()).catch(() => {});
 				reject(e);

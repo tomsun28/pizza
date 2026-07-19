@@ -128,9 +128,6 @@ export default function ChatView({
 	const itemsByWs = useRef<Map<string, TimelineItem[]>>(new Map());
 	const seenIdsByWs = useRef<Map<string, Set<string>>>(new Map());
 	const activeAssistantByWs = useRef<Map<string, string | null>>(new Map());
-	// Track which workspaces have had their history loaded from the sidecar.
-	// Uses useState so it resets on HMR (unlike useRef which persists across HMR).
-	const [historyLoadedWs, setHistoryLoadedWs] = useState<Set<string>>(new Set());
 	const itemsRef = useRef<TimelineItem[]>([]);
 	itemsRef.current = items;
 	const prevWsRef = useRef<string | null>(null);
@@ -158,15 +155,15 @@ export default function ChatView({
 	// Load history from sidecar when sidecar becomes ready or workspace changes.
 	useEffect(() => {
 		if (!sidecarReady || !workspace) return;
-		// Only load history once per workspace (from sidecar). The save/restore
-		// mechanism handles instant display of cached items; this fills in
-		// history the first time we visit a workspace.
-		if (historyLoadedWs.has(workspace)) return;
-		setHistoryLoadedWs((prev) => new Set(prev).add(workspace));
+		// If we already have cached items for this workspace (from a previous
+		// visit this session), don't reload — the save/restore mechanism already
+		// restored them. Otherwise, fetch from sidecar.
+		const cached = itemsByWs.current.get(workspace);
+		if (cached && cached.length > 0) return;
 		let cancelled = false;
 		(async () => {
 			try {
-				const r = await sendCommandAwait({ type: "get_messages" });
+				const r = await sendCommandAwait({ type: "get_messages" }, 30000);
 				if (cancelled) return;
 				const data = (r as unknown as Record<string, unknown>)?.data as Record<string, unknown> | undefined;
 				const messages = (data?.messages as Array<Record<string, unknown>> | undefined) ?? [];
@@ -219,8 +216,8 @@ export default function ChatView({
 				if (!cancelled && history.length > 0) {
 					setItems(history);
 				}
-			} catch (e) {
-				console.error("[ChatView] loadHistory failed:", e);
+			} catch {
+				// Silently ignore — history will load on next workspace switch.
 			}
 		})();
 		return () => { cancelled = true; };
@@ -452,7 +449,23 @@ export default function ChatView({
 
 	const handleAbort = useCallback(async () => {
 		try {
-			await sendCommandAwait({ type: "abort" });
+			await sendCommandAwait({ type: "abort" }, 5000);
+			// Abort may not always emit AGENT_TURN_COMPLETED, so proactively
+			// refresh state to update isStreaming and flip the button back.
+			void sendCommandAwait<RpcSessionState>({ type: "get_state" })
+				.then((r) => {
+					// setState lives in App.tsx — we can't call it directly, but
+					// the App-level event listener will also catch any turn-completed
+					// event. As a fallback, mark the active assistant item as done.
+					setItems((prev) =>
+						prev.map((it) =>
+							it.role === "assistant" && it.streaming
+								? { ...it, status: "DONE", streaming: false }
+								: it,
+						),
+					);
+				})
+				.catch(() => {});
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		}
