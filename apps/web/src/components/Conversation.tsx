@@ -152,11 +152,16 @@ function ToolCard({ item }: { item: TimelineItem }) {
 	);
 }
 
-function AssistantActions({ text }: { text: string }) {
+function AssistantActions({ text, visible }: { text: string; visible: boolean }) {
 	const [copied, copy] = useCopy();
 	const [feedback, setFeedback] = useState<null | "up" | "down">(null);
 	return (
-		<div className="mt-2 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+		<div
+			className={cn(
+				"mt-2 flex items-center gap-1 transition-opacity",
+				visible ? "opacity-100" : "pointer-events-none opacity-0",
+			)}
+		>
 			<button
 				type="button"
 				onClick={() => copy(text)}
@@ -193,8 +198,13 @@ function AssistantActions({ text }: { text: string }) {
 
 function UserBubble({ item }: { item: TimelineItem }) {
 	const [copied, copy] = useCopy();
+	const [hover, setHover] = useState(false);
 	return (
-		<div className="group my-4 flex flex-col items-end">
+		<div
+			className="my-4 flex flex-col items-end"
+			onMouseEnter={() => setHover(true)}
+			onMouseLeave={() => setHover(false)}
+		>
 			<div className="max-w-[85%] rounded-2xl rounded-br-md bg-surface-2 px-4 py-2.5">
 				{item.images && item.images.length > 0 && (
 					<div className="mb-2 flex flex-wrap gap-2">
@@ -218,7 +228,10 @@ function UserBubble({ item }: { item: TimelineItem }) {
 				<button
 					type="button"
 					onClick={() => copy(item.text)}
-					className="mt-1 flex h-7 w-7 items-center justify-center rounded-md text-muted opacity-0 transition-opacity hover:bg-surface-2 hover:text-fg group-hover:opacity-100"
+					className={cn(
+						"mt-1 flex h-7 w-7 items-center justify-center rounded-md text-muted transition-opacity hover:bg-surface-2 hover:text-fg",
+						hover ? "opacity-100" : "pointer-events-none opacity-0",
+					)}
 					title="Copy"
 				>
 					{copied ? <Check className="h-3.5 w-3.5 text-success" /> : <Copy className="h-3.5 w-3.5" />}
@@ -229,8 +242,13 @@ function UserBubble({ item }: { item: TimelineItem }) {
 }
 
 function AssistantMessage({ item }: { item: TimelineItem }) {
+	const [hover, setHover] = useState(false);
 	return (
-		<div className="group my-4 flex justify-start">
+		<div
+			className="my-4 flex justify-start"
+			onMouseEnter={() => setHover(true)}
+			onMouseLeave={() => setHover(false)}
+		>
 			<div className="w-full max-w-full">
 				{item.thinking && <Thinking text={item.thinking} streaming={item.streaming} />}
 				{item.images && item.images.length > 0 && (
@@ -255,7 +273,7 @@ function AssistantMessage({ item }: { item: TimelineItem }) {
 				{item.streaming && item.text && (
 					<span className="ml-0.5 animate-pulse text-accent">▋</span>
 				)}
-				{!item.streaming && item.text && <AssistantActions text={item.text} />}
+				{!item.streaming && item.text && <AssistantActions text={item.text} visible={hover} />}
 			</div>
 		</div>
 	);

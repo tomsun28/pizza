@@ -112,6 +112,7 @@ function AppInner() {
 
 	useEffect(() => {
 		if (!sidecarReady) return;
+		let cancelled = false;
 		const unlisteners: Array<() => void> = [];
 		(async () => {
 			const un1 = await subscribeSidecarExit((code, cwd) => {
@@ -121,6 +122,7 @@ function AppInner() {
 					setSidecarReady(false);
 				}
 			});
+			if (cancelled) { un1(); return; }
 			unlisteners.push(un1);
 			const un2 = await subscribeEvents((event) => {
 				const typed = event as { type: string; _cwd?: string };
@@ -132,9 +134,13 @@ function AppInner() {
 						.catch(() => {});
 				}
 			});
+			if (cancelled) { un2(); return; }
 			unlisteners.push(un2);
 		})();
-		return () => unlisteners.forEach((fn) => fn());
+		return () => {
+			cancelled = true;
+			unlisteners.forEach((fn) => fn());
+		};
 	}, [sidecarReady, workspace]);
 
 	useEffect(() => {

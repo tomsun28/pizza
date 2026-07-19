@@ -402,18 +402,24 @@ export default function ChatView({
 
 	useEffect(() => {
 		if (!sidecarReady) return;
+		let cancelled = false;
 		const unlisteners: Array<() => void> = [];
 		(async () => {
 			const un1 = await subscribeEvents((event) => handleEvent(event as TypedEvent));
+			if (cancelled) { un1(); return; }
 			unlisteners.push(un1);
 			const un2 = await subscribeSidecarExit((code) => {
 				if (code !== null) {
 					setError(`Sidecar exited (code ${code})`);
 				}
 			});
+			if (cancelled) { un2(); return; }
 			unlisteners.push(un2);
 		})();
-		return () => unlisteners.forEach((fn) => fn());
+		return () => {
+			cancelled = true;
+			unlisteners.forEach((fn) => fn());
+		};
 	}, [sidecarReady, handleEvent]);
 
 	const handleSend = useCallback(
