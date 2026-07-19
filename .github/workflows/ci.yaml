@@ -43,11 +43,12 @@ jobs:
           cache: 'npm'
           cache-dependency-path: apps/web/package-lock.json
       - name: Install dependencies
-        # npm ci fails on the rollup optional-dependency bug (lock file
-        # was generated on macOS and only includes darwin-arm64 platform
-        # binaries). npm install resolves the correct platform optional
-        # deps for the runner. See npm/cli#4828.
-        run: npm install
+        # npm ci / npm install fail on the rollup optional-dependency
+        # bug: the lock file was generated on macOS arm64 and only
+        # includes the darwin-arm64 platform binary. Remove node_modules
+        # and lock file so npm install resolves fresh platform deps.
+        # See npm/cli#4828.
+        run: rm -rf node_modules package-lock.json && npm install
       - name: Lint
         run: npm run lint
       - name: Build

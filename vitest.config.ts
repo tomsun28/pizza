@@ -4,7 +4,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    testTimeout: 30000, // 30 seconds for API calls
+    testTimeout: 60000, // 60 seconds — CI runners are slower than local
     server: {
       deps: {
         external: [/@silvia-odwyer\/photon-node/],

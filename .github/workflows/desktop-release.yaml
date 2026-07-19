@@ -71,9 +71,9 @@ jobs:
         run: npm ci
 
       - name: Install web dependencies
-        # npm install instead of npm ci to resolve platform-specific
-        # rollup optional deps (npm/cli#4828).
-        run: npm install
+        # Remove node_modules and lock file so npm install resolves
+        # fresh platform-specific rollup optional deps (npm/cli#4828).
+        run: rm -rf node_modules package-lock.json && npm install
         working-directory: apps/web
 
       - name: Build and bundle
