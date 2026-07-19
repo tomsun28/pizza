@@ -43,7 +43,11 @@ jobs:
           cache: 'npm'
           cache-dependency-path: apps/web/package-lock.json
       - name: Install dependencies
-        run: npm ci
+        # npm ci fails on the rollup optional-dependency bug (lock file
+        # was generated on macOS and only includes darwin-arm64 platform
+        # binaries). npm install resolves the correct platform optional
+        # deps for the runner. See npm/cli#4828.
+        run: npm install
       - name: Lint
         run: npm run lint
       - name: Build
@@ -75,6 +79,16 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev librsvg2-dev patchelf libgtk-3-dev libayatana-appindicator3-dev
+      - name: Install root dependencies
+        # Needed for shx (used by prepare-desktop-resources script).
+        run: npm ci
+        working-directory: .
+      - name: Prepare placeholder resources
+        # tauri's build script validates that all bundle.resources paths
+        # exist at compile time. Create placeholders so cargo check can
+        # run without a full binary build.
+        run: npm run prepare-desktop-resources
+        working-directory: .
       - name: Check formatting
         run: cargo fmt --check
       - name: Check compilation

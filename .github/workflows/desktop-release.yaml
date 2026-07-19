@@ -71,7 +71,9 @@ jobs:
         run: npm ci
 
       - name: Install web dependencies
-        run: npm ci
+        # npm install instead of npm ci to resolve platform-specific
+        # rollup optional deps (npm/cli#4828).
+        run: npm install
         working-directory: apps/web
 
       - name: Build and bundle
