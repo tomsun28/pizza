@@ -1,5 +1,73 @@
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
+
+const BUILTIN_PROVIDERS = [
+	"anthropic", "openai", "google", "zai", "openrouter",
+	"groq", "mistral", "deepseek", "xai", "fireworks",
+	"together", "perplexity", "cohere", "amazon-bedrock",
+];
+
+function authPath() {
+	return path.join(os.homedir(), ".pizza", "agent", "auth.json");
+}
+
+function readAuth() {
+	try {
+		const raw = fs.readFileSync(authPath(), "utf8");
+		const parsed = JSON.parse(raw);
+		return parsed && typeof parsed === "object" ? parsed : {};
+	} catch {
+		return {};
+	}
+}
+
+function writeAuth(data) {
+	const dir = path.dirname(authPath());
+	fs.mkdirSync(dir, { recursive: true });
+	fs.writeFileSync(authPath(), JSON.stringify(data, null, 2), { mode: 0o600 });
+}
+
+function listProviders() {
+	const auth = readAuth();
+	const providers = [];
+	for (const id of BUILTIN_PROVIDERS) {
+		const cred = auth[id];
+		providers.push({
+			id,
+			has_api_key: cred != null,
+			auth_type: cred?.type ?? null,
+		});
+	}
+	for (const key of Object.keys(auth)) {
+		if (!BUILTIN_PROVIDERS.includes(key)) {
+			providers.push({ id: key, has_api_key: true, auth_type: auth[key]?.type ?? null });
+		}
+	}
+	return providers;
+}
+
+function readJsonBody(req) {
+	return new Promise((resolve, reject) => {
+		let body = "";
+		req.on("data", (chunk) => (body += chunk));
+		req.on("end", () => {
+			try {
+				resolve(body ? JSON.parse(body) : {});
+			} catch (e) {
+				reject(e);
+			}
+		});
+	});
+}
+
+function sendJson(res, status, obj) {
+	res.statusCode = status;
+	res.setHeader("Content-Type", "application/json");
+	res.end(JSON.stringify(obj));
+}
 
 /**
  * Vite dev plugin: spawns `pizza rpc` as a child process and exposes
@@ -146,6 +214,31 @@ export function pizzaRpcBridge() {
 						res.end(JSON.stringify({ error: e.message }));
 					}
 				});
+			});
+
+			server.middlewares.use("/rpc/providers", (req, res) => {
+				if (req.method === "GET") {
+					sendJson(res, 200, listProviders());
+					return;
+				}
+				if (req.method === "POST") {
+					readJsonBody(req).then((body) => {
+						const { provider, apiKey, remove } = body;
+						if (!provider) return sendJson(res, 400, { error: "provider required" });
+						const auth = readAuth();
+						if (remove) {
+							delete auth[provider];
+						} else {
+							if (!apiKey) return sendJson(res, 400, { error: "apiKey required" });
+							auth[provider] = { type: "api_key", key: apiKey };
+						}
+						writeAuth(auth);
+						sendJson(res, 200, { ok: true });
+					}).catch((e) => sendJson(res, 400, { error: e.message }));
+					return;
+				}
+				res.statusCode = 405;
+				res.end("Method Not Allowed");
 			});
 
 			server.middlewares.use("/rpc/events", (req, res) => {

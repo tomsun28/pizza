@@ -258,7 +258,19 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 			}
 
 			case "get_available_models": {
-				const models = facade.modelRegistry?.getAvailable() ?? [];
+				// Return ALL models, annotated with hasAuth so the UI can show
+				// unconfigured models as disabled rather than hiding them.
+				const registry = facade.modelRegistry;
+				const all = registry?.getAll() ?? [];
+				const models = all.map((m) => ({
+					id: m.id,
+					name: m.name,
+					api: m.api,
+					provider: m.provider,
+					reasoning: (m as { reasoning?: boolean }).reasoning,
+					contextWindow: (m as { contextWindow?: number }).contextWindow,
+					hasAuth: registry ? registry.hasConfiguredAuth(m) : true,
+				}));
 				return success(id, "get_available_models", { models });
 			}
 

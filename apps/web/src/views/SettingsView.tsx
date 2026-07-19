@@ -98,16 +98,6 @@ function GeneralTab({ state }: { state: RpcSessionState | null }) {
 					</Row>
 				)}
 			</Card>
-
-			<Card>
-				<div className="mb-2 text-sm font-medium text-fg">About</div>
-				<Row label="Session ID">
-					<span className="font-mono">{state?.sessionId ?? "—"}</span>
-				</Row>
-				<Row label="Messages">
-					<span className="font-mono">{state?.messageCount ?? 0}</span>
-				</Row>
-			</Card>
 		</div>
 	);
 }

@@ -174,19 +174,37 @@ export interface ProviderInfo {
 }
 
 export async function listProviders(): Promise<ProviderInfo[]> {
-	if (!isTauri()) return [];
+	if (!isTauri()) {
+		const resp = await fetch("/rpc/providers");
+		if (!resp.ok) return [];
+		return resp.json();
+	}
 	const core = await import("@tauri-apps/api/core");
 	return core.invoke<ProviderInfo[]>("list_providers");
 }
 
 export async function setProviderApiKey(provider: string, apiKey: string): Promise<void> {
-	if (!isTauri()) return;
+	if (!isTauri()) {
+		await fetch("/rpc/providers", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ provider, apiKey }),
+		});
+		return;
+	}
 	const core = await import("@tauri-apps/api/core");
 	await core.invoke("set_provider_api_key", { provider, apiKey });
 }
 
 export async function removeProviderApiKey(provider: string): Promise<void> {
-	if (!isTauri()) return;
+	if (!isTauri()) {
+		await fetch("/rpc/providers", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ provider, remove: true }),
+		});
+		return;
+	}
 	const core = await import("@tauri-apps/api/core");
 	await core.invoke("remove_provider_api_key", { provider });
 }

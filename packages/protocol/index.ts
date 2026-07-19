@@ -25,6 +25,8 @@ export interface ModelInfo {
 	provider: string;
 	reasoning?: boolean;
 	contextWindow?: number;
+	/** Whether the user has configured auth (API key / OAuth) for this model. */
+	hasAuth?: boolean;
 }
 
 // ============================================================================

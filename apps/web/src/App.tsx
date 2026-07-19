@@ -60,8 +60,8 @@ function AppInner() {
 			setSidecarReady(true);
 			// For already-running sidecar, request state explicitly.
 			if (!hasState) {
-				void sendCommandAwait<{ state?: RpcSessionState }>({ type: "get_state" })
-					.then((r) => setState(r.data?.state ?? null))
+				void sendCommandAwait<RpcSessionState>({ type: "get_state" })
+					.then((r) => setState(r.data ?? null))
 					.catch(() => {});
 			}
 			refreshWorkspaces();
@@ -127,8 +127,8 @@ function AppInner() {
 				// Only process state updates for the active workspace.
 				if (typed._cwd && typed._cwd !== workspace) return;
 				if (typed.type === "MODEL_CHANGED" || typed.type === "THINKING_LEVEL_CHANGED" || typed.type === "AGENT_TURN_COMPLETED") {
-					void sendCommandAwait<{ state?: RpcSessionState }>({ type: "get_state" })
-						.then((r) => setState(r.data?.state ?? null))
+					void sendCommandAwait<RpcSessionState>({ type: "get_state" })
+						.then((r) => setState(r.data ?? null))
 						.catch(() => {});
 				}
 			});
@@ -139,10 +139,19 @@ function AppInner() {
 
 	useEffect(() => {
 		if (!sidecarReady) return;
-		void sendCommandAwait<{ state?: RpcSessionState }>({ type: "get_state" })
-			.then((r) => setState(r.data?.state ?? null))
+		void sendCommandAwait<RpcSessionState>({ type: "get_state" })
+			.then((r) => setState(r.data ?? null))
 			.catch(() => {});
-	}, [sidecarReady]);
+		// Delayed re-fetch: the sidecar may emit MODEL_CHANGED before our
+		// event listener is registered, leaving state.model stale. This
+		// catches any missed events shortly after sidecar ready / workspace switch.
+		const timer = setTimeout(() => {
+			void sendCommandAwait<RpcSessionState>({ type: "get_state" })
+				.then((r) => setState(r.data ?? null))
+				.catch(() => {});
+		}, 800);
+		return () => clearTimeout(timer);
+	}, [sidecarReady, workspace]);
 
 	if (waitingForWorkspace && !sidecarReady) {
 		return (
