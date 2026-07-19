@@ -49,7 +49,9 @@ fn find_node() -> Option<String> {
 	Some("node".to_string())
 }
 
-fn resolve_pizza_command() -> (String, Vec<String>) {
+fn resolve_pizza_command(app: &AppHandle) -> (String, Vec<String>) {
+	// 1. PIZZA_BIN env var — explicit override (any executable, including a
+	//    manually-built `dist/pizza` Bun binary).
 	if let Ok(bin) = std::env::var("PIZZA_BIN") {
 		let parts: Vec<&str> = bin.split_whitespace().collect();
 		if parts.len() >= 2 {
@@ -60,13 +62,29 @@ fn resolve_pizza_command() -> (String, Vec<String>) {
 		}
 		return (parts[0].to_string(), vec!["--mode".to_string(), "rpc".to_string()]);
 	}
+
+	// 2. Packaged binary bundled via tauri.conf.json `bundle.resources`.
+	//    The resource_dir is the runtime location of bundled assets
+	//    (e.g. inside the .app bundle on macOS). When present, this makes
+	//    the desktop app self-contained — no Node.js required.
+	//    On Windows the binary has a .exe extension.
+	if let Ok(resource_dir) = app.path().resource_dir() {
+		let pizza_bin = resource_dir.join(if cfg!(windows) { "pizza.exe" } else { "pizza" });
+		if pizza_bin.exists() {
+			log_file(&format!("resolve_pizza_command: using bundled binary at {}", pizza_bin.display()));
+			return (pizza_bin.to_string_lossy().to_string(), vec!["--mode".to_string(), "rpc".to_string()]);
+		}
+	}
+
+	// 3. Dev fallback: run `node dist/src/cli.js` from the source tree.
 	let cli_js = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 		.join("..")
 		.join("..")
 		.join("dist")
+		.join("src")
 		.join("cli.js");
 	let node = find_node().unwrap_or_else(|| "node".to_string());
-	log_file(&format!("resolve_pizza_command: node={}, cli_js={}", node, cli_js.display()));
+	log_file(&format!("resolve_pizza_command: dev fallback, node={}, cli_js={}", node, cli_js.display()));
 	(node, vec![cli_js.to_string_lossy().to_string(), "--mode".to_string(), "rpc".to_string()])
 }
 
@@ -198,7 +216,7 @@ pub async fn init_sidecar(
 	// Multi-sidecar: never kill the old sidecar on switch — it persists.
 	// Just update the active workspace mapping for this window (done below).
 
-	let (program, args) = resolve_pizza_command();
+	let (program, args) = resolve_pizza_command(window.app_handle());
 	let mut cmd = Command::new(&program);
 	cmd.args(&args);
 	cmd.current_dir(&cwd);

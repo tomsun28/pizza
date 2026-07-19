@@ -1,0 +1,12 @@
+{
+	"bundle": {
+		"resources": {
+			"../../dist/pizza.exe": "pizza.exe",
+			"../../dist/theme/": "theme/",
+			"../../dist/assets/": "assets/",
+			"../../dist/export-html/": "export-html/",
+			"../../dist/package.json": "package.json",
+			"../../dist/photon_rs_bg.wasm": "photon_rs_bg.wasm"
+		}
+	}
+}

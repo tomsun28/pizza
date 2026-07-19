@@ -42,6 +42,14 @@
 			"icons/128x128@2x.png",
 			"icons/icon.icns",
 			"icons/icon.ico"
-		]
+		],
+		"resources": {
+			"../../dist/pizza": "pizza",
+			"../../dist/theme/": "theme/",
+			"../../dist/assets/": "assets/",
+			"../../dist/export-html/": "export-html/",
+			"../../dist/package.json": "package.json",
+			"../../dist/photon_rs_bg.wasm": "photon_rs_bg.wasm"
+		}
 	}
 }
