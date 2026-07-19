@@ -79,9 +79,16 @@ jobs:
         shell: bash
 
       - name: Build and bundle
-        run: npm run build:desktop
+        run: |
+          if [ "$LABEL" = "linux-x64" ]; then
+            npm run build:desktop -- --bundles deb,rpm
+          else
+            npm run build:desktop
+          fi
         env:
           PIZZA_VENDOR_TOOL_TARGETS: current
+          LABEL: ${{ matrix.label }}
+        shell: bash
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -91,7 +98,6 @@ jobs:
             apps/desktop/target/release/bundle/**/*.dmg
             apps/desktop/target/release/bundle/**/*.deb
             apps/desktop/target/release/bundle/**/*.rpm
-            apps/desktop/target/release/bundle/**/*.AppImage
             apps/desktop/target/release/bundle/**/*.msi
             apps/desktop/target/release/bundle/**/*.exe
           if-no-files-found: error
