@@ -128,6 +128,9 @@ export default function ChatView({
 	const itemsByWs = useRef<Map<string, TimelineItem[]>>(new Map());
 	const seenIdsByWs = useRef<Map<string, Set<string>>>(new Map());
 	const activeAssistantByWs = useRef<Map<string, string | null>>(new Map());
+	// Track which workspaces have had their history loaded from the sidecar.
+	// Uses useState so it resets on HMR (unlike useRef which persists across HMR).
+	const [historyLoadedWs, setHistoryLoadedWs] = useState<Set<string>>(new Set());
 	const itemsRef = useRef<TimelineItem[]>([]);
 	itemsRef.current = items;
 	const prevWsRef = useRef<string | null>(null);
@@ -155,8 +158,11 @@ export default function ChatView({
 	// Load history from sidecar when sidecar becomes ready or workspace changes.
 	useEffect(() => {
 		if (!sidecarReady || !workspace) return;
-		// If we already have cached items for this workspace, don't reload.
-		if (itemsByWs.current.has(workspace)) return;
+		// Only load history once per workspace (from sidecar). The save/restore
+		// mechanism handles instant display of cached items; this fills in
+		// history the first time we visit a workspace.
+		if (historyLoadedWs.has(workspace)) return;
+		setHistoryLoadedWs((prev) => new Set(prev).add(workspace));
 		let cancelled = false;
 		(async () => {
 			try {
@@ -426,12 +432,17 @@ export default function ChatView({
 		async (message: string, images?: ComposerImage[]) => {
 			setError("");
 			const payloadImages = images?.map((img) => ({ data: img.data, mimeType: img.mimeType }));
+			// prompt/follow_up responses only arrive after the entire agent turn
+			// completes (incl. all tool calls). All streaming content arrives via
+			// the event subscription independently, so we fire-and-forget the command
+			// and only catch immediate send errors (e.g. sidecar not running).
 			try {
-				if (state?.isStreaming) {
-					await sendCommandAwait({ type: "follow_up", message, images: payloadImages });
-				} else {
-					await sendCommandAwait({ type: "prompt", message, images: payloadImages });
-				}
+				const cmd = state?.isStreaming
+					? { type: "follow_up", message, images: payloadImages }
+					: { type: "prompt", message, images: payloadImages };
+				sendCommandAwait(cmd, 600000).catch((e) => {
+					setError(e instanceof Error ? e.message : String(e));
+				});
 			} catch (e) {
 				setError(e instanceof Error ? e.message : String(e));
 			}

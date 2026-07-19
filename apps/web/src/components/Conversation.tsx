@@ -30,7 +30,7 @@ export interface TimelineItem {
 	images?: string[];
 }
 
-const COLLAPSE_LINES = 12;
+const COLLAPSE_LINES = 5;
 
 function useCopy(): [boolean, (text: string) => void] {
 	const [copied, setCopied] = useState(false);
