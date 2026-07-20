@@ -301,34 +301,64 @@ export default function ChatView({
 					const text = content ? messageText({ content }) : "";
 					const thinking = content ? messageThinking({ content }) : "";
 					const images = content ? messageImages({ content }) : [];
+					const stopReason = String(payload?.stop_reason ?? "");
+					const errorMessage = payload?.error_message
+						? String(payload.error_message)
+						: "";
+					const isError = stopReason === "error" || Boolean(errorMessage);
+					const fallbackText = isError && !text
+						? errorMessage || `Agent error (${stopReason || "no response"})`
+						: text;
 					updateItems((prev) =>
 						prev.map((it) =>
 							it.id === id
 								? {
 										...it,
-										...(text ? { text } : {}),
+										...(fallbackText ? { text: fallbackText } : {}),
 										...(thinking ? { thinking } : {}),
 										...(images.length > 0 ? { images } : {}),
-										status: "DONE",
+										status: isError ? "ERROR" : "DONE",
 										streaming: false,
+										isError: isError || undefined,
 									}
 								: it,
 						),
 					);
+					if (isError && errorMessage) {
+						setError(errorMessage);
+					}
 				}
 				break;
 			}
 			case "AGENT_TURN_COMPLETED": {
 				const id = activeRef.current;
+				const payload = event.payload as Record<string, unknown> | undefined;
+				const reason = String(payload?.reason ?? "");
+				const errorMessage = payload?.error_message
+					? String(payload.error_message)
+					: "";
+				const isError = reason === "error" || Boolean(errorMessage);
 				if (id) {
 					updateItems((prev) =>
-						prev.map((it) => (it.id === id ? { ...it, status: "DONE", streaming: false } : it)),
+						prev.map((it) =>
+							it.id === id
+								? {
+										...it,
+										status: isError ? "ERROR" : "DONE",
+										streaming: false,
+										isError: isError || undefined,
+									}
+								: it,
+						),
 					);
 					if (isForCurrent) {
 						activeAssistantRef.current = null;
 					} else {
 						activeAssistantByWs.current.set(eventCwd, null);
 					}
+				}
+				if (isError && errorMessage) {
+					setError(errorMessage);
 				}
 				break;
 			}
