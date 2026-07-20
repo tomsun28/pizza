@@ -314,6 +314,18 @@ export async function createSessionFacade(
 	};
 
 	let runtime: EventSourcedRuntime | undefined;
+	// Live model getter: reads the runtime's current model config + registry so
+	// that model switches (via /model, RPC set_model, or extensions) are reflected
+	// in both LLM API calls and ctx.model for tools. Falls back to the closure
+	// `model` if the registry lookup fails (e.g. the model was removed).
+	const getModelLive = (): Model<any> | undefined => {
+		const cfg = runtime?.getModel();
+		if (cfg) {
+			const resolved = modelRegistry.find(cfg.provider, cfg.model_id);
+			if (resolved) return resolved;
+		}
+		return model;
+	};
 	let activeToolDefinitions: ExtensionToolDefinition[] = [];
 	let availableToolDefinitions: ExtensionToolDefinition[] = [];
 	let availableToolSources = new Map<string, ToolInfo["sourceInfo"]>();
@@ -543,7 +555,7 @@ export async function createSessionFacade(
 			},
 		},
 		{
-			getModel: () => model,
+			getModel: getModelLive,
 			isIdle: () => !runtime?.isRunning,
 			getSignal: () => runtime?.signal,
 			abort: () => runtime?.abort(),
@@ -569,7 +581,7 @@ export async function createSessionFacade(
 
 	// ── LLM client (AI stream function -> reactor LLMClient) ───────────────
 	const llmClient = model
-		? buildLlmClientFromStreamFn(model, async (m, context, opts) => {
+		? buildLlmClientFromStreamFn(getModelLive, async (m, context, opts) => {
 				const auth = await modelRegistry.getApiKeyAndHeaders(m);
 				if (!auth.ok) {
 					throw new Error(auth.error);
