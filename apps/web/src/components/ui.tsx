@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import {
 	PixelAlert,
 	PixelBadge as PxlBadge,
@@ -192,9 +193,10 @@ export function EmptyState({
 }
 
 export function ErrorBanner({ message }: { message: string }) {
+	const { t } = useTranslation();
 	return (
 		<div className="mb-4">
-			<PixelAlert tone="red" label="Error" message={message} />
+			<PixelAlert tone="red" label={t("common.error")} message={message} />
 		</div>
 	);
 }
@@ -264,6 +266,7 @@ export function MiniSwitch({
 }
 
 export function ThemeToggle() {
+	const { t } = useTranslation();
 	const theme = useTheme();
 	const isDark = theme === "dark";
 	return (
@@ -272,8 +275,8 @@ export function ThemeToggle() {
 			variant="ghost"
 			size="sm"
 			onClick={toggleTheme}
-			title={isDark ? "Switch to light" : "Switch to dark"}
-			aria-label={isDark ? "Switch to light" : "Switch to dark"}
+			title={isDark ? t("theme.switchToLight") : t("theme.switchToDark")}
+			aria-label={isDark ? t("theme.switchToLight") : t("theme.switchToDark")}
 			iconLeft={<span className="text-xs">{isDark ? "☀" : "☾"}</span>}
 		/>
 	);

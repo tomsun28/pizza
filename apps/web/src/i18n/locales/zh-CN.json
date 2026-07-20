@@ -1,0 +1,134 @@
+{
+	"common": {
+		"you": "你",
+		"pizza": "Pizza",
+		"remove": "移除",
+		"delete": "删除",
+		"copy": "复制",
+		"settings": "设置",
+		"error": "错误",
+		"starting": "启动中...",
+		"backToChat": "返回聊天"
+	},
+	"layout": {
+		"brandTagline": "一起创造。",
+		"chat": "聊天",
+		"chatSubtitle": "一直在的助手",
+		"chatTitle": "一直在的助手,位于 ~/.pizza/main",
+		"workspaces": "工作区",
+		"newWorkspace": "新建工作区",
+		"newWorkspaceTitle": "新建工作区",
+		"noWorkspaces": "暂无工作区",
+		"showSidebar": "显示侧边栏",
+		"hideSidebar": "隐藏侧边栏",
+		"moreActions": "更多操作",
+		"pinToTop": "置顶",
+		"unpin": "取消置顶",
+		"revealInFiles": "在文件管理器中显示",
+		"selectProjectDirectory": "选择项目目录",
+		"statusOnline": "在线",
+		"statusOffline": "离线",
+		"statusRunning": "运行中",
+		"deleteWorkspaceConfirm": "确认删除工作区 \"{{name}}\"?\n此操作仅移除工作区元数据,不影响项目文件。",
+		"deleteWorkspaceFailed": "删除工作区失败:{{error}}",
+		"timeJustNow": "刚刚",
+		"timeMinutesAgo": "{{count}}分钟前",
+		"timeHoursAgo": "{{count}}小时前",
+		"timeDaysAgo": "{{count}}天前"
+	},
+	"chat": {
+		"newChat": "新对话",
+		"readyPrompt": "就绪。可以问关于此项目的任何问题。",
+		"sidecarExited": "Sidecar 已退出 (代码 {{code}})",
+		"agentError": "Agent 错误 ({{reason}})",
+		"failedToStartWorkspace": "启动工作区失败"
+	},
+	"composer": {
+		"placeholder": "随心输入",
+		"waitingForSidecar": "等待 sidecar...",
+		"model": "模型",
+		"attachImage": "添加图片",
+		"noModelsAvailable": "无可用模型",
+		"selectModel": "选择模型",
+		"configureApiKey": "在设置中配置 API 密钥 →",
+		"stopDictation": "停止听写",
+		"voiceInput": "语音输入",
+		"stop": "停止",
+		"send": "发送",
+		"sendHint": "回车发送 · shift+回车换行"
+	},
+	"conversation": {
+		"showLess": "收起",
+		"showMoreLines": "展开 {{count}} 行",
+		"thinking": "思考中…",
+		"thoughtProcess": "思考过程",
+		"running": "运行中…",
+		"goodResponse": "回答不错",
+		"badResponse": "回答不佳",
+		"attachment": "附件"
+	},
+	"markdown": {
+		"code": "代码",
+		"copyCode": "复制代码",
+		"copied": "已复制",
+		"copy": "复制"
+	},
+	"history": {
+		"title": "历史",
+		"description": "会话树与分支导航",
+		"comingSoon": "即将推出",
+		"comingSoonDescription": "历史树可视化将在未来版本中提供。"
+	},
+	"theme": {
+		"switchToLight": "切换到浅色",
+		"switchToDark": "切换到深色"
+	},
+	"settings": {
+		"title": "设置",
+		"tabs": {
+			"general": "通用",
+			"provider": "服务商"
+		},
+		"general": {
+			"model": "模型",
+			"currentProvider": "当前服务商",
+			"currentModel": "当前模型",
+			"thinkingLevel": "思考级别",
+			"compaction": "上下文压缩",
+			"autoCompaction": "自动压缩",
+			"status": "状态",
+			"compacting": "压缩中...",
+			"language": "语言",
+			"languageDescription": "界面显示语言"
+		},
+		"provider": {
+			"title": "服务商",
+			"addProvider": "添加服务商",
+			"addNew": "添加新服务商",
+			"noProviders": "尚未配置任何服务商。",
+			"noProvidersHint": "点击\"添加服务商\"开始配置。",
+			"loading": "正在加载服务商...",
+			"error": "错误:{{error}}",
+			"oauth": "OAuth",
+			"apiKey": "API 密钥",
+			"notConfigured": "未配置",
+			"update": "更新",
+			"configure": "配置",
+			"remove": "移除",
+			"save": "保存",
+			"saving": "保存中...",
+			"cancel": "取消",
+			"hide": "隐藏",
+			"show": "显示",
+			"enterKey": "输入 {{label}} 的 API 密钥",
+			"keyEmpty": "API 密钥不能为空",
+			"selectProvider": "请先选择服务商",
+			"selectProviderPlaceholder": "选择服务商...",
+			"confirmRemove": "确认移除 {{label}} 的 API 密钥?"
+		}
+	},
+	"language": {
+		"en": "English",
+		"zh-CN": "中文"
+	}
+}

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { PxlKitSurfaceProvider } from "@pxlkit/ui-kit";
 import Layout from "@/components/Layout";
 import ChatView from "@/views/ChatView";
@@ -14,6 +15,7 @@ function isTauri(): boolean {
 
 function AppInner() {
 	const navigate = useNavigate();
+	const { t } = useTranslation();
 	const [state, setState] = useState<RpcSessionState | null>(null);
 	const [sidecarReady, setSidecarReady] = useState(false);
 	const [sidecarExitCode, setSidecarExitCode] = useState<number | null>(null);
@@ -97,14 +99,14 @@ function AppInner() {
 		if (!isTauri()) return;
 		try {
 			const dialog = await import("@tauri-apps/plugin-dialog");
-			const selected = await dialog.open({ directory: true, multiple: false, title: "Select project directory" });
+			const selected = await dialog.open({ directory: true, multiple: false, title: t("layout.selectProjectDirectory") });
 			if (typeof selected === "string") {
 				await startWithWorkspace(selected);
 			}
 		} catch (e) {
 			console.error("[workspace] dialog error:", e);
 		}
-	}, [startWithWorkspace]);
+	}, [startWithWorkspace, t]);
 
 	const handleSelectWorkspace = useCallback(async (cwd: string) => {
 		if (workspace === cwd && sidecarReady) return;
@@ -178,7 +180,7 @@ function AppInner() {
 				<div className="flex h-screen items-center justify-center bg-bg">
 					<div className="flex max-w-md flex-col items-center gap-4 px-6 text-center">
 						<BrandIcon size={48} className="text-danger" />
-						<p className="font-mono text-sm text-fg">Failed to start workspace</p>
+						<p className="font-mono text-sm text-fg">{t("chat.failedToStartWorkspace")}</p>
 						<p className="font-mono text-xs text-muted">{initError}</p>
 						<button
 							type="button"
@@ -188,7 +190,7 @@ function AppInner() {
 							}}
 							className="mt-2 rounded-md border border-border bg-surface-2 px-4 py-2 text-sm text-fg transition-colors hover:bg-surface-2/80"
 						>
-							Back to Chat
+							{t("common.backToChat")}
 						</button>
 					</div>
 				</div>
@@ -202,7 +204,7 @@ function AppInner() {
 				<div className="flex h-screen items-center justify-center bg-bg">
 					<div className="flex flex-col items-center gap-4">
 						<BrandIcon size={48} className="text-accent" />
-						<p className="font-mono text-sm text-muted">Starting...</p>
+						<p className="font-mono text-sm text-muted">{t("common.starting")}</p>
 					</div>
 				</div>
 			</PxlKitSurfaceProvider>

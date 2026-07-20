@@ -1,6 +1,8 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { Settings as SettingsIcon, Plus, Folder, MessageSquare, MoreHorizontal, Pin, FolderOpen, Trash2, PanelLeft } from "lucide-react";
 import { useState, useRef, useEffect, useCallback } from "react";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { StatusDot, ThemeToggle, Button } from "./ui";
 import { BrandIcon } from "./BrandIcon";
 import { cn } from "@/lib/utils";
@@ -35,6 +37,7 @@ function WorkspaceMenu({ ws, isActive: _isActive, onPin, isPinned, onDelete, onC
 	onDelete: () => void;
 	onClose: () => void;
 }) {
+	const { t } = useTranslation();
 	const menuRef = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
@@ -58,21 +61,21 @@ function WorkspaceMenu({ ws, isActive: _isActive, onPin, isPinned, onDelete, onC
 				className="flex w-full items-center gap-2 rounded-t-md px-3 py-2 text-left font-mono text-xs text-fg hover:bg-accent/10 hover:text-accent transition-colors"
 			>
 				<Pin className={cn("h-3.5 w-3.5 shrink-0", isPinned ? "text-accent" : "text-muted")} />
-				<span>{isPinned ? "Unpin" : "Pin to top"}</span>
+				<span>{isPinned ? t("layout.unpin") : t("layout.pinToTop")}</span>
 			</button>
 			<button
 				onClick={() => { void revealWorkspace(ws.cwd); onClose(); }}
 				className="flex w-full items-center gap-2 px-3 py-2 text-left font-mono text-xs text-fg hover:bg-accent/10 hover:text-accent transition-colors"
 			>
 				<FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted" />
-				<span>Reveal in files</span>
+				<span>{t("layout.revealInFiles")}</span>
 			</button>
 			<button
 				onClick={() => { onDelete(); onClose(); }}
 				className="flex w-full items-center gap-2 rounded-b-md px-3 py-2 text-left font-mono text-xs text-danger hover:bg-danger/10 transition-colors"
 			>
 				<Trash2 className="h-3.5 w-3.5 shrink-0" />
-				<span>Delete</span>
+				<span>{t("common.delete")}</span>
 			</button>
 		</div>
 	);
@@ -87,15 +90,15 @@ function basename(path: string): string {
 	return parts[parts.length - 1] || path;
 }
 
-function timeAgo(ts: number): string {
+function timeAgo(ts: number, t: TFunction): string {
 	const diff = Date.now() - ts;
 	const min = Math.floor(diff / 60000);
-	if (min < 1) return "just now";
-	if (min < 60) return `${min}m ago`;
+	if (min < 1) return t("layout.timeJustNow");
+	if (min < 60) return t("layout.timeMinutesAgo", { count: min });
 	const hr = Math.floor(min / 60);
-	if (hr < 24) return `${hr}h ago`;
+	if (hr < 24) return t("layout.timeHoursAgo", { count: hr });
 	const days = Math.floor(hr / 24);
-	return `${days}d ago`;
+	return t("layout.timeDaysAgo", { count: days });
 }
 
 const MAIN_CHAT_CWD = "~/.pizza/main";
@@ -126,6 +129,7 @@ export default function Layout({
 	onNewWorkspace?: () => void;
 	onDeleteWorkspace?: (workspaceId: string) => void;
 }) {
+	const { t } = useTranslation();
 	const online = sidecarReady && sidecarExitCode === null;
 	const isMainChat = isMainChatCwd(workspace);
 	const [pinned, setPinned] = useState<Set<string>>(getPinnedWorkspaces);
@@ -166,15 +170,15 @@ export default function Layout({
 
 	const handleDelete = useCallback(async (ws: WorkspaceMeta) => {
 		const name = basename(ws.cwd);
-		if (!confirm(`Delete workspace "${name}"?\nThis removes the workspace metadata. The project files are not affected.`)) return;
+		if (!confirm(t("layout.deleteWorkspaceConfirm", { name }))) return;
 		try {
 			await deleteWorkspace(ws.workspace_id);
 			onDeleteWorkspace?.(ws.workspace_id);
 		} catch (e) {
 			console.error("[workspace] delete error:", e);
-			alert(`Failed to delete workspace: ${e}`);
+			alert(t("layout.deleteWorkspaceFailed", { error: e instanceof Error ? e.message : String(e) }));
 		}
-	}, [onDeleteWorkspace]);
+	}, [onDeleteWorkspace, t]);
 
 	const sortedWorkspaces = workspaces
 		? [...workspaces].sort((a, b) => {
@@ -192,7 +196,7 @@ export default function Layout({
 				<button
 					onClick={toggleCollapsed}
 					className="fixed left-[76px] top-[6px] z-50 flex h-8 w-8 items-center justify-center rounded-lg text-muted/50 transition-colors hover:bg-surface-2 hover:text-muted active:bg-surface-2"
-					title="Show sidebar"
+					title={t("layout.showSidebar")}
 				>
 					<PanelLeft className="h-4 w-4" />
 				</button>
@@ -223,7 +227,7 @@ export default function Layout({
 						data-no-drag
 						onClick={toggleCollapsed}
 						className="flex h-8 w-8 items-center justify-center rounded-lg text-muted/50 transition-colors hover:bg-surface-2 hover:text-muted active:bg-surface-2"
-						title="Hide sidebar"
+						title={t("layout.hideSidebar")}
 					>
 						<PanelLeft className="h-4 w-4" />
 					</button>
@@ -244,7 +248,7 @@ export default function Layout({
 							data-tauri-drag-region
 							className="font-mono text-[10px] uppercase tracking-widest text-muted"
 						>
-							Create together.
+							{t("layout.brandTagline")}
 						</div>
 					</div>
 				</div>
@@ -258,7 +262,7 @@ export default function Layout({
 								? "border-accent bg-accent/10"
 								: "border-transparent hover:bg-surface-2",
 						)}
-						title="Persistent agent at ~/.pizza/main"
+						title={t("layout.chatTitle")}
 					>
 						<MessageSquare
 							className={cn(
@@ -273,10 +277,10 @@ export default function Layout({
 									isMainChat ? "text-accent" : "text-fg",
 								)}
 							>
-								Chat
+								{t("layout.chat")}
 							</div>
 							<div className="truncate font-mono text-[10px] text-muted">
-								always-on assistant
+								{t("layout.chatSubtitle")}
 							</div>
 						</div>
 						{isMainChat && online && (
@@ -289,13 +293,13 @@ export default function Layout({
 				<div className="flex-1 overflow-y-auto px-3 py-2">
 					<div className="mb-1 flex items-center justify-between px-2">
 						<span className="font-mono text-[10px] uppercase tracking-widest text-muted">
-							Workspaces
+							{t("layout.workspaces")}
 						</span>
 						{isTauri() && (
 							<button
 								onClick={() => onNewWorkspace?.()}
 								className="text-muted hover:text-accent transition-colors"
-								title="New workspace"
+								title={t("layout.newWorkspaceTitle")}
 							>
 								<Plus className="h-3.5 w-3.5" />
 							</button>
@@ -334,7 +338,7 @@ export default function Layout({
 													{basename(ws.cwd)}
 												</div>
 												<div className="truncate font-mono text-[10px] text-muted">
-													{timeAgo(ws.last_accessed_at)}
+													{timeAgo(ws.last_accessed_at, t)}
 												</div>
 											</div>
 											{isActive && online && (
@@ -346,7 +350,7 @@ export default function Layout({
 													setMenuOpenId(isMenuOpen ? null : ws.workspace_id);
 												}}
 												className="ml-auto flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted opacity-0 transition-opacity hover:text-fg hover:bg-surface-3 group-hover:opacity-100"
-												title="More actions"
+												title={t("layout.moreActions")}
 											>
 												<MoreHorizontal className="h-3.5 w-3.5" />
 											</button>
@@ -367,14 +371,14 @@ export default function Layout({
 						</div>
 					) : (
 						<div className="px-2 py-4 text-center">
-							<p className="font-mono text-[10px] text-muted">No workspaces yet</p>
+							<p className="font-mono text-[10px] text-muted">{t("layout.noWorkspaces")}</p>
 						</div>
 					)}
 				</div>
 
 				{isTauri() && (
 					<div className="mb-2 px-1">
-						<Button tone="neutral" size="sm" iconLeft={<Plus className="h-3.5 w-3.5" />} onClick={() => onNewWorkspace?.()} className="w-full">New Workspace</Button>
+						<Button tone="neutral" size="sm" iconLeft={<Plus className="h-3.5 w-3.5" />} onClick={() => onNewWorkspace?.()} className="w-full">{t("layout.newWorkspace")}</Button>
 					</div>
 				)}
 
@@ -388,11 +392,11 @@ export default function Layout({
 								<StatusDot tone={online ? "success" : "danger"} />
 							)}
 							<span className="uppercase tracking-wide text-fg">
-								{online ? (state?.isStreaming ? "running" : "online") : "offline"}
+								{online ? (state?.isStreaming ? t("layout.statusRunning") : t("layout.statusOnline")) : t("layout.statusOffline")}
 							</span>
 						</div>
 						<div className="flex items-center gap-1">
-							<NavLink to="/settings" className={({ isActive }) => cn("flex items-center justify-center rounded-md p-1.5 transition-colors", isActive ? "text-accent" : "text-muted hover:text-fg")} title="Settings"><SettingsIcon className="h-4 w-4" /></NavLink>
+							<NavLink to="/settings" className={({ isActive }) => cn("flex items-center justify-center rounded-md p-1.5 transition-colors", isActive ? "text-accent" : "text-muted hover:text-fg")} title={t("common.settings")}><SettingsIcon className="h-4 w-4" /></NavLink>
 							<ThemeToggle />
 						</div>
 					</div>
