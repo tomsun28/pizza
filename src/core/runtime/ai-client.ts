@@ -28,7 +28,12 @@ function getStreamToolCall(event: AssistantMessageEvent): ToolCall | undefined {
 
 /** Build an EventSourcedRuntime LLMClient around the configured AI stream function. */
 export function buildLlmClientFromStreamFn(
-	model: Model<any>,
+	/**
+	 * Getter for the current model. Read at request time so live model changes
+	 * (e.g. via /model, RPC set_model, or extensions) are reflected in both the
+	 * API call and the model metadata exposed to tools via ctx.model.
+	 */
+	getModel: () => Model<any> | undefined,
 	streamFn: AiStreamFn,
 	options?: {
 		getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
@@ -45,6 +50,10 @@ export function buildLlmClientFromStreamFn(
 ): LLMClient {
 	return {
 		async complete({ messages, systemPrompt, tools, onChunk, signal }) {
+			const model = getModel();
+			if (!model) {
+				throw new Error("No model configured");
+			}
 			const apiKey = options?.getApiKey ? await options.getApiKey(model.provider) : undefined;
 			// Read the current thinking level at request time (not build time) so
 			// runtime changes via /thinking or setThinkingLevel() are honored.
