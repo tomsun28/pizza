@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowUp, Square, Mic, Plus, ChevronDown, Check, Lock, X } from "lucide-react";
+import { ArrowUp, Square, Mic, Plus, ChevronDown, Check, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { sendCommandAwait } from "@/lib/transport";
 import type { RpcSessionState, ModelInfo } from "@/lib/types";
@@ -69,6 +69,11 @@ export function Composer({
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const recognitionRef = useRef<SpeechRecognition | null>(null);
 	const modelMenuRef = useRef<HTMLDivElement>(null);
+
+	// Only show models whose provider has valid auth. Models without auth
+	// (hasAuth === false) are hidden from the selector entirely — they can't
+	// be used until the user configures an API key in Settings.
+	const visibleModels = models.filter((m) => m.hasAuth !== false);
 
 	const hasSpeechSupport =
 		typeof window !== "undefined" &&
@@ -326,36 +331,31 @@ export function Composer({
 							<div className="relative" ref={modelMenuRef}>
 								<button
 									type="button"
-									disabled={!sidecarReady || models.length === 0}
+									disabled={!sidecarReady || visibleModels.length === 0}
 									onClick={() => setModelMenuOpen((o) => !o)}
 									className="flex items-center gap-1 rounded-full px-2.5 py-1 text-xs text-muted transition-colors hover:bg-surface hover:text-fg disabled:opacity-40"
-									title={models.length === 0 ? "No models available" : "Select model"}
+									title={visibleModels.length === 0 ? "No models available" : "Select model"}
 								>
 									<span className="max-w-[10rem] truncate">{currentModelLabel}</span>
 									<ChevronDown className="h-3.5 w-3.5" />
 								</button>
-								{modelMenuOpen && models.length > 0 && (
+								{modelMenuOpen && visibleModels.length > 0 && (
 									<div className="absolute bottom-full right-0 z-20 mb-2 max-h-72 w-64 overflow-y-auto rounded-xl border border-border bg-surface p-1 shadow-lg">
-										{models.map((m) => {
+										{visibleModels.map((m) => {
 											const key = `${m.provider}:${m.id}`;
 											const selected = displayedModel
 												? m.provider === displayedModel.provider && m.id === displayedModel.id
 												: false;
-											const needsAuth = m.hasAuth === false;
 											return (
 												<button
 													key={key}
 													type="button"
-													disabled={needsAuth}
-													onClick={() => !needsAuth && handleModelSelect(m)}
+													onClick={() => handleModelSelect(m)}
 													className={cn(
 														"flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs transition-colors",
-														needsAuth
-															? "cursor-not-allowed opacity-50"
-															: "hover:bg-surface-2",
+														"hover:bg-surface-2",
 														selected ? "text-fg" : "text-muted",
 													)}
-													title={needsAuth ? "Configure API key in Settings to use this model" : undefined}
 												>
 													<span className="min-w-0 flex-1">
 														<span className="block truncate text-fg">{m.name}</span>
@@ -363,22 +363,22 @@ export function Composer({
 															{m.provider}
 														</span>
 													</span>
-													{needsAuth ? (
-														<Lock className="h-3.5 w-3.5 shrink-0 text-muted" />
-													) : selected ? (
+													{selected ? (
 														<Check className="h-3.5 w-3.5 shrink-0 text-accent" />
 													) : null}
 												</button>
 											);
 										})}
-										{models.every((m) => m.hasAuth === false) && (
-											<a
-												href="/#/settings"
-												className="mt-1 block rounded-lg bg-surface-2 px-2.5 py-1.5 text-center text-[11px] text-accent hover:opacity-80"
-											>
-												Configure API key in Settings →
-											</a>
-										)}
+									</div>
+								)}
+								{modelMenuOpen && visibleModels.length === 0 && models.length > 0 && (
+									<div className="absolute bottom-full right-0 z-20 mb-2 w-64 rounded-xl border border-border bg-surface p-1 shadow-lg">
+										<a
+											href="/#/settings"
+											className="block rounded-lg bg-surface-2 px-2.5 py-1.5 text-center text-[11px] text-accent hover:opacity-80"
+										>
+											Configure API key in Settings →
+										</a>
 									</div>
 								)}
 							</div>
