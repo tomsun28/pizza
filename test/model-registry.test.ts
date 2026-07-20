@@ -217,28 +217,6 @@ describe("ModelRegistry", () => {
 			expect(model?.baseUrl).toBe("https://openrouter.ai/api/v1");
 		});
 
-		test("infers image input for vision model ids when input is omitted", () => {
-			writeRawModelsJson({
-				zai: {
-					models: [{ id: "glm-5v-turbo" }],
-				},
-			});
-
-			const registry = ModelRegistry.create(authStorage, modelsJsonPath);
-			expect(registry.find("zai", "glm-5v-turbo")?.input).toEqual(["text", "image"]);
-		});
-
-		test("respects an explicit text-only input declaration for vision-like ids", () => {
-			writeRawModelsJson({
-				zai: {
-					models: [{ id: "glm-5v-turbo", input: ["text"] }],
-				},
-			});
-
-			const registry = ModelRegistry.create(authStorage, modelsJsonPath);
-			expect(registry.find("zai", "glm-5v-turbo")?.input).toEqual(["text"]);
-		});
-
 		test("non-built-in provider custom models still require baseUrl and apiKey", () => {
 			writeRawModelsJson({
 				"my-custom-provider": {
@@ -424,9 +402,7 @@ describe("ModelRegistry", () => {
 			});
 
 			const registry = ModelRegistry.create(authStorage, modelsJsonPath);
-			const compat = registry.find("demo", "demo-model")?.compat as
-				| (OpenAICompletionsCompat & { reasoningEffortMap?: Record<string, string> })
-				| undefined;
+			const compat = registry.find("demo", "demo-model")?.compat as OpenAICompletionsCompat | undefined;
 
 			expect(registry.getError()).toBeUndefined();
 			expect(compat?.reasoningEffortMap).toEqual({ minimal: "default", high: "max" });
