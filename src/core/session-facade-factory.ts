@@ -582,6 +582,11 @@ export async function createSessionFacade(
 			}, {
 				thinkingBudgets: settingsManager.getThinkingBudgets(),
 				transport: settingsManager.getTransport(),
+				// Read the live thinking level from the runtime, which is the single
+				// source of truth. Both `/thinking` (facade.thinkingLevel setter) and
+				// the extensions setThinkingLevel() API end up calling
+				// runtime.setThinkingLevel(), so this captures every update path.
+				getThinkingLevel: () => runtime?.getThinkingLevel(),
 				onPayload: async (payload: unknown) => {
 					if (!extensionRunner.hasHandlers("before_provider_request")) {
 						return payload;

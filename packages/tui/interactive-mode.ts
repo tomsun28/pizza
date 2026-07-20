@@ -9,6 +9,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage, ThinkingLevel } from "../../src/core/agent/types.js";
 import type { AssistantMessage, ImageContent, Message, Model, OAuthProviderId } from "@earendil-works/pi-ai/compat";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import type {
 	AutocompleteItem,
 	EditorComponent,
@@ -404,6 +405,14 @@ export class InteractiveMode {
 		return nextLevel;
 	}
 	private getAvailableThinkingLevelsFacade(): ThinkingLevel[] {
+		// Use pi-ai's per-model capability map so models that declare xhigh/max
+		// in their thinkingLevelMap actually expose those levels (previously this
+		// was hardcoded to off/low/medium/high, hiding xhigh and max everywhere).
+		// Falls back to a sensible default set if the model isn't resolved yet.
+		const currentModel = this.getCurrentModelFromFacade();
+		if (currentModel) {
+			return getSupportedThinkingLevels(currentModel) as ThinkingLevel[];
+		}
 		return ["off", "low", "medium", "high"];
 	}
 	private async navigateTreeFacade(targetId: string, options: { summarize?: boolean; customInstructions?: string } = {}): Promise<{ cancelled?: boolean; aborted?: boolean; editorText?: string }> {
