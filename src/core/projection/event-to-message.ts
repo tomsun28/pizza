@@ -53,13 +53,22 @@ export function eventToMessage(event: EventBase): AgentMessage | null {
 	switch (event.type) {
 		case "USER_MESSAGE": {
 			const payload = event.payload as UserMessageEvent["payload"];
-			// Merge images into content array if present
+			// Merge images into content array if present.
+			// Event-store images use snake_case `mime_type`; pi-ai's ImageContent
+			// uses camelCase `mimeType`. Convert here so the LLM payload builder
+			// (openai-completions etc.) reads the correct field — otherwise it
+			// emits `data:undefined;base64,...` and the provider returns 400.
 			let content: string | (TextContent | ImageContent)[] = payload.content as string | (TextContent | ImageContent)[];
 			if (payload.images && payload.images.length > 0) {
+				const images: ImageContent[] = payload.images.map((img) => ({
+					type: "image" as const,
+					data: img.data,
+					mimeType: (img as { mimeType?: string; mime_type?: string }).mimeType ?? img.mime_type,
+				}));
 				if (typeof content === "string") {
-					content = [{ type: "text", text: content } as TextContent, ...(payload.images as any)];
+					content = [{ type: "text", text: content } as TextContent, ...images];
 				} else {
-					content = [...content, ...(payload.images as any)];
+					content = [...content, ...images];
 				}
 			}
 			return {

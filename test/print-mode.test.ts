@@ -134,7 +134,7 @@ describe("runPrintModeWithFacade", () => {
 		const userMessage = requestMessages.find((message) => message.role === "user");
 		expect(userMessage?.content).toEqual([
 			{ type: "text", text: "Describe" },
-			{ type: "image", data: "abc", mime_type: "image/png" },
+			{ type: "image", data: "abc", mimeType: "image/png" },
 		]);
 	});
 });
