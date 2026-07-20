@@ -220,6 +220,10 @@ function emptyCustomModelsResult(error?: string): CustomModelsResult {
 	return { models: [], overrides: new Map(), modelOverrides: new Map(), error };
 }
 
+function defaultModelInput(modelId: string): ("text" | "image")[] {
+	return /(?:vision|glm-\d+v(?:[-_/]|$)|[-_/]v(?:[-_/]|$))/i.test(modelId) ? ["text", "image"] : ["text"];
+}
+
 function mergeCompat(
 	baseCompat: Model<Api>["compat"],
 	overrideCompat: ModelOverride["compat"],
@@ -375,6 +379,9 @@ export class ModelRegistry {
 
 			return models.map((m) => {
 				let model = m;
+				if (!model.input.includes("image") && defaultModelInput(model.id).includes("image")) {
+					model = { ...model, input: ["text", "image"] };
+				}
 
 				// Apply provider-level baseUrl/headers/compat override
 				if (providerOverride) {
@@ -556,7 +563,7 @@ export class ModelRegistry {
 					provider: providerName,
 					baseUrl,
 					reasoning: modelDef.reasoning ?? false,
-					input: (modelDef.input ?? ["text"]) as ("text" | "image")[],
+					input: (modelDef.input ?? defaultModelInput(modelDef.id)) as ("text" | "image")[],
 					cost: modelDef.cost ?? defaultCost,
 					contextWindow: modelDef.contextWindow ?? 128000,
 					maxTokens: modelDef.maxTokens ?? 16384,
