@@ -475,9 +475,13 @@ export class ModelRegistry {
 
 			if (models.length === 0) {
 				// Override-only config: needs baseUrl, compat, modelOverrides, or some combination.
-				if (!providerConfig.baseUrl && !providerConfig.compat && !hasModelOverrides) {
+				// Note: for built-in providers, "apiKey" alone is a valid override (auth-only
+				// override on top of inherited baseUrl/compat). Only non-built-in providers
+				// need to fully declare their endpoint.
+				const hasAuthOnlyOverride = isBuiltIn && !!providerConfig.apiKey;
+				if (!providerConfig.baseUrl && !providerConfig.compat && !hasModelOverrides && !hasAuthOnlyOverride) {
 					throw new Error(
-						`Provider ${providerName}: must specify "baseUrl", "compat", "modelOverrides", or "models".`,
+						`Provider ${providerName}: must specify "baseUrl", "compat", "modelOverrides", "models", or "apiKey" (apiKey only valid for built-in providers).`,
 					);
 				}
 			} else if (!isBuiltIn) {
