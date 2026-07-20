@@ -32,6 +32,11 @@ export function buildLlmClientFromStreamFn(
 	streamFn: AiStreamFn,
 	options?: {
 		getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
+		/**
+		 * Getter for the current thinking level (e.g. "off", "low", "medium", "high").
+		 * Read at request time so live changes via /thinking are reflected.
+		 */
+		getThinkingLevel?: () => string | undefined;
 		thinkingBudgets?: any;
 		transport?: any;
 		onPayload?: any;
@@ -41,6 +46,10 @@ export function buildLlmClientFromStreamFn(
 	return {
 		async complete({ messages, systemPrompt, tools, onChunk, signal }) {
 			const apiKey = options?.getApiKey ? await options.getApiKey(model.provider) : undefined;
+			// Read the current thinking level at request time (not build time) so
+			// runtime changes via /thinking or setThinkingLevel() are honored.
+			// pi-ai's streamSimple expects this on options.reasoning.
+			const reasoning = options?.getThinkingLevel?.();
 			const streamTools = tools?.map((tool) => ({
 				name: tool.name,
 				description: tool.description ?? "",
@@ -77,6 +86,10 @@ export function buildLlmClientFromStreamFn(
 					onResponse: options?.onResponse,
 					thinkingBudgets: options?.thinkingBudgets,
 					transport: options?.transport,
+					// Pass the live thinking level so pi-ai maps it into the provider
+					// payload (zai/openrouter/etc.). Without this, streamSimple sees
+					// options.reasoning === undefined and always emits thinking disabled.
+					...(reasoning !== undefined ? { reasoning } : {}),
 				} as any,
 			);
 

@@ -48,3 +48,4 @@ collect.sh
 # Downloaded vendor tool archives
 .vendor-tools/
 /apps/desktop/target/
+docs/
