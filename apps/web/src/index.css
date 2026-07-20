@@ -25,6 +25,7 @@
 }
 
 :root {
+	color-scheme: light;
 	--bg: #f5f4ee;
 	--surface: #fffdf8;
 	--surface-2: #efece3;
@@ -39,6 +40,7 @@
 }
 
 .dark {
+	color-scheme: dark;
 	--bg: #0a0a0f;
 	--surface: #12121a;
 	--surface-2: #1a1a2e;
@@ -77,18 +79,55 @@
 	::selection {
 		background: color-mix(in srgb, var(--accent) 25%, transparent);
 	}
-	* {
-		scrollbar-width: thin;
-		scrollbar-color: var(--border) transparent;
-	}
-	*::-webkit-scrollbar {
-		width: 8px;
-		height: 8px;
-	}
-	*::-webkit-scrollbar-thumb {
-		background: var(--border);
-		border-radius: 9999px;
-	}
+}
+
+/* Scrollbar — kept outside @layer base so it isn't overridden by Tailwind utilities */
+* {
+	scrollbar-width: thin;
+	scrollbar-color: var(--border) var(--bg);
+}
+*::-webkit-scrollbar {
+	width: 6px;
+	height: 6px;
+	background: var(--bg);
+	-webkit-appearance: none;
+}
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-track-piece,
+*::-webkit-scrollbar-corner {
+	background: var(--bg);
+	-webkit-appearance: none;
+}
+*::-webkit-scrollbar-thumb {
+	background: var(--border);
+	border-radius: 9999px;
+}
+*::-webkit-scrollbar-thumb:hover {
+	background: var(--muted);
+}
+
+/* Dark mode — explicit overrides to guarantee no white bleed in WKWebView */
+.dark,
+.dark * {
+	scrollbar-color: #2a2a3e #0a0a0f;
+}
+.dark::-webkit-scrollbar,
+.dark *::-webkit-scrollbar,
+.dark::-webkit-scrollbar-track,
+.dark *::-webkit-scrollbar-track,
+.dark::-webkit-scrollbar-track-piece,
+.dark *::-webkit-scrollbar-track-piece,
+.dark::-webkit-scrollbar-corner,
+.dark *::-webkit-scrollbar-corner {
+	background: #0a0a0f;
+}
+.dark::-webkit-scrollbar-thumb,
+.dark *::-webkit-scrollbar-thumb {
+	background: #2a2a3e;
+}
+.dark::-webkit-scrollbar-thumb:hover,
+.dark *::-webkit-scrollbar-thumb:hover {
+	background: #8888aa;
 }
 
 @layer components {
