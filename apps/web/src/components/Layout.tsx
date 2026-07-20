@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { Settings as SettingsIcon, Plus, Folder, MessageSquare, MoreHorizontal, Pin, FolderOpen, Trash2 } from "lucide-react";
+import { Settings as SettingsIcon, Plus, Folder, MessageSquare, MoreHorizontal, Pin, FolderOpen, Trash2, PanelLeft } from "lucide-react";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { StatusDot, ThemeToggle, Button } from "./ui";
 import { BrandIcon } from "./BrandIcon";
@@ -8,6 +8,10 @@ import { deleteWorkspace, revealWorkspace } from "@/lib/transport";
 import type { RpcSessionState, WorkspaceMeta } from "@/lib/types";
 
 const PINNED_KEY = "pizza:pinned-workspaces";
+const COLLAPSED_KEY = "pizza:sidebar-collapsed";
+
+/** Context passed to routed views so their top header can clear the macOS traffic lights + toggle when the sidebar is collapsed. */
+export type LayoutOutletContext = { sidebarCollapsed: boolean };
 
 function getPinnedWorkspaces(): Set<string> {
 	try {
@@ -126,6 +130,26 @@ export default function Layout({
 	const isMainChat = isMainChatCwd(workspace);
 	const [pinned, setPinned] = useState<Set<string>>(getPinnedWorkspaces);
 	const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
+	const [collapsed, setCollapsed] = useState<boolean>(() => {
+		try { return localStorage.getItem(COLLAPSED_KEY) === "1"; } catch { return false; }
+	});
+	const [hovered, setHovered] = useState(false);
+	const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+	const toggleCollapsed = useCallback(() => {
+		setCollapsed((prev) => {
+			const next = !prev;
+			try { localStorage.setItem(COLLAPSED_KEY, next ? "1" : "0"); } catch { /* ignore */ }
+			return next;
+		});
+	}, []);
+
+	const clearHoverTimer = useCallback(() => {
+		if (hoverTimerRef.current) { clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null; }
+	}, []);
+
+	const showSidebar = !collapsed || hovered;
+	const floating = collapsed && hovered;
 
 	const togglePin = useCallback((ws: WorkspaceMeta) => {
 		setPinned((prev) => {
@@ -162,11 +186,51 @@ export default function Layout({
 		: [];
 
 	return (
-		<div className="flex h-full bg-bg">
-			<aside className="flex w-64 flex-col border-r border-border bg-surface">
+		<div className="relative flex h-full bg-bg">
+			{/* Expand button — shown only while collapsed, sits in the title bar just right of the macOS traffic lights */}
+			{!showSidebar && (
+				<button
+					onClick={toggleCollapsed}
+					className="fixed left-[76px] top-[6px] z-50 flex h-8 w-8 items-center justify-center rounded-lg text-muted/50 transition-colors hover:bg-surface-2 hover:text-muted active:bg-surface-2"
+					title="Show sidebar"
+				>
+					<PanelLeft className="h-4 w-4" />
+				</button>
+			)}
+
+			{/* Left-edge hover strip: reveals the sidebar as a floating overlay while collapsed */}
+			{collapsed && (
+				<div
+					className="fixed inset-y-0 left-0 z-30 w-2"
+					onMouseEnter={() => { clearHoverTimer(); setHovered(true); }}
+				/>
+			)}
+			<aside
+				onMouseEnter={() => { clearHoverTimer(); if (collapsed) setHovered(true); }}
+				onMouseLeave={() => { if (collapsed) { clearHoverTimer(); hoverTimerRef.current = setTimeout(() => setHovered(false), 150); } }}
+				className={cn(
+					"flex w-64 flex-col border-r border-border bg-surface transition-all duration-150",
+					floating ? "absolute inset-y-0 left-0 z-40 shadow-2xl" : "",
+					!showSidebar ? "pointer-events-none w-0 -translate-x-full overflow-hidden opacity-0" : "",
+				)}
+			>
+				{/* Top bar — aligns with the macOS traffic lights; holds the collapse button */}
 				<div
 					data-tauri-drag-region
-					className="flex items-center gap-3 px-5 pb-2 pt-10"
+					className="flex h-11 shrink-0 items-center pl-[76px] pr-2"
+				>
+					<button
+						data-no-drag
+						onClick={toggleCollapsed}
+						className="flex h-8 w-8 items-center justify-center rounded-lg text-muted/50 transition-colors hover:bg-surface-2 hover:text-muted active:bg-surface-2"
+						title="Hide sidebar"
+					>
+						<PanelLeft className="h-4 w-4" />
+					</button>
+				</div>
+				<div
+					data-tauri-drag-region
+					className="flex items-center gap-3 px-5 pb-2 pt-1"
 				>
 					<BrandIcon size={28} className="shrink-0 text-accent" />
 					<div className="leading-tight" data-tauri-drag-region>
@@ -184,7 +248,6 @@ export default function Layout({
 						</div>
 					</div>
 				</div>
-
 				{/* Main chat — persistent agent */}
 				<div className="px-3 pt-2 pb-1">
 					<button
@@ -337,7 +400,7 @@ export default function Layout({
 			</aside>
 
 			<main className="flex-1 overflow-y-auto">
-				<Outlet />
+				<Outlet context={{ sidebarCollapsed: collapsed } satisfies LayoutOutletContext} />
 			</main>
 		</div>
 	);

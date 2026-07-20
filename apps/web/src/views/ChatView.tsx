@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState, useCallback } from "react";
+import { useOutletContext } from "react-router-dom";
 import { sendCommandAwait, subscribeEvents, subscribeSidecarExit } from "@/lib/transport";
 import type { RpcSessionState, TypedEvent } from "@/lib/types";
 import { Conversation, type TimelineItem } from "@/components/Conversation";
 import { Composer, type ComposerImage } from "@/components/Composer";
 import { EmptyState } from "@/components/ui";
+import { cn } from "@/lib/utils";
+import type { LayoutOutletContext } from "@/components/Layout";
 
 function blockToDataUrl(block: Record<string, unknown>): string | null {
 	const data = block.data;
@@ -118,6 +121,7 @@ export default function ChatView({
 	sidecarExitCode: number | null;
 	workspace?: string | null;
 }) {
+	const { sidebarCollapsed } = useOutletContext<LayoutOutletContext>() ?? { sidebarCollapsed: false };
 	const [items, setItems] = useState<TimelineItem[]>([]);
 	const [error, setError] = useState("");
 	const activeAssistantRef = useRef<string | null>(null);
@@ -514,7 +518,10 @@ export default function ChatView({
 		<div className="flex h-full flex-col">
 			<div
 				data-tauri-drag-region
-				className="flex h-11 shrink-0 items-center border-b border-border bg-surface/80 px-6 backdrop-blur"
+				className={cn(
+					"flex h-11 shrink-0 items-center border-b border-border bg-surface/80 pr-6 backdrop-blur transition-[padding] duration-150",
+					sidebarCollapsed ? "pl-[120px]" : "pl-6",
+				)}
 			>
 				<span className="truncate text-sm font-medium text-fg" title={firstUserText || sessionTitle}>
 					{sessionTitle}
