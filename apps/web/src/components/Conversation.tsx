@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { Markdown } from "./Markdown";
 import {
@@ -44,6 +45,7 @@ function useCopy(): [boolean, (text: string) => void] {
 
 /** Long monospace block that collapses to a preview by default. */
 function CollapsibleCode({ text, isError }: { text: string; isError?: boolean }) {
+	const { t } = useTranslation();
 	const [expanded, setExpanded] = useState(false);
 	const lines = text.split("\n");
 	const long = lines.length > COLLAPSE_LINES;
@@ -65,7 +67,7 @@ function CollapsibleCode({ text, isError }: { text: string; isError?: boolean })
 					onClick={() => setExpanded((e) => !e)}
 					className="mt-1 font-mono text-[10px] uppercase tracking-widest text-accent hover:opacity-80"
 				>
-					{expanded ? "Show less" : `Show ${lines.length - COLLAPSE_LINES} more lines`}
+					{expanded ? t("conversation.showLess") : t("conversation.showMoreLines", { count: lines.length - COLLAPSE_LINES })}
 				</button>
 			)}
 		</div>
@@ -74,6 +76,7 @@ function CollapsibleCode({ text, isError }: { text: string; isError?: boolean })
 
 /** Collapsible reasoning/thinking block, collapsed by default. */
 function Thinking({ text, streaming }: { text: string; streaming?: boolean }) {
+	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
 	return (
 		<div className="mb-2">
@@ -83,7 +86,7 @@ function Thinking({ text, streaming }: { text: string; streaming?: boolean }) {
 				className="flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-widest text-muted transition-colors hover:text-fg"
 			>
 				<Brain className={cn("h-3.5 w-3.5", streaming && "animate-pulse text-accent")} />
-				<span>{streaming ? "Thinking…" : "Thought process"}</span>
+				<span>{streaming ? t("conversation.thinking") : t("conversation.thoughtProcess")}</span>
 				<ChevronRight className={cn("h-3 w-3 transition-transform", open && "rotate-90")} />
 			</button>
 			{open && (
@@ -109,6 +112,7 @@ function formatToolArgs(toolArgs?: string): string {
 }
 
 function ToolCard({ item }: { item: TimelineItem }) {
+	const { t } = useTranslation();
 	const command = formatToolArgs(item.toolArgs);
 	const running = item.streaming && !item.toolResult;
 	return (
@@ -144,7 +148,7 @@ function ToolCard({ item }: { item: TimelineItem }) {
 					)}
 					{item.toolResult && <CollapsibleCode text={item.toolResult} isError={item.isError} />}
 					{running && !item.toolResult && (
-						<span className="font-mono text-xs text-accent">running…</span>
+						<span className="font-mono text-xs text-accent">{t("conversation.running")}</span>
 					)}
 				</div>
 			</div>
@@ -153,6 +157,7 @@ function ToolCard({ item }: { item: TimelineItem }) {
 }
 
 function AssistantActions({ text, visible }: { text: string; visible: boolean }) {
+	const { t } = useTranslation();
 	const [copied, copy] = useCopy();
 	const [feedback, setFeedback] = useState<null | "up" | "down">(null);
 	return (
@@ -166,7 +171,7 @@ function AssistantActions({ text, visible }: { text: string; visible: boolean })
 				type="button"
 				onClick={() => copy(text)}
 				className="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-surface-2 hover:text-fg"
-				title="Copy"
+				title={t("common.copy")}
 			>
 				{copied ? <Check className="h-3.5 w-3.5 text-success" /> : <Copy className="h-3.5 w-3.5" />}
 			</button>
@@ -177,7 +182,7 @@ function AssistantActions({ text, visible }: { text: string; visible: boolean })
 					"flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-surface-2",
 					feedback === "up" ? "text-success" : "text-muted hover:text-fg",
 				)}
-				title="Good response"
+				title={t("conversation.goodResponse")}
 			>
 				<ThumbsUp className="h-3.5 w-3.5" />
 			</button>
@@ -188,7 +193,7 @@ function AssistantActions({ text, visible }: { text: string; visible: boolean })
 					"flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-surface-2",
 					feedback === "down" ? "text-danger" : "text-muted hover:text-fg",
 				)}
-				title="Bad response"
+				title={t("conversation.badResponse")}
 			>
 				<ThumbsDown className="h-3.5 w-3.5" />
 			</button>
@@ -197,6 +202,7 @@ function AssistantActions({ text, visible }: { text: string; visible: boolean })
 }
 
 function UserBubble({ item }: { item: TimelineItem }) {
+	const { t } = useTranslation();
 	const [copied, copy] = useCopy();
 	const [hover, setHover] = useState(false);
 	return (
@@ -212,7 +218,7 @@ function UserBubble({ item }: { item: TimelineItem }) {
 							<img
 								key={i}
 								src={src}
-								alt="attachment"
+								alt={t("conversation.attachment")}
 								className="max-h-48 rounded-md border border-border object-contain"
 							/>
 						))}
@@ -232,7 +238,7 @@ function UserBubble({ item }: { item: TimelineItem }) {
 						"mt-1 flex h-7 w-7 items-center justify-center rounded-md text-muted transition-opacity hover:bg-surface-2 hover:text-fg",
 						hover ? "opacity-100" : "pointer-events-none opacity-0",
 					)}
-					title="Copy"
+					title={t("common.copy")}
 				>
 					{copied ? <Check className="h-3.5 w-3.5 text-success" /> : <Copy className="h-3.5 w-3.5" />}
 				</button>
@@ -242,6 +248,7 @@ function UserBubble({ item }: { item: TimelineItem }) {
 }
 
 function AssistantMessage({ item }: { item: TimelineItem }) {
+	const { t } = useTranslation();
 	const [hover, setHover] = useState(false);
 	return (
 		<div
@@ -257,7 +264,7 @@ function AssistantMessage({ item }: { item: TimelineItem }) {
 							<img
 								key={i}
 								src={src}
-								alt="attachment"
+								alt={t("conversation.attachment")}
 								className="max-h-48 rounded-md border border-border object-contain"
 							/>
 						))}

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowUp, Square, Mic, Plus, ChevronDown, Check, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { sendCommandAwait } from "@/lib/transport";
 import type { RpcSessionState, ModelInfo } from "@/lib/types";
@@ -65,6 +66,7 @@ export function Composer({
 	const [models, setModels] = useState<ModelInfo[]>([]);
 	const [recording, setRecording] = useState(false);
 	const [modelMenuOpen, setModelMenuOpen] = useState(false);
+	const { t } = useTranslation();
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const recognitionRef = useRef<SpeechRecognition | null>(null);
@@ -136,7 +138,7 @@ export function Composer({
 	}, [state?.model, optimisticModel]);
 
 	const displayedModel = optimisticModel ?? state?.model ?? null;
-	const currentModelLabel = displayedModel?.name ?? displayedModel?.id ?? "Model";
+	const currentModelLabel = displayedModel?.name ?? displayedModel?.id ?? t("composer.model");
 
 	const handleModelSelect = useCallback(async (m: ModelInfo) => {
 		setModelMenuOpen(false);
@@ -280,7 +282,7 @@ export function Composer({
 										type="button"
 										onClick={() => removeImage(i)}
 										className="absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-black/60 text-white opacity-0 transition-opacity group-hover:opacity-100"
-										title="Remove"
+										title={t("common.remove")}
 									>
 										<X className="h-3 w-3" />
 									</button>
@@ -291,7 +293,7 @@ export function Composer({
 					<textarea
 						ref={textareaRef}
 						className="w-full resize-none bg-transparent px-1 py-1 text-sm text-fg outline-none placeholder:text-muted min-h-[2.5rem] max-h-80"
-						placeholder={sidecarReady ? "随心输入" : "waiting for sidecar..."}
+						placeholder={sidecarReady ? t("composer.placeholder") : t("composer.waitingForSidecar")}
 						value={input}
 						disabled={!sidecarReady}
 						onChange={(e) => setInput(e.target.value)}
@@ -319,7 +321,7 @@ export function Composer({
 								disabled={!sidecarReady}
 								onClick={() => fileInputRef.current?.click()}
 								className="flex h-8 w-8 items-center justify-center rounded-full text-muted transition-colors hover:bg-surface hover:text-fg disabled:opacity-40"
-								title="Attach image"
+								title={t("composer.attachImage")}
 							>
 								<Plus className="h-4 w-4" />
 							</button>
@@ -334,7 +336,7 @@ export function Composer({
 									disabled={!sidecarReady || visibleModels.length === 0}
 									onClick={() => setModelMenuOpen((o) => !o)}
 									className="flex items-center gap-1 rounded-full px-2.5 py-1 text-xs text-muted transition-colors hover:bg-surface hover:text-fg disabled:opacity-40"
-									title={visibleModels.length === 0 ? "No models available" : "Select model"}
+									title={visibleModels.length === 0 ? t("composer.noModelsAvailable") : t("composer.selectModel")}
 								>
 									<span className="max-w-[10rem] truncate">{currentModelLabel}</span>
 									<ChevronDown className="h-3.5 w-3.5" />
@@ -377,7 +379,7 @@ export function Composer({
 											href="/#/settings"
 											className="block rounded-lg bg-surface-2 px-2.5 py-1.5 text-center text-[11px] text-accent hover:opacity-80"
 										>
-											Configure API key in Settings →
+											{t("composer.configureApiKey")}
 										</a>
 									</div>
 								)}
@@ -394,7 +396,7 @@ export function Composer({
 										? "bg-danger/10 text-danger"
 										: "text-muted hover:bg-surface hover:text-fg",
 								)}
-								title={recording ? "Stop dictation" : "Voice input"}
+								title={recording ? t("composer.stopDictation") : t("composer.voiceInput")}
 							>
 								<Mic className="h-4 w-4" />
 							</button>
@@ -405,7 +407,7 @@ export function Composer({
 									type="button"
 									onClick={onAbort}
 									className="flex h-8 w-8 items-center justify-center rounded-full bg-danger text-white transition-colors hover:opacity-90"
-									title="Stop"
+									title={t("composer.stop")}
 								>
 									<Square className="h-3.5 w-3.5" />
 								</button>
@@ -420,7 +422,7 @@ export function Composer({
 											? "bg-accent text-accent-fg hover:opacity-90"
 											: "bg-border text-muted",
 									)}
-									title="Send"
+									title={t("composer.send")}
 								>
 									<ArrowUp className="h-4 w-4" />
 								</button>
@@ -429,7 +431,7 @@ export function Composer({
 					</div>
 				</div>
 				<div className="mt-2 text-center font-mono text-[10px] uppercase tracking-widest text-muted">
-					enter to send · shift+enter for newline
+					{t("composer.sendHint")}
 				</div>
 			</div>
 		</div>

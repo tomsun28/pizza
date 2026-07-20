@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useOutletContext } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { sendCommandAwait, subscribeEvents, subscribeSidecarExit } from "@/lib/transport";
 import type { RpcSessionState, TypedEvent } from "@/lib/types";
 import { Conversation, type TimelineItem } from "@/components/Conversation";
@@ -122,6 +123,7 @@ export default function ChatView({
 	workspace?: string | null;
 }) {
 	const { sidebarCollapsed } = useOutletContext<LayoutOutletContext>() ?? { sidebarCollapsed: false };
+	const { t } = useTranslation();
 	const [items, setItems] = useState<TimelineItem[]>([]);
 	const [error, setError] = useState("");
 	const activeAssistantRef = useRef<string | null>(null);
@@ -135,6 +137,11 @@ export default function ChatView({
 	const itemsRef = useRef<TimelineItem[]>([]);
 	itemsRef.current = items;
 	const prevWsRef = useRef<string | null>(null);
+
+	// Keep latest t in a ref so closures created in effects can read it
+	// without re-subscribing on every language change.
+	const tRef = useRef(t);
+	useEffect(() => { tRef.current = t; }, [t]);
 
 	// Save/restore conversation on workspace switch.
 	useEffect(() => {
@@ -179,13 +186,13 @@ export default function ChatView({
 					if (role === "user") {
 						const text = messageText(msg);
 						const images = messageImages(msg);
-						history.push({ id: `hist-${history.length}`, role: "user", title: "You", text, status: "", images: images.length > 0 ? images : undefined });
+						history.push({ id: `hist-${history.length}`, role: "user", title: tRef.current("common.you"), text, status: "", images: images.length > 0 ? images : undefined });
 					} else if (role === "assistant") {
 						const text = messageText(msg);
 						const thinking = messageThinking(msg);
 						const images = messageImages(msg);
 						if (text || thinking || images.length > 0) {
-							history.push({ id: `hist-${history.length}`, role: "assistant", title: "Pizza", text, status: "DONE", streaming: false, thinking: thinking || undefined, images: images.length > 0 ? images : undefined });
+							history.push({ id: `hist-${history.length}`, role: "assistant", title: tRef.current("common.pizza"), text, status: "DONE", streaming: false, thinking: thinking || undefined, images: images.length > 0 ? images : undefined });
 						}
 						// Emit a tool card for each tool call in the assistant message.
 						for (const call of messageToolCalls(msg)) {
@@ -214,6 +221,7 @@ export default function ChatView({
 						} else {
 							// Orphan result (no matching call) — still show it.
 							history.push({ id: `hist-${history.length}`, role: "tool", title: String(msg.toolName ?? msg.name ?? "tool"), text: "", status: isError ? "ERROR" : "DONE", streaming: false, toolName: String(msg.toolName ?? msg.name ?? "tool"), toolResult: resultText, isError });
+							// (title intentionally uses raw tool name, not translated)
 						}
 					}
 				}
@@ -263,7 +271,7 @@ export default function ChatView({
 				const images = messageImages(event.payload);
 				updateItems((prev) => [
 					...prev,
-					{ id: event.event_id, role: "user", title: "You", text, status: "", images: images.length > 0 ? images : undefined },
+					{ id: event.event_id, role: "user", title: tRef.current("common.you"), text, status: "", images: images.length > 0 ? images : undefined },
 				]);
 				break;
 			}
@@ -277,7 +285,7 @@ export default function ChatView({
 				}
 				updateItems((prev) => [
 					...prev,
-					{ id, role: "assistant", title: "Pizza", text: "", status: "STREAMING", streaming: true },
+					{ id, role: "assistant", title: tRef.current("common.pizza"), text: "", status: "STREAMING", streaming: true },
 				]);
 				break;
 			}
@@ -311,7 +319,7 @@ export default function ChatView({
 						: "";
 					const isError = stopReason === "error" || Boolean(errorMessage);
 					const fallbackText = isError && !text
-						? errorMessage || `Agent error (${stopReason || "no response"})`
+						? errorMessage || tRef.current("chat.agentError", { reason: stopReason || "no response" })
 						: text;
 					updateItems((prev) =>
 						prev.map((it) =>
@@ -447,7 +455,7 @@ export default function ChatView({
 			unlisteners.push(un1);
 			const un2 = await subscribeSidecarExit((code) => {
 				if (code !== null) {
-					setError(`Sidecar exited (code ${code})`);
+					setError(tRef.current("chat.sidecarExited", { code }));
 				}
 			});
 			if (cancelled) { un2(); return; }
@@ -512,7 +520,7 @@ export default function ChatView({
 	const wsName = workspace ? workspace.replace(/\/+$/, "").split("/").pop() || "" : "";
 	const sessionTitle = firstUserText
 		? (firstUserText.length > 60 ? firstUserText.slice(0, 60).trimEnd() + "…" : firstUserText)
-		: wsName || "New Chat";
+		: wsName || t("chat.newChat");
 
 	return (
 		<div className="flex h-full flex-col">
@@ -531,13 +539,13 @@ export default function ChatView({
 				{items.length === 0 ? (
 					<div className="flex min-h-[calc(100vh-200px)] items-center justify-center">
 						<EmptyState
-							title="Pizza"
+							title={t("common.pizza")}
 							description={
 								sidecarReady
-									? "Ready. Ask anything about this project."
+									? t("chat.readyPrompt")
 									: sidecarExitCode !== null
-										? `Sidecar exited (code ${sidecarExitCode})`
-										: "Starting..."
+										? t("chat.sidecarExited", { code: sidecarExitCode })
+										: t("common.starting")
 							}
 						/>
 					</div>

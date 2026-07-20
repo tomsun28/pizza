@@ -2,9 +2,11 @@ import { memo, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Copy, Check } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 
 function CodeBlock({ code, lang }: { code: string; lang?: string }) {
+	const { t } = useTranslation();
 	const [copied, setCopied] = useState(false);
 	const copy = () => {
 		void navigator.clipboard.writeText(code);
@@ -15,16 +17,16 @@ function CodeBlock({ code, lang }: { code: string; lang?: string }) {
 		<div className="group/code relative my-3 overflow-hidden rounded-lg border border-border bg-surface-2">
 			<div className="flex items-center justify-between border-b border-border/60 px-3 py-1.5">
 				<span className="font-mono text-[10px] uppercase tracking-widest text-muted">
-					{lang || "code"}
+					{lang || t("markdown.code")}
 				</span>
 				<button
 					type="button"
 					onClick={copy}
 					className="flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[10px] text-muted transition-colors hover:bg-surface hover:text-fg"
-					title="Copy code"
+					title={t("markdown.copyCode")}
 				>
 					{copied ? <Check className="h-3 w-3 text-success" /> : <Copy className="h-3 w-3" />}
-					{copied ? "Copied" : "Copy"}
+					{copied ? t("markdown.copied") : t("markdown.copy")}
 				</button>
 			</div>
 			<pre className="overflow-x-auto px-3 py-2.5">

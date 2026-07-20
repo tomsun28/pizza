@@ -1,0 +1,134 @@
+{
+	"common": {
+		"you": "You",
+		"pizza": "Pizza",
+		"remove": "Remove",
+		"delete": "Delete",
+		"copy": "Copy",
+		"settings": "Settings",
+		"error": "Error",
+		"starting": "Starting...",
+		"backToChat": "Back to Chat"
+	},
+	"layout": {
+		"brandTagline": "Create together.",
+		"chat": "Chat",
+		"chatSubtitle": "always-on assistant",
+		"chatTitle": "Persistent agent at ~/.pizza/main",
+		"workspaces": "Workspaces",
+		"newWorkspace": "New Workspace",
+		"newWorkspaceTitle": "New workspace",
+		"noWorkspaces": "No workspaces yet",
+		"showSidebar": "Show sidebar",
+		"hideSidebar": "Hide sidebar",
+		"moreActions": "More actions",
+		"pinToTop": "Pin to top",
+		"unpin": "Unpin",
+		"revealInFiles": "Reveal in files",
+		"selectProjectDirectory": "Select project directory",
+		"statusOnline": "online",
+		"statusOffline": "offline",
+		"statusRunning": "running",
+		"deleteWorkspaceConfirm": "Delete workspace \"{{name}}\"?\nThis removes the workspace metadata. The project files are not affected.",
+		"deleteWorkspaceFailed": "Failed to delete workspace: {{error}}",
+		"timeJustNow": "just now",
+		"timeMinutesAgo": "{{count}}m ago",
+		"timeHoursAgo": "{{count}}h ago",
+		"timeDaysAgo": "{{count}}d ago"
+	},
+	"chat": {
+		"newChat": "New Chat",
+		"readyPrompt": "Ready. Ask anything about this project.",
+		"sidecarExited": "Sidecar exited (code {{code}})",
+		"agentError": "Agent error ({{reason}})",
+		"failedToStartWorkspace": "Failed to start workspace"
+	},
+	"composer": {
+		"placeholder": "Type anything",
+		"waitingForSidecar": "waiting for sidecar...",
+		"model": "Model",
+		"attachImage": "Attach image",
+		"noModelsAvailable": "No models available",
+		"selectModel": "Select model",
+		"configureApiKey": "Configure API key in Settings →",
+		"stopDictation": "Stop dictation",
+		"voiceInput": "Voice input",
+		"stop": "Stop",
+		"send": "Send",
+		"sendHint": "enter to send · shift+enter for newline"
+	},
+	"conversation": {
+		"showLess": "Show less",
+		"showMoreLines": "Show {{count}} more lines",
+		"thinking": "Thinking…",
+		"thoughtProcess": "Thought process",
+		"running": "running…",
+		"goodResponse": "Good response",
+		"badResponse": "Bad response",
+		"attachment": "attachment"
+	},
+	"markdown": {
+		"code": "code",
+		"copyCode": "Copy code",
+		"copied": "Copied",
+		"copy": "Copy"
+	},
+	"history": {
+		"title": "History",
+		"description": "Session tree and branch navigation",
+		"comingSoon": "Coming soon",
+		"comingSoonDescription": "History tree visualization will be available in a future update."
+	},
+	"theme": {
+		"switchToLight": "Switch to light",
+		"switchToDark": "Switch to dark"
+	},
+	"settings": {
+		"title": "Settings",
+		"tabs": {
+			"general": "General",
+			"provider": "Provider"
+		},
+		"general": {
+			"model": "Model",
+			"currentProvider": "Current Provider",
+			"currentModel": "Current Model",
+			"thinkingLevel": "Thinking Level",
+			"compaction": "Compaction",
+			"autoCompaction": "Auto Compaction",
+			"status": "Status",
+			"compacting": "Compacting...",
+			"language": "Language",
+			"languageDescription": "Interface display language"
+		},
+		"provider": {
+			"title": "Providers",
+			"addProvider": "Add Provider",
+			"addNew": "Add a new provider",
+			"noProviders": "No providers configured yet.",
+			"noProvidersHint": "Click \"Add Provider\" to get started.",
+			"loading": "Loading providers...",
+			"error": "Error: {{error}}",
+			"oauth": "OAuth",
+			"apiKey": "API Key",
+			"notConfigured": "Not configured",
+			"update": "Update",
+			"configure": "Configure",
+			"remove": "Remove",
+			"save": "Save",
+			"saving": "Saving...",
+			"cancel": "Cancel",
+			"hide": "Hide",
+			"show": "Show",
+			"enterKey": "Enter API key for {{label}}",
+			"keyEmpty": "API key cannot be empty",
+			"selectProvider": "Select a provider first",
+			"selectProviderPlaceholder": "Select a provider...",
+			"confirmRemove": "Remove API key for {{label}}?"
+		}
+	},
+	"language": {
+		"en": "English",
+		"zh-CN": "中文"
+	}
+}

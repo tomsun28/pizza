@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { PageHeader, Card, Badge, Button } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { PixelSelect, PixelSwitch } from "@pxlkit/ui-kit";
@@ -6,6 +7,12 @@ import { listProviders, setProviderApiKey, removeProviderApiKey, type ProviderIn
 import type { RpcSessionState } from "@/lib/types";
 import { sendCommandAwait } from "@/lib/transport";
 import { Key, Trash2, Eye, EyeOff, Plus } from "lucide-react";
+import {
+	SUPPORTED_LANGUAGES,
+	DEFAULT_LANGUAGE,
+	setStoredLanguage,
+	type AppLanguage,
+} from "@/i18n";
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
 	return (
@@ -38,8 +45,12 @@ const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as 
 const THINKING_OPTIONS = THINKING_LEVELS.map((level) => ({ value: level, label: level }));
 
 function GeneralTab({ state }: { state: RpcSessionState | null }) {
+	const { t, i18n } = useTranslation();
 	const [thinkingLevel, setThinkingLevel] = useState<string>(state?.thinkingLevel ?? "off");
 	const [autoCompaction, setAutoCompaction] = useState<boolean>(state?.autoCompactionEnabled ?? true);
+	const [language, setLanguage] = useState<AppLanguage>(
+		(SUPPORTED_LANGUAGES.includes(i18n.language as AppLanguage) ? i18n.language : DEFAULT_LANGUAGE) as AppLanguage,
+	);
 
 	const handleThinkingChange = useCallback(async (level: string) => {
 		setThinkingLevel(level);
@@ -59,17 +70,29 @@ function GeneralTab({ state }: { state: RpcSessionState | null }) {
 		}
 	}, []);
 
+	const handleLanguageChange = useCallback((value: string) => {
+		const lang = (SUPPORTED_LANGUAGES.includes(value as AppLanguage) ? value : DEFAULT_LANGUAGE) as AppLanguage;
+		setLanguage(lang);
+		setStoredLanguage(lang);
+		void i18n.changeLanguage(lang);
+	}, [i18n]);
+
+	const languageOptions = SUPPORTED_LANGUAGES.map((lang) => ({
+		value: lang,
+		label: t(`language.${lang}`),
+	}));
+
 	return (
 		<div className="space-y-6">
 			<Card>
-				<div className="mb-2 text-sm font-medium text-fg">Model</div>
-				<Row label="Current Provider">
+				<div className="mb-2 text-sm font-medium text-fg">{t("settings.general.model")}</div>
+				<Row label={t("settings.general.currentProvider")}>
 					<span className="font-mono">{state?.model?.provider ?? "—"}</span>
 				</Row>
-				<Row label="Current Model">
+				<Row label={t("settings.general.currentModel")}>
 					<span className="font-mono">{state?.model?.id ?? "—"}</span>
 				</Row>
-				<Row label="Thinking Level">
+				<Row label={t("settings.general.thinkingLevel")}>
 					<div className="w-32">
 						<PixelSelect
 							value={thinkingLevel}
@@ -83,26 +106,42 @@ function GeneralTab({ state }: { state: RpcSessionState | null }) {
 			</Card>
 
 			<Card>
-				<div className="mb-2 text-sm font-medium text-fg">Compaction</div>
-				<Row label="Auto Compaction">
+				<div className="mb-2 text-sm font-medium text-fg">{t("settings.general.compaction")}</div>
+				<Row label={t("settings.general.autoCompaction")}>
 					<PixelSwitch
-						label="Auto Compaction"
+						label={t("settings.general.autoCompaction")}
 						checked={autoCompaction}
 						onChange={handleCompactionChange}
 						tone="cyan"
 					/>
 				</Row>
 				{state?.isCompacting && (
-					<Row label="Status">
-						<Badge tone="warning">Compacting...</Badge>
+					<Row label={t("settings.general.status")}>
+						<Badge tone="warning">{t("settings.general.compacting")}</Badge>
 					</Row>
 				)}
+			</Card>
+
+			<Card>
+				<div className="mb-2 text-sm font-medium text-fg">{t("settings.general.language")}</div>
+				<Row label={t("settings.general.languageDescription")}>
+					<div className="w-40">
+						<PixelSelect
+							value={language}
+							options={languageOptions}
+							onChange={handleLanguageChange}
+							size="sm"
+							tone="cyan"
+						/>
+					</div>
+				</Row>
 			</Card>
 		</div>
 	);
 }
 
 function ProviderRow({ provider, onRefresh }: { provider: ProviderInfo; onRefresh: () => void }) {
+	const { t } = useTranslation();
 	const [editing, setEditing] = useState(false);
 	const [keyValue, setKeyValue] = useState("");
 	const [showKey, setShowKey] = useState(false);
@@ -111,7 +150,7 @@ function ProviderRow({ provider, onRefresh }: { provider: ProviderInfo; onRefres
 
 	const handleSave = useCallback(async () => {
 		if (!keyValue.trim()) {
-			setError("API key cannot be empty");
+			setError(t("settings.provider.keyEmpty"));
 			return;
 		}
 		setSaving(true);
@@ -127,17 +166,17 @@ function ProviderRow({ provider, onRefresh }: { provider: ProviderInfo; onRefres
 		} finally {
 			setSaving(false);
 		}
-	}, [keyValue, provider.id, onRefresh]);
+	}, [keyValue, provider.id, onRefresh, t]);
 
 	const handleRemove = useCallback(async () => {
-		if (!confirm(`Remove API key for ${PROVIDER_LABELS[provider.id] ?? provider.id}?`)) return;
+		if (!confirm(t("settings.provider.confirmRemove", { label: PROVIDER_LABELS[provider.id] ?? provider.id }))) return;
 		try {
 			await removeProviderApiKey(provider.id);
 			onRefresh();
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		}
-	}, [provider.id, onRefresh]);
+	}, [provider.id, onRefresh, t]);
 
 	const label = PROVIDER_LABELS[provider.id] ?? provider.id;
 
@@ -149,23 +188,23 @@ function ProviderRow({ provider, onRefresh }: { provider: ProviderInfo; onRefres
 					<span className="text-sm font-medium text-fg">{label}</span>
 					{provider.has_api_key ? (
 						<Badge tone={provider.auth_type === "oauth" ? "accent" : "success"}>
-							{provider.auth_type === "oauth" ? "OAuth" : "API Key"}
+							{provider.auth_type === "oauth" ? t("settings.provider.oauth") : t("settings.provider.apiKey")}
 						</Badge>
 					) : (
-						<Badge tone="neutral">Not configured</Badge>
+						<Badge tone="neutral">{t("settings.provider.notConfigured")}</Badge>
 					)}
 				</div>
 				<div className="flex items-center gap-2">
 					{!editing && provider.auth_type !== "oauth" && (
 						<Button size="sm" tone="neutral" onClick={() => setEditing(true)}>
-							{provider.has_api_key ? "Update" : "Configure"}
+							{provider.has_api_key ? t("settings.provider.update") : t("settings.provider.configure")}
 						</Button>
 					)}
 					{provider.has_api_key && provider.auth_type !== "oauth" && !editing && (
 						<button
 							onClick={handleRemove}
 							className="text-muted hover:text-danger transition-colors"
-							title="Remove"
+							title={t("settings.provider.remove")}
 						>
 							<Trash2 className="h-3.5 w-3.5" />
 						</button>
@@ -179,14 +218,14 @@ function ProviderRow({ provider, onRefresh }: { provider: ProviderInfo; onRefres
 							type={showKey ? "text" : "password"}
 							value={keyValue}
 							onChange={(e) => setKeyValue(e.target.value)}
-							placeholder={`Enter API key for ${label}`}
+							placeholder={t("settings.provider.enterKey", { label })}
 							className="flex-1 rounded-md border border-border bg-surface px-3 py-1.5 font-mono text-xs text-fg placeholder:text-muted focus:border-accent focus:outline-none"
 							onKeyDown={(e) => e.key === "Enter" && handleSave()}
 						/>
 						<button
 							onClick={() => setShowKey(!showKey)}
 							className="text-muted hover:text-fg transition-colors"
-							title={showKey ? "Hide" : "Show"}
+							title={showKey ? t("settings.provider.hide") : t("settings.provider.show")}
 						>
 							{showKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
 						</button>
@@ -194,10 +233,10 @@ function ProviderRow({ provider, onRefresh }: { provider: ProviderInfo; onRefres
 					{error && <p className="font-mono text-[10px] text-danger">{error}</p>}
 					<div className="flex items-center gap-2">
 						<Button size="sm" tone="accent" onClick={handleSave} disabled={saving}>
-							{saving ? "Saving..." : "Save"}
+							{saving ? t("settings.provider.saving") : t("settings.provider.save")}
 						</Button>
 						<Button size="sm" tone="neutral" onClick={() => { setEditing(false); setKeyValue(""); setShowKey(false); setError(""); }}>
-							Cancel
+							{t("settings.provider.cancel")}
 						</Button>
 					</div>
 				</div>
@@ -215,6 +254,7 @@ function AddProviderInline({
 	onSaved: () => void;
 	onCancel: () => void;
 }) {
+	const { t } = useTranslation();
 	const [selected, setSelected] = useState("");
 	const [keyValue, setKeyValue] = useState("");
 	const [showKey, setShowKey] = useState(false);
@@ -230,11 +270,11 @@ function AddProviderInline({
 
 	const handleSave = useCallback(async () => {
 		if (!selected) {
-			setError("Select a provider first");
+			setError(t("settings.provider.selectProvider"));
 			return;
 		}
 		if (!keyValue.trim()) {
-			setError("API key cannot be empty");
+			setError(t("settings.provider.keyEmpty"));
 			return;
 		}
 		setSaving(true);
@@ -247,24 +287,24 @@ function AddProviderInline({
 		} finally {
 			setSaving(false);
 		}
-	}, [selected, keyValue, onSaved]);
+	}, [selected, keyValue, onSaved, t]);
 
 	return (
 		<div className="border-b border-border/60 py-3">
-			<div className="mb-2 text-xs font-medium text-fg">Add a new provider</div>
+			<div className="mb-2 text-xs font-medium text-fg">{t("settings.provider.addNew")}</div>
 			<div className="flex items-center gap-2">
 				<div className="flex-1">
 					<PixelSelect
 						value={selected}
 						options={providerOptions}
 						onChange={(v) => { setSelected(v); setError(""); }}
-						placeholder="Select a provider..."
+						placeholder={t("settings.provider.selectProviderPlaceholder")}
 						tone="cyan"
 						size="sm"
 					/>
 				</div>
 				{!selected && (
-					<Button size="sm" tone="neutral" onClick={onCancel}>Cancel</Button>
+					<Button size="sm" tone="neutral" onClick={onCancel}>{t("settings.provider.cancel")}</Button>
 				)}
 			</div>
 			{selected && (
@@ -274,7 +314,7 @@ function AddProviderInline({
 							type={showKey ? "text" : "password"}
 							value={keyValue}
 							onChange={(e) => setKeyValue(e.target.value)}
-							placeholder={`Enter API key for ${label}`}
+							placeholder={t("settings.provider.enterKey", { label })}
 							autoFocus
 							className="flex-1 rounded-md border border-border bg-surface px-3 py-1.5 font-mono text-xs text-fg placeholder:text-muted focus:border-accent focus:outline-none"
 							onKeyDown={(e) => e.key === "Enter" && handleSave()}
@@ -282,7 +322,7 @@ function AddProviderInline({
 						<button
 							onClick={() => setShowKey(!showKey)}
 							className="text-muted hover:text-fg transition-colors"
-							title={showKey ? "Hide" : "Show"}
+							title={showKey ? t("settings.provider.hide") : t("settings.provider.show")}
 						>
 							{showKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
 						</button>
@@ -290,9 +330,9 @@ function AddProviderInline({
 					{error && <p className="font-mono text-[10px] text-danger">{error}</p>}
 					<div className="flex items-center gap-2">
 						<Button size="sm" tone="accent" onClick={handleSave} disabled={saving}>
-							{saving ? "Saving..." : "Save"}
+							{saving ? t("settings.provider.saving") : t("settings.provider.save")}
 						</Button>
-						<Button size="sm" tone="neutral" onClick={onCancel}>Cancel</Button>
+						<Button size="sm" tone="neutral" onClick={onCancel}>{t("settings.provider.cancel")}</Button>
 					</div>
 				</div>
 			)}
@@ -301,6 +341,7 @@ function AddProviderInline({
 }
 
 function ProviderTab() {
+	const { t } = useTranslation();
 	const [providers, setProviders] = useState<ProviderInfo[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState("");
@@ -325,7 +366,7 @@ function ProviderTab() {
 	if (loading) {
 		return (
 			<Card>
-				<div className="text-sm text-muted">Loading providers...</div>
+				<div className="text-sm text-muted">{t("settings.provider.loading")}</div>
 			</Card>
 		);
 	}
@@ -333,7 +374,7 @@ function ProviderTab() {
 	if (error) {
 		return (
 			<Card>
-				<div className="text-sm text-danger">Error: {error}</div>
+				<div className="text-sm text-danger">{t("settings.provider.error", { error })}</div>
 			</Card>
 		);
 	}
@@ -345,10 +386,10 @@ function ProviderTab() {
 		<div className="space-y-6">
 			<Card>
 				<div className="mb-3 flex items-center justify-between">
-					<div className="text-sm font-medium text-fg">Providers</div>
+					<div className="text-sm font-medium text-fg">{t("settings.provider.title")}</div>
 					{available.length > 0 && (
 						<Button size="sm" tone="accent" iconLeft={<Plus className="h-3.5 w-3.5" />} onClick={() => setShowAddInline(true)}>
-							Add Provider
+							{t("settings.provider.addProvider")}
 						</Button>
 					)}
 				</div>
@@ -363,8 +404,8 @@ function ProviderTab() {
 
 				{configured.length === 0 && !showAddInline && (
 					<div className="py-6 text-center">
-						<p className="font-mono text-xs text-muted">No providers configured yet.</p>
-						<p className="mt-1 font-mono text-[10px] text-muted">Click "Add Provider" to get started.</p>
+						<p className="font-mono text-xs text-muted">{t("settings.provider.noProviders")}</p>
+						<p className="mt-1 font-mono text-[10px] text-muted">{t("settings.provider.noProvidersHint")}</p>
 					</div>
 				)}
 
@@ -381,11 +422,12 @@ export default function SettingsView({
 }: {
 	state: RpcSessionState | null;
 }) {
+	const { t } = useTranslation();
 	const [tab, setTab] = useState<"general" | "provider">("general");
 
 	return (
 		<div className="mx-auto max-w-5xl px-10 pb-10 pt-10">
-			<PageHeader title="Settings" />
+			<PageHeader title={t("settings.title")} />
 
 			<div className="mb-6 flex gap-1 border-b border-border">
 				<button
@@ -397,7 +439,7 @@ export default function SettingsView({
 							: "text-muted hover:text-fg",
 					)}
 				>
-					General
+					{t("settings.tabs.general")}
 				</button>
 				<button
 					onClick={() => setTab("provider")}
@@ -408,7 +450,7 @@ export default function SettingsView({
 							: "text-muted hover:text-fg",
 					)}
 				>
-					Provider
+					{t("settings.tabs.provider")}
 				</button>
 			</div>
 
