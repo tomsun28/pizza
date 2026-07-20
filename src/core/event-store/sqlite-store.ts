@@ -357,7 +357,14 @@ function matchesSubscription(event: EventBase, options?: SubscribeOptions): bool
 
 function loadDatabaseSync(): DatabaseSyncConstructor {
 	if (!DatabaseSyncCtor) {
-		DatabaseSyncCtor = (require("node:sqlite") as typeof import("node:sqlite")).DatabaseSync;
+		try {
+			DatabaseSyncCtor = (require("node:sqlite") as typeof import("node:sqlite")).DatabaseSync;
+		} catch {
+			// Bun (pre-1.4) doesn't implement node:sqlite. Fall back to bun:sqlite,
+			// whose Database class exposes a compatible API (exec/prepare/all/get/run).
+			const bunSqlite = require("bun:sqlite") as { Database: new (path: string) => DatabaseSync };
+			DatabaseSyncCtor = bunSqlite.Database as unknown as DatabaseSyncConstructor;
+		}
 	}
 	return DatabaseSyncCtor;
 }

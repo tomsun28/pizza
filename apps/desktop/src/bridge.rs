@@ -204,6 +204,24 @@ pub async fn init_sidecar(
 	};
 	log_file(&format!("init_sidecar: cwd={}", cwd));
 
+	// The persistent Chat workspace (~/.pizza/main) is auto-created on first
+	// launch. It is the default workspace the desktop app boots into, so it
+	// must always exist — unlike user-selected project directories, which are
+	// expected to be present already.
+	let is_persistent_chat = std::env::var("HOME")
+		.ok()
+		.map(|home| cwd == format!("{}/.pizza/main", home))
+		.unwrap_or(false);
+	if is_persistent_chat && !std::path::Path::new(&cwd).is_dir() {
+		log_file(&format!(
+			"init_sidecar: creating persistent Chat workspace at {}",
+			cwd
+		));
+		if let Err(e) = std::fs::create_dir_all(&cwd) {
+			return Err(format!("Failed to create Chat workspace {}: {}", cwd, e));
+		}
+	}
+
 	// Validate that the cwd directory exists before attempting to spawn.
 	if !std::path::Path::new(&cwd).is_dir() {
 		return Err(format!("Directory does not exist: {}", cwd));
@@ -288,10 +306,24 @@ pub async fn init_sidecar(
 	// Read first line from stdout synchronously (the get_state response).
 	let mut reader = BufReader::new(stdout);
 	let mut first_line = String::new();
-	reader
+	let bytes_read = reader
 		.read_line(&mut first_line)
 		.map_err(|e| format!("read response: {e}"))?;
 	log_file(&format!("init_sidecar: first line = {}", first_line.trim()));
+
+	// If we got EOF (0 bytes) the sidecar died immediately. Check exit status
+	// to surface a meaningful error instead of storing a dead sidecar that
+	// would cause "Broken pipe" on the next write.
+	if bytes_read == 0 {
+		let exit_info = match child.try_wait() {
+			Ok(Some(status)) => format!(" (exit {})", status),
+			_ => String::new(),
+		};
+		return Err(format!(
+			"Sidecar exited immediately without responding{}",
+			exit_info
+		));
+	}
 
 	// Parse the response.
 	let state_data: Value = {
