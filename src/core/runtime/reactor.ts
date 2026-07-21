@@ -150,7 +150,7 @@ export class Reactor {
 	/** Active compaction policy. */
 	private compactionPolicy: CompactionPolicy;
 	/** Pending follow-up messages (delivered after current turn completes without interrupt). */
-	private followUpQueue: Array<{ content: string | unknown[]; images?: unknown[] }> = [];
+	private followUpQueue: Array<{ content: string | unknown[]; images?: unknown[]; sourceEventId?: string }> = [];
 	/** Aborter for the current compaction run (if any). */
 	private compactionAbort: AbortController | undefined;
 	/** Retry timers waiting to re-enter the turn loop. */
@@ -221,7 +221,7 @@ export class Reactor {
 		for (const f of followups) {
 			if (consumedCausedBy.has(f.event_id)) continue;
 			const p = f.payload as { content: string | unknown[]; images?: unknown[] };
-			this.followUpQueue.push({ content: p.content, images: p.images });
+			this.followUpQueue.push({ content: p.content, images: p.images, sourceEventId: f.event_id });
 		}
 	}
 
@@ -417,6 +417,7 @@ export class Reactor {
 			this.followUpQueue.push({
 				content: payload.content as string | unknown[],
 				images: payload.images as unknown[] | undefined,
+				sourceEventId: event.event_id,
 			});
 		}
 		// Cancel any pending compaction so we don't block turn completion
@@ -456,7 +457,7 @@ export class Reactor {
 
 	private async _onUserFollowupQueued(event: EventBase): Promise<void> {
 		const payload = event.payload as { content: string | unknown[]; images?: unknown[] };
-		this.followUpQueue.push({ content: payload.content, images: payload.images });
+		this.followUpQueue.push({ content: payload.content, images: payload.images, sourceEventId: event.event_id });
 	}
 
 	// ─── AGENT_TURN_REQUESTED ───────────────────────────────────────────────
@@ -996,11 +997,15 @@ export class Reactor {
 			// has already been handled.
 			this.abortController = new AbortController();
 			const next = this.followUpQueue.shift()!;
+			// Use the source event id (USER_FOLLOWUP_QUEUED or USER_INTERRUPT) as
+			// caused_by so _replayPendingFollowUps can detect the follow-up as
+			// consumed on restart. Falling back to the completion event id keeps
+			// backward compatibility for any queue entries without a source id.
 			this._emit({
 				actor_id: "user",
 				type: "USER_MESSAGE",
 				payload: { content: next.content, images: next.images },
-				caused_by: event.event_id,
+				caused_by: next.sourceEventId ?? event.event_id,
 			});
 			return;
 		}

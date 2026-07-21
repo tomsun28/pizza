@@ -430,6 +430,85 @@ describe("Reactor stage-2: policies + queues", () => {
 		runtime.dispose();
 	});
 
+	it("does not replay a consumed follow-up after reactor restart (regression for auto-injection bug)", async () => {
+		const cwd = makeTempDir();
+		const seen: string[] = [];
+
+		const client: LLMClient = {
+			async complete(req): Promise<LLMResponse> {
+				const last = req.messages[req.messages.length - 1];
+				if (last.role === "user") {
+					const c = typeof last.content === "string" ? last.content : "?";
+					seen.push(c);
+				}
+				return {
+					content: [{ type: "text", text: "ok" } as ContentBlock],
+					provider: "test",
+					model: "test",
+					usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, cost: 0 },
+					stopReason: "stop",
+				};
+			},
+		};
+
+		const config = {
+			cwd,
+			agentDir: cwd,
+			toolRegistry: emptyRegistry,
+			llmClient: client,
+			systemPrompt: "",
+			model: { provider: "test", model_id: "test" },
+			tools: [],
+		};
+
+		// First runtime: queue a follow-up, then prompt. Both should run.
+		const runtime1 = new EventSourcedRuntime(config);
+		runtime1.followUp("second message");
+		await runtime1.prompt("first message");
+		expect(seen).toEqual(["first message", "second message"]);
+		expect(runtime1.store.query({ types: ["USER_FOLLOWUP_QUEUED"] })).toHaveLength(1);
+		expect(runtime1.store.query({ types: ["USER_MESSAGE"] })).toHaveLength(2);
+		// The follow-up USER_MESSAGE must be caused_by the USER_FOLLOWUP_QUEUED event,
+		// not the AGENT_TURN_COMPLETED — this is what lets replay detect it as consumed.
+		const followupEvent = runtime1.store.query({ types: ["USER_FOLLOWUP_QUEUED"] })[0];
+		const userMessages = runtime1.store.query({ types: ["USER_MESSAGE"] });
+		const followupUserMessage = userMessages.find((m) => m.caused_by === followupEvent.event_id);
+		expect(followupUserMessage).toBeDefined();
+		expect(followupUserMessage!.payload).toMatchObject({ content: "second message" });
+		runtime1.dispose();
+
+		// Second runtime on the same store: the consumed follow-up must NOT be replayed.
+		// Previously the USER_MESSAGE was caused_by AGENT_TURN_COMPLETED, so the
+		// USER_FOLLOWUP_QUEUED was never marked consumed and got replayed on every
+		// restart, auto-injecting the queued message as a new USER_MESSAGE.
+		const seenAfterRestart: string[] = [];
+		const runtime2 = new EventSourcedRuntime({
+			...config,
+			llmClient: {
+				async complete(req): Promise<LLMResponse> {
+					const last = req.messages[req.messages.length - 1];
+					if (last.role === "user") {
+						const c = typeof last.content === "string" ? last.content : "?";
+						seenAfterRestart.push(c);
+					}
+					return {
+						content: [{ type: "text", text: "ok" } as ContentBlock],
+						provider: "test",
+						model: "test",
+						usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, cost: 0 },
+						stopReason: "stop",
+					};
+				},
+			},
+		});
+		// Give the reactor a turn so any (incorrectly) replayed follow-up would fire.
+		await runtime2.prompt("third message");
+		// Only the new prompt should be seen — the old follow-up must not be replayed.
+		expect(seenAfterRestart).toEqual(["third message"]);
+		expect(runtime2.store.query({ types: ["USER_MESSAGE"] })).toHaveLength(3);
+		runtime2.dispose();
+	});
+
 	it("processes steer messages after interrupting the current turn", async () => {
 		const cwd = makeTempDir();
 		const seen: string[] = [];
