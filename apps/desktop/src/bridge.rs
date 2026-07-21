@@ -418,6 +418,24 @@ pub async fn init_sidecar(
 			}
 		}
 		log_file(&format!("reader thread: EOF for cwd={}", reader_cwd));
+		// Reap the dead sidecar: remove from the map and wait() to avoid a
+		// zombie process lingering until the GUI exits. drop(stdin) first so
+		// the write pipe is closed before we wait for exit.
+		// If kill_sidecar_for_cwd already removed it, we get None and skip.
+		{
+			let app_ref = &app;
+			let state = app_ref.state::<BridgeState>();
+			let mut sidecars = state.sidecars.lock().unwrap();
+			if let Some(mut entry) = sidecars.remove(&reader_cwd) {
+				let pid = entry.child.id();
+				drop(entry.stdin);
+				let _ = entry.child.wait();
+				log_file(&format!(
+					"reader thread: reaped sidecar pid={:?} cwd={}",
+					pid, reader_cwd
+				));
+			}
+		}
 		// Notify all windows — sidecar_exit includes cwd for frontend filtering.
 		let app_ref = &app;
 		let active = app_ref.state::<BridgeState>();

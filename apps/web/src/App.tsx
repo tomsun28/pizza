@@ -23,6 +23,11 @@ function AppInner() {
 	const [waitingForWorkspace, setWaitingForWorkspace] = useState(false);
 	const [workspaces, setWorkspaces] = useState<WorkspaceMeta[]>([]);
 	const sidecarStartedRef = useRef(false);
+	// Auto-restart bookkeeping: per-cwd restart count, reset to 0 when a
+	// sidecar becomes ready. Capped at 3 attempts with exponential backoff
+	// to avoid crash loops.
+	const restartCountRef = useRef(0);
+	const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
 	const refreshWorkspaces = useCallback(async () => {
 		if (!isTauri()) return;
@@ -131,6 +136,29 @@ function AppInner() {
 				if (!cwd || cwd === workspace) {
 					setSidecarExitCode(code);
 					setSidecarReady(false);
+					// Auto-restart with exponential backoff (max 3 attempts).
+					// The count is reset to 0 whenever a sidecar becomes ready,
+					// so a fresh crash after a healthy run still gets 3 retries.
+					const cwdToRestart = workspace;
+					if (cwdToRestart && restartCountRef.current < 3) {
+						restartCountRef.current += 1;
+						const attempt = restartCountRef.current;
+						const delay = Math.min(1000 * Math.pow(2, attempt - 1), 4000);
+						console.warn(`[sidecar] exited (code=${code}), auto-restart attempt ${attempt}/3 in ${delay}ms`);
+						if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+						restartTimerRef.current = setTimeout(() => {
+							restartTimerRef.current = null;
+							// Guard against the user having switched workspaces in the meantime.
+							setWorkspace((current) => {
+								if (current === cwdToRestart) {
+									void startWithWorkspace(cwdToRestart);
+								}
+								return current;
+							});
+						}, delay);
+					} else if (cwdToRestart) {
+						console.warn(`[sidecar] exited, giving up auto-restart after 3 attempts`);
+					}
 				}
 			});
 			if (cancelled) { un1(); return; }
@@ -156,7 +184,21 @@ function AppInner() {
 			cancelled = true;
 			unlisteners.forEach((fn) => fn());
 		};
-	}, [sidecarReady, workspace]);
+	}, [sidecarReady, workspace, startWithWorkspace]);
+
+	// Reset the auto-restart counter once a sidecar is healthy, and clean up
+	// any pending restart timer on unmount.
+	useEffect(() => {
+		if (sidecarReady) {
+			restartCountRef.current = 0;
+		}
+	}, [sidecarReady]);
+
+	useEffect(() => {
+		return () => {
+			if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+		};
+	}, []);
 
 	useEffect(() => {
 		if (!sidecarReady) return;
