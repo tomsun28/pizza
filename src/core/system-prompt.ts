@@ -166,6 +166,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	// Always include these
 	addGuideline("Be concise in your responses");
 	addGuideline("Show file paths clearly when working with files");
+	addGuideline("Keep reasoning tight: think only as much as the task needs, then act — avoid over-analyzing simple requests");
 
 	const guidelines = guidelinesList.map((g) => `- ${g}`).join("\n");
 
@@ -179,7 +180,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		"  write <path> <content>                       Write content to file",
 		"  write <path> <<EOF\ncontent\nEOF             Write multi-line content (heredoc)",
 		"  edit <path> <op> <range> [new]               Edit anchored whole line(s)",
-		"  session_split [reason] [name]                Split conversation when the topic clearly changes",
+		"  session_split [reason] [name]                Split promptly when the user starts a new task or topic",
 		"  history_tree <action> [session_id]           Browse past sessions: list, view, jump, fork",
 		"",
 		"grep, find, ls, git, npm, and all other commands are passed to the system shell as-is.",
