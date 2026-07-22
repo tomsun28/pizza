@@ -79,17 +79,22 @@ fn resolve_pizza_command(app: &AppHandle) -> (String, Vec<String>) {
 	//    (e.g. inside the .app bundle on macOS). When present, this makes
 	//    the desktop app self-contained — no Node.js required.
 	//    On Windows the binary has a .exe extension.
-	if let Ok(resource_dir) = app.path().resource_dir() {
-		let pizza_bin = resource_dir.join(if cfg!(windows) { "pizza.exe" } else { "pizza" });
-		if pizza_bin.exists() {
-			log_file(&format!(
-				"resolve_pizza_command: using bundled binary at {}",
-				pizza_bin.display()
-			));
-			return (
-				pizza_bin.to_string_lossy().to_string(),
-				vec!["--mode".to_string(), "rpc".to_string()],
-			);
+	//    Skipped in debug builds: in dev the resource_dir points at
+	//    target/debug/ where a stale dist/pizza may exist from a prior
+	//    `build:binary`, which can hang the sidecar.
+	if !cfg!(debug_assertions) {
+		if let Ok(resource_dir) = app.path().resource_dir() {
+			let pizza_bin = resource_dir.join(if cfg!(windows) { "pizza.exe" } else { "pizza" });
+			if pizza_bin.exists() {
+				log_file(&format!(
+					"resolve_pizza_command: using bundled binary at {}",
+					pizza_bin.display()
+				));
+				return (
+					pizza_bin.to_string_lossy().to_string(),
+					vec!["--mode".to_string(), "rpc".to_string()],
+				);
+			}
 		}
 	}
 

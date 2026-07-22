@@ -22,6 +22,7 @@ function AppInner() {
 	const [workspace, setWorkspace] = useState<string | null>(null);
 	const [waitingForWorkspace, setWaitingForWorkspace] = useState(false);
 	const [workspaces, setWorkspaces] = useState<WorkspaceMeta[]>([]);
+	const [streamingCwds, setStreamingCwds] = useState<Set<string>>(new Set());
 	const sidecarStartedRef = useRef(false);
 	// Auto-restart bookkeeping: per-cwd restart count, reset to 0 when a
 	// sidecar becomes ready. Capped at 3 attempts with exponential backoff
@@ -175,6 +176,20 @@ function AppInner() {
 			unlisteners.push(un1);
 			const un2 = await subscribeEvents((event) => {
 				const typed = event as { type: string; _cwd?: string };
+				// Track per-workspace streaming state for ALL workspaces
+				// so the sidebar can show blinking indicators even for
+				// non-active workspaces.
+				if (typed._cwd && (typed.type === "AGENT_TURN_START" || typed.type === "AGENT_TURN_COMPLETED")) {
+					setStreamingCwds((prev) => {
+						const next = new Set(prev);
+						if (typed.type === "AGENT_TURN_START") {
+							next.add(typed._cwd!);
+						} else {
+							next.delete(typed._cwd!);
+						}
+						return next;
+					});
+				}
 				// Only process state updates for the active workspace.
 				if (typed._cwd && typed._cwd !== workspace) return;
 				// Refresh state on model/thinking changes, and when the agent
@@ -274,6 +289,7 @@ function AppInner() {
 								sidecarExitCode={sidecarExitCode}
 								workspace={workspace}
 								workspaces={workspaces}
+								streamingCwds={streamingCwds}
 								onSelectWorkspace={handleSelectWorkspace}
 								onNewWorkspace={handleNewWorkspace}
 							onDeleteWorkspace={handleDeleteWorkspace}

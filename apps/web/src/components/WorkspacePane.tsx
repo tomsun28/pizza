@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { useCallback } from "react";
 import { useTranslation } from "react-i18next";
-import { PanelRight, PanelBottom, TerminalSquare } from "lucide-react";
+import { PanelRight, PanelBottom } from "lucide-react";
 import { usePersistedState } from "@/lib/usePersistedState";
 import { cn } from "@/lib/utils";
 import { ResizeHandle } from "./ResizeHandle";
@@ -86,8 +86,8 @@ export default function WorkspacePane({
 				)}
 			</div>
 
-			{/* Bottom row: terminal dock, or a collapsed strip. */}
-			{bottomOpen ? (
+			{/* Bottom row: terminal dock (hidden when closed). */}
+			{bottomOpen && (
 				<>
 					<ResizeHandle
 						orientation="horizontal"
@@ -99,15 +99,6 @@ export default function WorkspacePane({
 						<BottomDock workspace={workspace} ptyPort={ptyPort} onCollapse={() => setBottomOpen(false)} />
 					</div>
 				</>
-			) : (
-				<button
-					onClick={() => setBottomOpen(true)}
-					className="flex h-8 shrink-0 items-center gap-1.5 border-t border-border bg-surface px-3 font-mono text-[11px] uppercase tracking-widest text-muted transition-colors hover:text-fg"
-					title={t("terminal.toggle")}
-				>
-					<TerminalSquare className="h-3.5 w-3.5" />
-					<span>{t("terminal.title")}</span>
-				</button>
 			)}
 		</div>
 	);

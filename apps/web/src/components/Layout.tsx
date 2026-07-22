@@ -120,6 +120,7 @@ export default function Layout({
 	onSelectWorkspace,
 	onNewWorkspace,
 	onDeleteWorkspace,
+	streamingCwds,
 }: {
 	state: RpcSessionState | null;
 	sidecarReady: boolean;
@@ -129,6 +130,7 @@ export default function Layout({
 	onSelectWorkspace?: (cwd: string) => void;
 	onNewWorkspace?: () => void;
 	onDeleteWorkspace?: (workspaceId: string) => void;
+	streamingCwds?: Set<string>;
 }) {
 	const { t } = useTranslation();
 	const online = sidecarReady && sidecarExitCode === null;
@@ -285,7 +287,12 @@ export default function Layout({
 							</div>
 						</div>
 						{isMainChat && online && (
-							<span className="h-1.5 w-1.5 shrink-0 rounded-full bg-success" />
+							<span
+								className={cn(
+									"h-1.5 w-1.5 shrink-0 rounded-full",
+									state?.isStreaming || streamingCwds?.has(MAIN_CHAT_CWD) ? "bg-accent animate-pulse" : "bg-success",
+								)}
+							/>
 						)}
 					</button>
 				</div>
@@ -342,8 +349,8 @@ export default function Layout({
 													{timeAgo(ws.last_accessed_at, t)}
 												</div>
 											</div>
-											{isActive && online && (
-												<span className="h-1.5 w-1.5 shrink-0 rounded-full bg-success" />
+											{online && (isActive || streamingCwds?.has(ws.cwd)) && (
+												<span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", (isActive ? state?.isStreaming : true) ? "bg-accent animate-pulse" : "bg-success")} />
 											)}
 											<button
 												onClick={(e) => {
