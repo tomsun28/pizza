@@ -73,11 +73,68 @@
 		"copied": "已复制",
 		"copy": "复制"
 	},
+	"approval": {
+		"title": "审批工具调用",
+		"hint": "Agent 正在等待你的确认。",
+		"approve": "批准",
+		"reject": "拒绝",
+		"riskPrefix": "风险:"
+	},
 	"history": {
 		"title": "历史",
 		"description": "会话树与分支导航",
 		"comingSoon": "即将推出",
-		"comingSoonDescription": "历史树可视化将在未来版本中提供。"
+		"comingSoonDescription": "分支树可视化将显示在这里。",
+		"search": "搜索分支…",
+		"refresh": "刷新",
+		"emptyTitle": "还没有分支",
+		"emptyDescription": "在 Chat 发一条消息即可创建根会话，然后从任意节点分叉。",
+		"noMatch": "没有匹配的分支。",
+		"forkFromHere": "从此处分叉",
+		"forkHint": "创建新子分支（若当前分支开放，则冻结它）",
+		"jumpHere": "跳转到此分支",
+		"jumpOpenHint": "不会创建新分支",
+		"jumpClosedHint": "从此点创建新分支",
+		"rename": "重命名分支",
+		"renamePrompt": "分支名称：",
+		"copyId": "复制会话 id",
+		"position": "位置",
+		"depth": "深度",
+		"root": "根"
+	},
+	"timeline": {
+		"title": "时间线",
+		"description": "原始事件流与回放",
+		"comingSoonDescription": "事件时间线将显示在这里。",
+		"search": "过滤事件…",
+		"emptyTitle": "暂无事件",
+		"emptyDescription": "该工作区的事件将在此流式显示。",
+		"catUser": "用户",
+		"catAgent": "Agent",
+		"catTools": "工具",
+		"catReactor": "Reactor",
+		"catSession": "会话",
+		"catCompaction": "压缩",
+		"catRuntime": "运行时",
+		"errorsOnly": "仅错误",
+		"filesOnly": "文件变更",
+		"replayFromHere": "从这里重放",
+		"replayHint": "以此事件为根派生新会话"
+	},
+	"terminal": {
+		"title": "终端",
+		"toggle": "切换终端",
+		"collapse": "收起终端",
+		"comingSoonDescription": "终端将显示在这里。",
+		"hint": "在当前工作区运行 shell 命令。",
+		"prompt": "输入命令…",
+		"running": "运行中…",
+		"exited": "进程已退出",
+		"connectionError": "终端连接错误。",
+		"unavailable": "当前环境不支持交互式终端。"
+	},
+	"dock": {
+		"toggleRight": "切换侧边面板"
 	},
 	"theme": {
 		"switchToLight": "切换到浅色",
@@ -99,7 +156,10 @@
 			"status": "状态",
 			"compacting": "压缩中...",
 			"language": "语言",
-			"languageDescription": "界面显示语言"
+			"languageDescription": "界面显示语言",
+			"safeMode": "安全模式",
+			"safeModeLabel": "需要审批",
+			"safeModeHint": "开启后，有风险的工具调用（文件写入、编辑、删除、危险命令）在执行前会暂停等待你确认。"
 		},
 		"provider": {
 			"title": "服务商",
@@ -124,6 +184,7 @@
 			"keyEmpty": "API 密钥不能为空",
 			"selectProvider": "请先选择服务商",
 			"selectProviderPlaceholder": "选择服务商...",
+			"noMatch": "没有匹配的服务商。",
 			"confirmRemove": "确认移除 {{label}} 的 API 密钥?"
 		}
 	},

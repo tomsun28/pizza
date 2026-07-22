@@ -6,6 +6,7 @@ import type { RpcSessionState, TypedEvent } from "@/lib/types";
 import { Conversation, type TimelineItem } from "@/components/Conversation";
 import { Composer, type ComposerImage } from "@/components/Composer";
 import { EmptyState } from "@/components/ui";
+import { ApprovalDialog, type PendingApproval } from "@/components/ApprovalDialog";
 import { cn } from "@/lib/utils";
 import type { LayoutOutletContext } from "@/components/Layout";
 
@@ -111,6 +112,61 @@ function messageText(message: unknown): string {
 	return "";
 }
 
+/** Build a TimelineItem[] from a get_messages response, matching tool cards to results. */
+function buildTimelineFromMessages(
+	messages: Array<Record<string, unknown>>,
+	t: (key: string) => string,
+): TimelineItem[] {
+	const history: TimelineItem[] = [];
+	// Track tool cards by tool_call_id so toolResult messages can fill them.
+	const toolCardById = new Map<string, TimelineItem>();
+	for (const msg of messages) {
+		const role = msg.role as string;
+		if (role === "user") {
+			const text = messageText(msg);
+			const images = messageImages(msg);
+			history.push({ id: `hist-${history.length}`, role: "user", title: t("common.you"), text, status: "", images: images.length > 0 ? images : undefined });
+		} else if (role === "assistant") {
+			const text = messageText(msg);
+			const thinking = messageThinking(msg);
+			const images = messageImages(msg);
+			if (text || thinking || images.length > 0) {
+				history.push({ id: `hist-${history.length}`, role: "assistant", title: t("common.pizza"), text, status: "DONE", streaming: false, thinking: thinking || undefined, images: images.length > 0 ? images : undefined });
+			}
+			// Emit a tool card for each tool call in the assistant message.
+			for (const call of messageToolCalls(msg)) {
+				const card: TimelineItem = {
+					id: call.id || `hist-tool-${history.length}`,
+					role: "tool",
+					title: call.name,
+					text: "",
+					status: "DONE",
+					streaming: false,
+					toolName: call.name,
+					toolArgs: call.args,
+				};
+				history.push(card);
+				if (call.id) toolCardById.set(call.id, card);
+			}
+		} else if (role === "toolResult" || role === "tool") {
+			const toolCallId = String(msg.toolCallId ?? msg.tool_call_id ?? "");
+			const resultText = toolResultText(msg.content);
+			const isError = msg.isError === true || msg.is_error === true;
+			const existing = toolCallId ? toolCardById.get(toolCallId) : undefined;
+			if (existing) {
+				existing.toolResult = resultText;
+				existing.isError = isError;
+				existing.status = isError ? "ERROR" : "DONE";
+			} else {
+				// Orphan result (no matching call) — still show it.
+				history.push({ id: `hist-${history.length}`, role: "tool", title: String(msg.toolName ?? msg.name ?? "tool"), text: "", status: isError ? "ERROR" : "DONE", streaming: false, toolName: String(msg.toolName ?? msg.name ?? "tool"), toolResult: resultText, isError });
+				// (title intentionally uses raw tool name, not translated)
+			}
+		}
+	}
+	return history;
+}
+
 export default function ChatView({
 	state,
 	sidecarReady,
@@ -126,6 +182,7 @@ export default function ChatView({
 	const { t } = useTranslation();
 	const [items, setItems] = useState<TimelineItem[]>([]);
 	const [error, setError] = useState("");
+	const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
 	const activeAssistantRef = useRef<string | null>(null);
 	const seenIdsRef = useRef<Set<string>>(new Set());
 	const scrollRef = useRef<HTMLDivElement>(null);
@@ -142,6 +199,45 @@ export default function ChatView({
 	// without re-subscribing on every language change.
 	const tRef = useRef(t);
 	useEffect(() => { tRef.current = t; }, [t]);
+
+	// --- Session-switch reload (jump/fork from BranchTreeExplorer) ---
+	// When the active session changes via SESSION_FORKED or SESSION_JUMPED,
+	// the ChatView's current items belong to the OLD session. We clear them
+	// and re-fetch get_messages for the NEW active session. Debounced so a
+	// fork (which emits both SESSION_CREATED + SESSION_FORKED) only reloads
+	// once. A session_split emits SESSION_BOUNDARY_INFERRED instead, handled
+	// separately below (a lightweight trim, not a full reload, so an
+	// in-flight streaming turn isn't interrupted).
+	const sessionSwitchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const reloadForSessionSwitch = useCallback(() => {
+		const ws = workspace ?? "";
+		// Clear the per-workspace cache so a later workspace switch doesn't
+		// restore the stale (pre-switch) conversation.
+		itemsByWs.current.delete(ws);
+		seenIdsByWs.current.delete(ws);
+		activeAssistantByWs.current.delete(ws);
+		// Reset current state — the new active session's messages will
+		// replace whatever we were showing.
+		setItems([]);
+		seenIdsRef.current = new Set();
+		activeAssistantRef.current = null;
+		setError("");
+		// Re-fetch the new active session's messages.
+		let cancelled = false;
+		(async () => {
+			try {
+				const r = await sendCommandAwait({ type: "get_messages" }, 30000);
+				if (cancelled) return;
+				const data = (r as unknown as Record<string, unknown>)?.data as Record<string, unknown> | undefined;
+				const messages = (data?.messages as Array<Record<string, unknown>> | undefined) ?? [];
+				const history = buildTimelineFromMessages(messages, tRef.current);
+				if (!cancelled) setItems(history);
+			} catch {
+				// Silently ignore — the empty state will show.
+			}
+		})();
+		return () => { cancelled = true; };
+	}, [workspace]);
 
 	// Save/restore conversation on workspace switch.
 	useEffect(() => {
@@ -178,53 +274,7 @@ export default function ChatView({
 				if (cancelled) return;
 				const data = (r as unknown as Record<string, unknown>)?.data as Record<string, unknown> | undefined;
 				const messages = (data?.messages as Array<Record<string, unknown>> | undefined) ?? [];
-				const history: TimelineItem[] = [];
-				// Track tool cards by tool_call_id so toolResult messages can fill them.
-				const toolCardById = new Map<string, TimelineItem>();
-				for (const msg of messages) {
-					const role = msg.role as string;
-					if (role === "user") {
-						const text = messageText(msg);
-						const images = messageImages(msg);
-						history.push({ id: `hist-${history.length}`, role: "user", title: tRef.current("common.you"), text, status: "", images: images.length > 0 ? images : undefined });
-					} else if (role === "assistant") {
-						const text = messageText(msg);
-						const thinking = messageThinking(msg);
-						const images = messageImages(msg);
-						if (text || thinking || images.length > 0) {
-							history.push({ id: `hist-${history.length}`, role: "assistant", title: tRef.current("common.pizza"), text, status: "DONE", streaming: false, thinking: thinking || undefined, images: images.length > 0 ? images : undefined });
-						}
-						// Emit a tool card for each tool call in the assistant message.
-						for (const call of messageToolCalls(msg)) {
-							const card: TimelineItem = {
-								id: call.id || `hist-tool-${history.length}`,
-								role: "tool",
-								title: call.name,
-								text: "",
-								status: "DONE",
-								streaming: false,
-								toolName: call.name,
-								toolArgs: call.args,
-							};
-							history.push(card);
-							if (call.id) toolCardById.set(call.id, card);
-						}
-					} else if (role === "toolResult" || role === "tool") {
-						const toolCallId = String(msg.toolCallId ?? msg.tool_call_id ?? "");
-						const resultText = toolResultText(msg.content);
-						const isError = msg.isError === true || msg.is_error === true;
-						const existing = toolCallId ? toolCardById.get(toolCallId) : undefined;
-						if (existing) {
-							existing.toolResult = resultText;
-							existing.isError = isError;
-							existing.status = isError ? "ERROR" : "DONE";
-						} else {
-							// Orphan result (no matching call) — still show it.
-							history.push({ id: `hist-${history.length}`, role: "tool", title: String(msg.toolName ?? msg.name ?? "tool"), text: "", status: isError ? "ERROR" : "DONE", streaming: false, toolName: String(msg.toolName ?? msg.name ?? "tool"), toolResult: resultText, isError });
-							// (title intentionally uses raw tool name, not translated)
-						}
-					}
-				}
+				const history = buildTimelineFromMessages(messages, tRef.current);
 				if (!cancelled && history.length > 0) {
 					setItems(history);
 				}
@@ -263,6 +313,34 @@ export default function ChatView({
 				const cached = itemsByWs.current.get(eventCwd) ?? [];
 				itemsByWs.current.set(eventCwd, fn(cached));
 			}
+		};
+
+		// INTENT_TOOL_CALL and TOOL_EXECUTION_START share the same tool_call_id.
+		// Upsert so we don't create duplicate cards / clashing React keys.
+		const toolCardUpsert = (toolCallId: string, toolName: string, argsStr: string) => {
+			updateItems((prev) => {
+				const existing = prev.find((it) => it.id === toolCallId);
+				if (existing) {
+					return prev.map((it) =>
+						it.id === toolCallId
+							? { ...it, title: toolName, toolName, toolArgs: argsStr || it.toolArgs }
+							: it,
+					);
+				}
+				return [
+					...prev,
+					{
+						id: toolCallId,
+						role: "tool",
+						title: toolName,
+						text: "",
+						status: "RUNNING",
+						streaming: true,
+						toolName,
+						toolArgs: argsStr,
+					},
+				];
+			});
 		};
 
 		switch (event.type) {
@@ -374,38 +452,44 @@ export default function ChatView({
 				}
 				break;
 			}
-			case "INTENT_TOOL_CALL":
-			case "TOOL_EXECUTION_START": {
+			case "INTENT_TOOL_CALL": {
 				const payload = event.payload as Record<string, unknown>;
 				const toolCallId = payload.tool_call_id as string;
 				const toolName = payload.tool_name as string;
-				const args = payload.arguments as Record<string, unknown> | undefined;
-				const argsStr = args ? JSON.stringify(args, null, 2) : "";
-				// INTENT_TOOL_CALL and TOOL_EXECUTION_START share the same tool_call_id.
-				// Upsert so we don't create duplicate cards / clashing React keys.
-				updateItems((prev) => {
-					const existing = prev.find((it) => it.id === toolCallId);
-					if (existing) {
-						return prev.map((it) =>
-							it.id === toolCallId
-								? { ...it, title: toolName, toolName, toolArgs: argsStr || it.toolArgs }
-								: it,
-						);
-					}
-					return [
-						...prev,
-						{
-							id: toolCallId,
-							role: "tool",
-							title: toolName,
-							text: "",
-							status: "RUNNING",
-							streaming: true,
-							toolName,
-							toolArgs: argsStr,
-						},
-					];
-				});
+				const args = (payload.arguments as Record<string, unknown> | undefined) ?? {};
+				const argsStr = JSON.stringify(args, null, 2);
+				const classification = payload.classification as Record<string, unknown> | undefined;
+				// When safe mode is on, risky tool calls require explicit approval
+				// before they execute. Surface an approval dialog and block here.
+				if (payload.requires_approval === true && isForCurrent) {
+					setPendingApproval({
+						intentEventId: event.event_id,
+						toolCallId,
+						toolName,
+						arguments: args,
+						description: classification?.description as string | undefined,
+						risk: classification?.risk as string | undefined,
+						category: classification?.category as string | undefined,
+						affectedFiles: classification?.affected_files as string[] | undefined,
+					});
+				}
+				// Fall through to render the tool card (shared with TOOL_EXECUTION_START).
+				toolCardUpsert(toolCallId, toolName, argsStr);
+				break;
+			}
+			case "TOOL_EXECUTION_START": {
+				const payload = event.payload as Record<string, unknown>;
+				const toolCallId = payload.tool_call_id as string;
+				// Execution started → the tool was approved (or didn't need approval).
+				// Clear any matching pending approval dialog.
+				setPendingApproval((prev) =>
+					prev && prev.toolCallId === toolCallId ? null : prev,
+				);
+				toolCardUpsert(
+					toolCallId,
+					payload.tool_name as string,
+					payload.arguments ? JSON.stringify(payload.arguments, null, 2) : "",
+				);
 				break;
 			}
 			case "TOOL_EXECUTION_UPDATE": {
@@ -440,10 +524,46 @@ export default function ChatView({
 				);
 				break;
 			}
+			case "SESSION_BOUNDARY_INFERRED": {
+				// A session_split created a new active session mid-turn. The new
+				// session's start boundary is the most recent USER_MESSAGE, so
+				// trim items to keep only that message onward. This refreshes the
+				// header title (first user message) to reflect the new session
+				// WITHOUT a full reload (which would clear the streaming pointer
+				// and drop in-flight assistant chunks). Any assistant item after
+				// the boundary is preserved so streaming continues uninterrupted.
+				if (!isForCurrent) break;
+				updateItems((prev) => {
+					let idx = -1;
+					for (let i = prev.length - 1; i >= 0; i--) {
+						if (prev[i].role === "user" && prev[i].text.trim()) { idx = i; break; }
+					}
+					if (idx <= 0) return prev; // nothing to trim
+					return prev.slice(idx);
+				});
+				break;
+			}
+			case "SESSION_FORKED":
+			case "SESSION_JUMPED": {
+				// The active session changed (user jumped/forked from the
+				// BranchTreeExplorer, or replayed from the Timeline). Our
+				// current items belong to the OLD session — reload from
+				// get_messages for the NEW active session. Only react to
+				// events for the current workspace. Debounced so a fork
+				// (which emits SESSION_CREATED + SESSION_FORKED in quick
+				// succession) only triggers one reload.
+				if (!isForCurrent) break;
+				if (sessionSwitchTimer.current) clearTimeout(sessionSwitchTimer.current);
+				sessionSwitchTimer.current = setTimeout(() => {
+					sessionSwitchTimer.current = null;
+					reloadForSessionSwitch();
+				}, 200);
+				break;
+			}
 			default:
 				break;
 		}
-	}, [workspace]);
+	}, [workspace, reloadForSessionSwitch]);
 
 	useEffect(() => {
 		if (!sidecarReady) return;
@@ -466,6 +586,13 @@ export default function ChatView({
 			unlisteners.forEach((fn) => fn());
 		};
 	}, [sidecarReady, handleEvent]);
+
+	// Cancel any pending session-switch reload on unmount.
+	useEffect(() => {
+		return () => {
+			if (sessionSwitchTimer.current) clearTimeout(sessionSwitchTimer.current);
+		};
+	}, []);
 
 	const handleSend = useCallback(
 		async (message: string, images?: ComposerImage[]) => {
@@ -570,6 +697,10 @@ export default function ChatView({
 				isRunning={isRunning}
 				onSend={handleSend}
 				onAbort={handleAbort}
+				/>
+			<ApprovalDialog
+				approval={pendingApproval}
+				onResolved={(_id) => setPendingApproval(null)}
 			/>
 		</div>
 	);

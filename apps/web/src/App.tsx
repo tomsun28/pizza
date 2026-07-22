@@ -22,7 +22,13 @@ function AppInner() {
 	const [workspace, setWorkspace] = useState<string | null>(null);
 	const [waitingForWorkspace, setWaitingForWorkspace] = useState(false);
 	const [workspaces, setWorkspaces] = useState<WorkspaceMeta[]>([]);
+	const [streamingCwds, setStreamingCwds] = useState<Set<string>>(new Set());
 	const sidecarStartedRef = useRef(false);
+	// Auto-restart bookkeeping: per-cwd restart count, reset to 0 when a
+	// sidecar becomes ready. Capped at 3 attempts with exponential backoff
+	// to avoid crash loops.
+	const restartCountRef = useRef(0);
+	const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
 	const refreshWorkspaces = useCallback(async () => {
 		if (!isTauri()) return;
@@ -121,6 +127,16 @@ function AppInner() {
 		setWorkspaces((prev) => prev.filter((ws) => ws.workspace_id !== workspaceId));
 	}, []);
 
+	// Refresh the session state from the sidecar. Used after settings that
+	// don't emit a dedicated event (e.g. toggling safe mode) so the root
+	// state stays in sync for components that read from it.
+	const refreshState = useCallback(() => {
+		if (!sidecarReady) return;
+		void sendCommandAwait<RpcSessionState>({ type: "get_state" }, 5000)
+			.then((r) => setState(r.data ?? null))
+			.catch(() => {});
+	}, [sidecarReady]);
+
 	useEffect(() => {
 		if (!sidecarReady) return;
 		let cancelled = false;
@@ -131,12 +147,49 @@ function AppInner() {
 				if (!cwd || cwd === workspace) {
 					setSidecarExitCode(code);
 					setSidecarReady(false);
+					// Auto-restart with exponential backoff (max 3 attempts).
+					// The count is reset to 0 whenever a sidecar becomes ready,
+					// so a fresh crash after a healthy run still gets 3 retries.
+					const cwdToRestart = workspace;
+					if (cwdToRestart && restartCountRef.current < 3) {
+						restartCountRef.current += 1;
+						const attempt = restartCountRef.current;
+						const delay = Math.min(1000 * Math.pow(2, attempt - 1), 4000);
+						console.warn(`[sidecar] exited (code=${code}), auto-restart attempt ${attempt}/3 in ${delay}ms`);
+						if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+						restartTimerRef.current = setTimeout(() => {
+							restartTimerRef.current = null;
+							// Guard against the user having switched workspaces in the meantime.
+							setWorkspace((current) => {
+								if (current === cwdToRestart) {
+									void startWithWorkspace(cwdToRestart);
+								}
+								return current;
+							});
+						}, delay);
+					} else if (cwdToRestart) {
+						console.warn(`[sidecar] exited, giving up auto-restart after 3 attempts`);
+					}
 				}
 			});
 			if (cancelled) { un1(); return; }
 			unlisteners.push(un1);
 			const un2 = await subscribeEvents((event) => {
 				const typed = event as { type: string; _cwd?: string };
+				// Track per-workspace streaming state for ALL workspaces
+				// so the sidebar can show blinking indicators even for
+				// non-active workspaces.
+				if (typed._cwd && (typed.type === "AGENT_TURN_START" || typed.type === "AGENT_TURN_COMPLETED")) {
+					setStreamingCwds((prev) => {
+						const next = new Set(prev);
+						if (typed.type === "AGENT_TURN_START") {
+							next.add(typed._cwd!);
+						} else {
+							next.delete(typed._cwd!);
+						}
+						return next;
+					});
+				}
 				// Only process state updates for the active workspace.
 				if (typed._cwd && typed._cwd !== workspace) return;
 				// Refresh state on model/thinking changes, and when the agent
@@ -156,7 +209,21 @@ function AppInner() {
 			cancelled = true;
 			unlisteners.forEach((fn) => fn());
 		};
-	}, [sidecarReady, workspace]);
+	}, [sidecarReady, workspace, startWithWorkspace]);
+
+	// Reset the auto-restart counter once a sidecar is healthy, and clean up
+	// any pending restart timer on unmount.
+	useEffect(() => {
+		if (sidecarReady) {
+			restartCountRef.current = 0;
+		}
+	}, [sidecarReady]);
+
+	useEffect(() => {
+		return () => {
+			if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+		};
+	}, []);
 
 	useEffect(() => {
 		if (!sidecarReady) return;
@@ -222,6 +289,7 @@ function AppInner() {
 								sidecarExitCode={sidecarExitCode}
 								workspace={workspace}
 								workspaces={workspaces}
+								streamingCwds={streamingCwds}
 								onSelectWorkspace={handleSelectWorkspace}
 								onNewWorkspace={handleNewWorkspace}
 							onDeleteWorkspace={handleDeleteWorkspace}
@@ -239,7 +307,7 @@ function AppInner() {
 								/>
 							}
 						/>
-						<Route path="/settings" element={<SettingsView state={state} />} />
+						<Route path="/settings" element={<SettingsView state={state} onRefreshState={refreshState} />} />
 						<Route path="*" element={<Navigate to="/" replace />} />
 					</Route>
 			</Routes>

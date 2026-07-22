@@ -79,17 +79,22 @@ fn resolve_pizza_command(app: &AppHandle) -> (String, Vec<String>) {
 	//    (e.g. inside the .app bundle on macOS). When present, this makes
 	//    the desktop app self-contained — no Node.js required.
 	//    On Windows the binary has a .exe extension.
-	if let Ok(resource_dir) = app.path().resource_dir() {
-		let pizza_bin = resource_dir.join(if cfg!(windows) { "pizza.exe" } else { "pizza" });
-		if pizza_bin.exists() {
-			log_file(&format!(
-				"resolve_pizza_command: using bundled binary at {}",
-				pizza_bin.display()
-			));
-			return (
-				pizza_bin.to_string_lossy().to_string(),
-				vec!["--mode".to_string(), "rpc".to_string()],
-			);
+	//    Skipped in debug builds: in dev the resource_dir points at
+	//    target/debug/ where a stale dist/pizza may exist from a prior
+	//    `build:binary`, which can hang the sidecar.
+	if !cfg!(debug_assertions) {
+		if let Ok(resource_dir) = app.path().resource_dir() {
+			let pizza_bin = resource_dir.join(if cfg!(windows) { "pizza.exe" } else { "pizza" });
+			if pizza_bin.exists() {
+				log_file(&format!(
+					"resolve_pizza_command: using bundled binary at {}",
+					pizza_bin.display()
+				));
+				return (
+					pizza_bin.to_string_lossy().to_string(),
+					vec!["--mode".to_string(), "rpc".to_string()],
+				);
+			}
 		}
 	}
 
@@ -418,6 +423,24 @@ pub async fn init_sidecar(
 			}
 		}
 		log_file(&format!("reader thread: EOF for cwd={}", reader_cwd));
+		// Reap the dead sidecar: remove from the map and wait() to avoid a
+		// zombie process lingering until the GUI exits. drop(stdin) first so
+		// the write pipe is closed before we wait for exit.
+		// If kill_sidecar_for_cwd already removed it, we get None and skip.
+		{
+			let app_ref = &app;
+			let state = app_ref.state::<BridgeState>();
+			let mut sidecars = state.sidecars.lock().unwrap();
+			if let Some(mut entry) = sidecars.remove(&reader_cwd) {
+				let pid = entry.child.id();
+				drop(entry.stdin);
+				let _ = entry.child.wait();
+				log_file(&format!(
+					"reader thread: reaped sidecar pid={:?} cwd={}",
+					pid, reader_cwd
+				));
+			}
+		}
 		// Notify all windows — sidecar_exit includes cwd for frontend filtering.
 		let app_ref = &app;
 		let active = app_ref.state::<BridgeState>();
@@ -649,13 +672,59 @@ pub async fn reveal_workspace(cwd: String) -> Result<(), String> {
 #[derive(serde::Serialize)]
 pub struct ProviderInfo {
 	id: String,
+	/// Human-readable display name (from pi-ai built-ins); falls back to id.
+	#[serde(rename = "name")]
+	name: String,
 	has_api_key: bool,
 	auth_type: Option<String>, // "api_key" | "oauth"
 }
 
+/// Load built-in provider {id -> display name} map from the generated
+/// `providers.json` (sourced from pi-ai at build time). Returns an empty map
+/// on any failure — callers fall back to the raw id as the display name.
+///
+/// Search order mirrors `resolve_pizza_command`:
+///   1. Packaged: `<resource_dir>/providers.json`
+///   2. Dev:      `<CARGO_MANIFEST_DIR>/../../dist/providers.json`
+fn load_builtin_providers(app: &AppHandle) -> HashMap<String, String> {
+	let candidates: Vec<PathBuf> = {
+		let mut v = Vec::new();
+		if let Ok(resource_dir) = app.path().resource_dir() {
+			v.push(resource_dir.join("providers.json"));
+		}
+		v.push(
+			PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+				.join("..")
+				.join("..")
+				.join("dist")
+				.join("providers.json"),
+		);
+		v
+	};
+
+	for path in candidates {
+		match std::fs::read_to_string(&path) {
+			Ok(raw) => match serde_json::from_str::<HashMap<String, String>>(&raw) {
+				Ok(parsed) => return parsed,
+				Err(e) => log_file(&format!(
+					"load_builtin_providers: {} exists but failed to parse JSON: {}",
+					path.display(),
+					e
+				)),
+			},
+			Err(_) => {} // file missing — try next candidate
+		}
+	}
+	log_file("load_builtin_providers: no readable providers.json found in any candidate path");
+	HashMap::new()
+}
+
 /// List all known providers and their auth status from auth.json.
+/// The built-in provider list and display names come from the generated
+/// `providers.json` (pi-ai catalog). Providers present in auth.json but not
+/// in the catalog (custom providers) are appended with their raw id as name.
 #[tauri::command]
-pub async fn list_providers() -> Result<Vec<ProviderInfo>, String> {
+pub async fn list_providers(app: AppHandle) -> Result<Vec<ProviderInfo>, String> {
 	let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
 	let auth_path = PathBuf::from(&home)
 		.join(".pizza")
@@ -673,27 +742,16 @@ pub async fn list_providers() -> Result<Vec<ProviderInfo>, String> {
 		}
 	}
 
-	// Built-in known providers (from pi-ai)
-	let builtin = [
-		"anthropic",
-		"openai",
-		"google",
-		"zai",
-		"openrouter",
-		"groq",
-		"mistral",
-		"deepseek",
-		"xai",
-		"fireworks",
-		"together",
-		"perplexity",
-		"cohere",
-		"amazon-bedrock",
-	];
+	// Built-in providers: { id -> display name } from pi-ai (generated JSON).
+	// Preserve catalog order by reading the file as an ordered map.
+	let builtin_names: HashMap<String, String> = load_builtin_providers(&app);
+	// Preserve stable display order: sorted by id.
+	let mut builtin_ids: Vec<&String> = builtin_names.keys().collect();
+	builtin_ids.sort();
 
 	let mut providers: Vec<ProviderInfo> = Vec::new();
 
-	for id in &builtin {
+	for id in &builtin_ids {
 		let cred = auth_data.get(*id);
 		let has_api_key = cred.is_some();
 		let auth_type = cred
@@ -701,15 +759,16 @@ pub async fn list_providers() -> Result<Vec<ProviderInfo>, String> {
 			.and_then(|t| t.as_str())
 			.map(|s| s.to_string());
 		providers.push(ProviderInfo {
-			id: id.to_string(),
+			id: (*id).clone(),
+			name: builtin_names.get(*id).cloned().unwrap_or_else(|| (*id).clone()),
 			has_api_key,
 			auth_type,
 		});
 	}
 
-	// Add any custom providers from auth.json not in builtin list
+	// Add any custom providers from auth.json not in builtin list.
 	for (key, _val) in &auth_data {
-		if !builtin.contains(&key.as_str()) {
+		if !builtin_names.contains_key(key) {
 			let cred = auth_data.get(key);
 			let auth_type = cred
 				.and_then(|c| c.get("type"))
@@ -717,6 +776,7 @@ pub async fn list_providers() -> Result<Vec<ProviderInfo>, String> {
 				.map(|s| s.to_string());
 			providers.push(ProviderInfo {
 				id: key.clone(),
+				name: key.clone(),
 				has_api_key: true,
 				auth_type,
 			});

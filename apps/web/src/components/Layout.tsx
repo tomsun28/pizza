@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { StatusDot, ThemeToggle, Button } from "./ui";
 import { BrandIcon } from "./BrandIcon";
+import WorkspacePane from "./WorkspacePane";
 import { cn } from "@/lib/utils";
 import { deleteWorkspace, revealWorkspace } from "@/lib/transport";
 import type { RpcSessionState, WorkspaceMeta } from "@/lib/types";
@@ -119,6 +120,7 @@ export default function Layout({
 	onSelectWorkspace,
 	onNewWorkspace,
 	onDeleteWorkspace,
+	streamingCwds,
 }: {
 	state: RpcSessionState | null;
 	sidecarReady: boolean;
@@ -128,6 +130,7 @@ export default function Layout({
 	onSelectWorkspace?: (cwd: string) => void;
 	onNewWorkspace?: () => void;
 	onDeleteWorkspace?: (workspaceId: string) => void;
+	streamingCwds?: Set<string>;
 }) {
 	const { t } = useTranslation();
 	const online = sidecarReady && sidecarExitCode === null;
@@ -284,7 +287,12 @@ export default function Layout({
 							</div>
 						</div>
 						{isMainChat && online && (
-							<span className="h-1.5 w-1.5 shrink-0 rounded-full bg-success" />
+							<span
+								className={cn(
+									"h-1.5 w-1.5 shrink-0 rounded-full",
+									state?.isStreaming || streamingCwds?.has(MAIN_CHAT_CWD) ? "bg-accent animate-pulse" : "bg-success",
+								)}
+							/>
 						)}
 					</button>
 				</div>
@@ -341,8 +349,8 @@ export default function Layout({
 													{timeAgo(ws.last_accessed_at, t)}
 												</div>
 											</div>
-											{isActive && online && (
-												<span className="h-1.5 w-1.5 shrink-0 rounded-full bg-success" />
+											{online && (isActive || streamingCwds?.has(ws.cwd)) && (
+												<span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", (isActive ? state?.isStreaming : true) ? "bg-accent animate-pulse" : "bg-success")} />
 											)}
 											<button
 												onClick={(e) => {
@@ -403,8 +411,10 @@ export default function Layout({
 				</div>
 			</aside>
 
-			<main className="flex-1 overflow-y-auto">
-				<Outlet context={{ sidebarCollapsed: collapsed } satisfies LayoutOutletContext} />
+			<main className="min-w-0 flex-1 overflow-hidden">
+				<WorkspacePane workspace={workspace} ptyPort={state?.ptyPort}>
+					<Outlet context={{ sidebarCollapsed: collapsed } satisfies LayoutOutletContext} />
+				</WorkspacePane>
 			</main>
 		</div>
 	);

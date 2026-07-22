@@ -28,6 +28,12 @@ export interface HistoryTreeNodeInfo {
 	closed: boolean;
 	/** First user message in the session (truncated), for orientation/search. */
 	snippet?: string;
+	/**
+	 * Event id this branch was forked at (from the SESSION_FORKED event whose
+	 * new_session_id matches this session). Present for forked sessions when a
+	 * store is provided; lets UIs re-fork from the exact divergence point.
+	 */
+	fork_at_event_id?: string;
 }
 
 // ============================================================================
@@ -62,6 +68,17 @@ export function buildHistoryTreeNodes(
 	roots.sort(byCreatedAt);
 	for (const list of children.values()) list.sort(byCreatedAt);
 
+	// Map new_session_id -> fork_at_event_id from SESSION_FORKED events.
+	const forkPoints = new Map<string, string>();
+	if (store) {
+		for (const event of store.query({ types: ["SESSION_FORKED"] })) {
+			const payload = event.payload as { new_session_id?: string; fork_at_event_id?: string };
+			if (payload.new_session_id && payload.fork_at_event_id) {
+				forkPoints.set(payload.new_session_id, payload.fork_at_event_id);
+			}
+		}
+	}
+
 	const nodes: HistoryTreeNodeInfo[] = [];
 	const visit = (session: SessionDescriptor, depth: number): void => {
 		const childList = children.get(session.session_id) ?? [];
@@ -77,6 +94,7 @@ export function buildHistoryTreeNodes(
 			is_active: session.session_id === activeSessionId,
 			closed: session.event_range.end_event_id !== "HEAD",
 			snippet: store ? findFirstUserMessage(store, session) : undefined,
+			fork_at_event_id: forkPoints.get(session.session_id),
 		});
 		for (const child of childList) visit(child, depth + 1);
 	};

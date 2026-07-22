@@ -6,7 +6,12 @@
  * In browser: uses HTTP POST + SSE to the dev bridge plugin.
  */
 
-import type { WorkspaceMeta } from "./types";
+import type {
+	WorkspaceMeta,
+	RpcHistoryTreeNode,
+	RpcHistorySessionView,
+	RpcForensicEvent,
+} from "./types";
 
 function isTauri(): boolean {
 	return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -47,26 +52,43 @@ export async function sendCommandAwait<T = unknown>(
 		const id = (command.id as string) ?? crypto.randomUUID();
 		command.id = id;
 		return new Promise((resolve, reject) => {
+			// Tear the listener down exactly once. Several paths race to finish a
+			// request (matching response, timeout, send error) and, on page
+			// reload, Tauri's internal registry may already be gone — both cases
+			// otherwise surface as `listeners[eventId].handlerId` errors.
+			let settled = false;
+			let unlistenFn: (() => void) | null = null;
+			const cleanup = () => { try { unlistenFn?.(); } catch { /* registry gone (reload) */ } };
+			const finish = (fn: () => void) => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				cleanup();
+				fn();
+			};
 			const timer = setTimeout(() => {
-				unlisten.then((fn) => fn()).catch(() => {});
-				reject(new Error(`Command "${command.type}" timed out after ${timeoutMs}ms`));
+				finish(() => reject(new Error(`Command "${command.type}" timed out after ${timeoutMs}ms`)));
 			}, timeoutMs);
-			const unlisten = listen<RpcResponse<T>>("rpc_response", (event) => {
+			listen<RpcResponse<T>>("rpc_response", (event) => {
 				const payload = event.payload;
-				if (payload.id === id) {
-					clearTimeout(timer);
-					unlisten.then((fn) => fn()).catch(() => {});
+				if (payload.id !== id) return;
+				finish(() => {
 					if (payload.success) {
 						resolve(payload);
 					} else {
 						reject(new Error(payload.error ?? `Command "${command.type}" failed`));
 					}
-				}
-			});
+				});
+			})
+				.then((fn) => {
+					// If the request already finished (e.g. timed out) before
+					// registration resolved, tear the listener down immediately.
+					if (settled) { try { fn(); } catch { /* ignore */ } }
+					else unlistenFn = fn;
+				})
+				.catch(() => { /* registration failed (reload) — swallow */ });
 			sendCommandRaw(command).catch((e) => {
-				clearTimeout(timer);
-				unlisten.then((fn) => fn()).catch(() => {});
-				reject(e);
+				finish(() => reject(e));
 			});
 		});
 	}
@@ -87,7 +109,11 @@ export type ExitHandler = (code: number | null, cwd?: string) => void;
 export async function subscribeEvents(handler: EventHandler): Promise<() => void> {
 	if (isTauri()) {
 		const { listen } = await import("@tauri-apps/api/event");
-		return listen("rpc_event", (event) => handler(event.payload as Record<string, unknown>));
+		// Await registration and swallow failures so a reload-time rejection is
+		// never unhandled; the returned unlisten is guarded against a torn-down
+		// registry (`listeners[eventId].handlerId`).
+		const unlisten = await listen("rpc_event", (event) => handler(event.payload as Record<string, unknown>)).catch(() => null);
+		return () => { try { unlisten?.(); } catch { /* registry gone (reload) */ } };
 	}
 	// Browser: SSE
 	return subscribeSse(handler);
@@ -96,7 +122,8 @@ export async function subscribeEvents(handler: EventHandler): Promise<() => void
 export async function subscribeSidecarExit(handler: ExitHandler): Promise<() => void> {
 	if (isTauri()) {
 		const { listen } = await import("@tauri-apps/api/event");
-		return listen<{ code: number | null; cwd?: string }>("sidecar_exit", (event) => handler(event.payload.code, event.payload.cwd));
+		const unlisten = await listen<{ code: number | null; cwd?: string }>("sidecar_exit", (event) => handler(event.payload.code, event.payload.cwd)).catch(() => null);
+		return () => { try { unlisten?.(); } catch { /* registry gone (reload) */ } };
 	}
 	// Browser: no sidecar exit concept, but we can detect fetch errors
 	return () => {};
@@ -147,6 +174,80 @@ export async function listWorkspaces(): Promise<WorkspaceMeta[]> {
 	return result;
 }
 
+// --- History tree / event forensics (right dock) ---
+
+export async function historyTreeList(query?: string): Promise<RpcHistoryTreeNode[]> {
+	const r = await sendCommandAwait<{ action: "list"; nodes: RpcHistoryTreeNode[] }>({ type: "history_tree", action: "list", query });
+	return r.data?.nodes ?? [];
+}
+
+export async function historyTreeView(sessionId: string, maxMessages?: number): Promise<RpcHistorySessionView | null> {
+	const r = await sendCommandAwait<{ action: "view"; view: RpcHistorySessionView | null }>({ type: "history_tree", action: "view", sessionId, maxMessages });
+	return r.data?.view ?? null;
+}
+
+export async function historyTreeJump(sessionId: string, reason?: string): Promise<{ session_id: string; reopened: boolean }> {
+	const r = await sendCommandAwait<{ action: "jump"; session_id: string; reopened: boolean }>({ type: "history_tree", action: "jump", sessionId, reason });
+	return { session_id: r.data?.session_id ?? sessionId, reopened: r.data?.reopened ?? false };
+}
+
+export async function historyTreeFork(sessionId: string): Promise<{ session_id: string }> {
+	const r = await sendCommandAwait<{ action: "fork"; session_id: string }>({ type: "history_tree", action: "fork", sessionId });
+	return { session_id: r.data?.session_id ?? sessionId };
+}
+
+export async function historyTreeRename(sessionId: string, name: string): Promise<void> {
+	await sendCommandAwait({ type: "history_tree", action: "rename", sessionId, name });
+}
+
+export async function getEvents(opts?: { eventTypes?: string[]; limit?: number; sessionScoped?: boolean }): Promise<RpcForensicEvent[]> {
+	const r = await sendCommandAwait<{ events: RpcForensicEvent[] }>({ type: "get_events", ...opts }, 30000);
+	return r.data?.events ?? [];
+}
+
+/** Fork/rewind at a specific event id (used for "replay from here"). */
+export async function rewindToEvent(targetEventId: string): Promise<void> {
+	await sendCommandAwait({ type: "rewind", targetEventId });
+}
+
+export interface BashRunResult {
+	output: string;
+	exitCode?: number;
+	cancelled: boolean;
+	truncated: boolean;
+}
+
+export async function runBash(command: string): Promise<BashRunResult> {
+	const r = await sendCommandAwait<BashRunResult>({ type: "bash", command }, 120000);
+	return r.data ?? { output: "", cancelled: false, truncated: false };
+}
+
+export async function abortBash(): Promise<void> {
+	try { await sendCommandAwait({ type: "abort_bash" }, 5000); } catch { /* ignore */ }
+}
+
+// --- Tool approval (safe mode) ---
+
+/** Approve a pending tool call awaiting user approval. */
+export async function approveToolCall(intentEventId: string): Promise<void> {
+	try {
+		await sendCommandAwait({ type: "approve", intentEventId }, 5000);
+	} catch { /* ignore */ }
+}
+
+/** Reject (deny) a pending tool call awaiting user approval. */
+export async function rejectToolCall(intentEventId: string): Promise<void> {
+	try {
+		await sendCommandAwait({ type: "reject", intentEventId }, 5000);
+	} catch { /* ignore */ }
+}
+
+/** Toggle safe mode (master switch for requiring tool approval). */
+export async function setSafeMode(enabled: boolean): Promise<boolean> {
+	const r = await sendCommandAwait<{ safeMode: boolean }>({ type: "set_safe_mode", enabled }, 5000);
+	return r.data?.safeMode ?? enabled;
+}
+
 // --- Delete workspace (Tauri only) ---
 
 export async function deleteWorkspace(workspaceId: string): Promise<void> {
@@ -167,6 +268,8 @@ export async function revealWorkspace(cwd: string): Promise<void> {
 
 export interface ProviderInfo {
 	id: string;
+	/** Human-readable display name (from pi-ai built-ins); falls back to id. */
+	name?: string;
 	has_api_key: boolean;
 	auth_type: string | null;
 }

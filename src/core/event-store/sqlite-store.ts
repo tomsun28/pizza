@@ -49,6 +49,7 @@ export class SqliteEventStore implements EventStore, SessionStore {
 			mkdirSync(dirname(dbPath), { recursive: true });
 		}
 		this.db = new (loadDatabaseSync())(dbPath);
+		this._applyPragmas(dbPath);
 		this._initSchema();
 		this.sessionStore = new SqliteSessionStore(this.db, workspaceId);
 	}
@@ -239,6 +240,17 @@ export class SqliteEventStore implements EventStore, SessionStore {
 
 	saveSessionIndex(index: SessionIndex): void {
 		this.sessionStore.saveSessionIndex(index);
+	}
+
+	// Enable WAL so external readers (GUI, ad-hoc sqlite3) do not block writes,
+	// and retry transient lock contention instead of throwing SQLITE_BUSY. An
+	// unhandled SQLITE_BUSY on the write path previously crashed the sidecar.
+	private _applyPragmas(dbPath: string): void {
+		this.db.exec("PRAGMA busy_timeout = 5000");
+		this.db.exec("PRAGMA synchronous = NORMAL");
+		if (dbPath !== ":memory:") {
+			this.db.exec("PRAGMA journal_mode = WAL");
+		}
 	}
 
 	private _initSchema(): void {

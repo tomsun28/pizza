@@ -27,7 +27,9 @@ import { makeSessionRef, parseSessionRef } from "../../src/core/session-ref.js";
 import { executeBashWithOperations } from "../../src/core/bash-executor.js";
 import { createLocalBashOperations } from "../../src/core/tools/bash.js";
 import { exportFromFile } from "../../src/core/export-html/index.js";
+import { buildHistoryTreeNodes } from "../../src/core/projection/history-tree.js";
 import { killTrackedDetachedChildren } from "../../src/utils/shell.js";
+import { startPtyServer, type PtyServer } from "../pty/pty-server.js";
 import { type Theme, theme } from "../../packages/tui/theme/theme.js";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
 import type {
@@ -119,6 +121,23 @@ function getFacadeSessionStats(facade: SessionFacade): SessionStats {
 	};
 }
 
+/** One-line preview of a message for history_tree view / diff. */
+function formatMessagePreview(message: AgentMessage): string | undefined {
+	const role = (message as { role?: string }).role ?? "message";
+	const content = (message as { content?: unknown }).content;
+	const text = extractMessageText(content).replace(/\s+/g, " ").trim();
+	if (!text) {
+		// Surface tool calls even when there's no text.
+		const toolCalls = Array.isArray(content)
+			? content.filter((b) => (b as { type?: string }).type === "toolCall").length
+			: 0;
+		if (toolCalls > 0) return `${role}: [${toolCalls} tool call${toolCalls === 1 ? "" : "s"}]`;
+		return undefined;
+	}
+	const truncated = text.length > 140 ? `${text.slice(0, 140)}…` : text;
+	return `${role}: ${truncated}`;
+}
+
 function resolveSessionId(facade: SessionFacade, ref: string): string {
 	const parsed = parseSessionRef(ref);
 	if (parsed.workspaceId && parsed.workspaceId !== facade.runtime.store.workspace_id) {
@@ -127,7 +146,7 @@ function resolveSessionId(facade: SessionFacade, ref: string): string {
 	return parsed.sessionId;
 }
 
-function getFacadeSessionState(facade: SessionFacade): RpcSessionState {
+function getFacadeSessionState(facade: SessionFacade, ptyPort?: number): RpcSessionState {
 	const projection = facade.getProjection();
 	const descriptor = projection.getDescriptor();
 	const messages = projection.buildContext().messages;
@@ -141,6 +160,8 @@ function getFacadeSessionState(facade: SessionFacade): RpcSessionState {
 		autoCompactionEnabled: facade.settingsManager.getCompactionEnabled(),
 		messageCount: messages.length,
 		pendingMessageCount: 0,
+		safeMode: facade.runtime.isSafeMode,
+		ptyPort,
 	};
 }
 
@@ -153,6 +174,14 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 	let unsubscribe: (() => void) | undefined;
 	let shuttingDown = false;
 	const signalCleanupHandlers: Array<() => void> = [];
+	let ptyServer: PtyServer | undefined;
+	// Start the local PTY-over-WebSocket server for the Terminal pane. We await
+	// only the socket bind (fast, never blocks on node-pty, which loads lazily
+	// per connection) so `ptyPort` is ready before the first get_state. Any
+	// failure is non-fatal — ptyPort stays undefined and the pane degrades.
+	try {
+		ptyServer = await startPtyServer({ cwd: process.cwd() });
+	} catch { /* PTY server unavailable; terminal pane degrades */ }
 
 	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
 		writeRawStdout(serializeJsonLine(obj));
@@ -217,6 +246,7 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 		}
 		unsubscribe?.();
 		await Promise.resolve(facade.dispose());
+		await ptyServer?.close().catch(() => {});
 		detachInput();
 		process.stdin.pause();
 		process.exit(exitCode);
@@ -245,7 +275,7 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 				return success(id, "abort");
 
 			case "get_state":
-				return success(id, "get_state", getFacadeSessionState(facade));
+				return success(id, "get_state", getFacadeSessionState(facade, ptyServer?.port));
 
 			case "set_model": {
 				const models = facade.modelRegistry?.getAvailable() ?? [];
@@ -393,6 +423,95 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 				return success(id, "get_commands", { commands });
 			}
 
+			case "history_tree": {
+				const sessionManager = facade.runtime.sessionManager;
+				if (!sessionManager) {
+					return error(id, "history_tree", "Projection session manager is not available");
+				}
+				const store = facade.runtime.store;
+				switch (command.action) {
+					case "list": {
+						let nodes = buildHistoryTreeNodes(
+							sessionManager.listSessions(),
+							sessionManager.getActiveSessionId(),
+							store,
+						);
+						if (command.query) {
+							const q = command.query.toLowerCase();
+							nodes = nodes.filter(
+								(n) =>
+									n.name?.toLowerCase().includes(q) ||
+									n.snippet?.toLowerCase().includes(q) ||
+									n.session_id.toLowerCase().includes(q),
+							);
+						}
+						return success(id, "history_tree", { action: "list", nodes });
+					}
+					case "view": {
+						const projection = sessionManager.getSessionProjection(command.sessionId);
+						if (!projection) {
+							return success(id, "history_tree", { action: "view", view: null });
+						}
+						const descriptor = projection.getDescriptor();
+						const previews = projection
+							.buildContext()
+							.messages.map((m) => formatMessagePreview(m))
+							.filter((line): line is string => line !== undefined);
+						const maxMessages = command.maxMessages ?? 40;
+						return success(id, "history_tree", {
+							action: "view",
+							view: {
+								session_id: descriptor.session_id,
+								name: descriptor.name,
+								messages: previews.slice(-maxMessages),
+								message_count: previews.length,
+							},
+						});
+					}
+					case "jump": {
+						const result = sessionManager.jumpToSession(command.sessionId, command.reason);
+						return success(id, "history_tree", {
+							action: "jump",
+							session_id: result.descriptor.session_id,
+							reopened: result.reopened,
+						});
+					}
+					case "fork": {
+						const desc = sessionManager.forkFromSession(command.sessionId);
+						return success(id, "history_tree", { action: "fork", session_id: desc.session_id });
+					}
+					case "rename": {
+						sessionManager.renameSession(command.sessionId, command.name);
+						return success(id, "history_tree", { action: "rename", ok: true });
+					}
+					default: {
+						const unknown = command as { action?: string };
+						return error(id, "history_tree", `Unknown history_tree action: ${unknown.action}`);
+					}
+				}
+			}
+
+			case "get_events": {
+				const store = facade.runtime.store;
+				const eventTypes = command.eventTypes as EventType[] | undefined;
+				const events = command.sessionScoped
+					? getFacadeSessionEvents(facade, eventTypes)
+					: store.query({ types: eventTypes });
+				const limit = command.limit ?? 1000;
+				const sliced = events.length > limit ? events.slice(-limit) : events;
+				return success(id, "get_events", {
+					events: sliced.map((e) => ({
+						event_id: e.event_id,
+						type: e.type,
+						timestamp: e.timestamp,
+						actor_id: e.actor_id,
+						caused_by: e.caused_by,
+						thread_id: e.thread_id,
+						payload: e.payload,
+					})),
+				});
+			}
+
 			case "set_auto_retry":
 				return success(id, "set_auto_retry");
 
@@ -421,6 +540,20 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 
 			case "set_follow_up_mode":
 				return success(id, "set_follow_up_mode");
+			case "approve":
+				facade.runtime.approve(command.intentEventId);
+				return success(id, "approve");
+
+			case "reject":
+				facade.runtime.reject(command.intentEventId);
+				return success(id, "reject");
+
+			case "set_safe_mode": {
+				const enabled = !!command.enabled;
+				facade.runtime.setSafeMode(enabled);
+				facade.settingsManager.setSafeMode(enabled);
+				return success(id, "set_safe_mode", { safeMode: facade.runtime.isSafeMode });
+			}
 
 			default: {
 				const unknownCommand = command as { type: string };

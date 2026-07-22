@@ -73,11 +73,68 @@
 		"copied": "Copied",
 		"copy": "Copy"
 	},
+	"approval": {
+		"title": "Approve tool call",
+		"hint": "The agent is waiting for your approval.",
+		"approve": "Approve",
+		"reject": "Reject",
+		"riskPrefix": "Risk:"
+	},
 	"history": {
 		"title": "History",
 		"description": "Session tree and branch navigation",
 		"comingSoon": "Coming soon",
-		"comingSoonDescription": "History tree visualization will be available in a future update."
+		"comingSoonDescription": "Branch tree visualization will appear here.",
+		"search": "Search branches…",
+		"refresh": "Refresh",
+		"emptyTitle": "No branches yet",
+		"emptyDescription": "Send a message in Chat to create the root session, then fork from any point.",
+		"noMatch": "No branches match your search.",
+		"forkFromHere": "Fork from here",
+		"forkHint": "Creates a new child branch (freezes this one if open)",
+		"jumpHere": "Jump to this branch",
+		"jumpOpenHint": "No new branch is created",
+		"jumpClosedHint": "Creates a new branch from this point",
+		"rename": "Rename branch",
+		"renamePrompt": "Branch name:",
+		"copyId": "Copy session id",
+		"position": "Position",
+		"depth": "depth",
+		"root": "root"
+	},
+	"timeline": {
+		"title": "Timeline",
+		"description": "Raw event stream and replay",
+		"comingSoonDescription": "The event timeline will appear here.",
+		"search": "Filter events…",
+		"emptyTitle": "No events",
+		"emptyDescription": "Events for this workspace will stream here.",
+		"catUser": "User",
+		"catAgent": "Agent",
+		"catTools": "Tools",
+		"catReactor": "Reactor",
+		"catSession": "Session",
+		"catCompaction": "Compaction",
+		"catRuntime": "Runtime",
+		"errorsOnly": "Errors",
+		"filesOnly": "File changes",
+		"replayFromHere": "Replay from here",
+		"replayHint": "Fork a new session from this event"
+	},
+	"terminal": {
+		"title": "Terminal",
+		"toggle": "Toggle terminal",
+		"collapse": "Collapse terminal",
+		"comingSoonDescription": "Terminal will appear here.",
+		"hint": "Run a shell command in this workspace.",
+		"prompt": "Type a command…",
+		"running": "Running…",
+		"exited": "process exited",
+		"connectionError": "Terminal connection error.",
+		"unavailable": "Interactive terminal is unavailable in this environment."
+	},
+	"dock": {
+		"toggleRight": "Toggle side panel"
 	},
 	"theme": {
 		"switchToLight": "Switch to light",
@@ -99,7 +156,10 @@
 			"status": "Status",
 			"compacting": "Compacting...",
 			"language": "Language",
-			"languageDescription": "Interface display language"
+			"languageDescription": "Interface display language",
+			"safeMode": "Safe Mode",
+			"safeModeLabel": "Require approval",
+			"safeModeHint": "When on, risky tool calls (file writes, edits, deletes, dangerous shell) pause for your approval before running."
 		},
 		"provider": {
 			"title": "Providers",
@@ -124,6 +184,7 @@
 			"keyEmpty": "API key cannot be empty",
 			"selectProvider": "Select a provider first",
 			"selectProviderPlaceholder": "Select a provider...",
+			"noMatch": "No providers match your search.",
 			"confirmRemove": "Remove API key for {{label}}?"
 		}
 	},

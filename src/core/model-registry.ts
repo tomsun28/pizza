@@ -18,6 +18,7 @@ import {
 	type SimpleStreamOptions,
 } from "@earendil-works/pi-ai/compat";
 import { registerOAuthProvider, resetOAuthProviders } from "@earendil-works/pi-ai/oauth";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { type Static, Type } from "@sinclair/typebox";
 import AjvModule from "ajv";
 import { existsSync, readFileSync } from "fs";
@@ -33,6 +34,34 @@ import {
 
 const Ajv = (AjvModule as any).default || AjvModule;
 const ajv = new Ajv();
+
+/**
+ * Display-name overrides for providers where pizza wants a different label
+ * than pi-ai built-in `Provider.name`. Empty by default — pi-ai names are
+ * already good display names. Add entries here only to override/supplement.
+ */
+const PROVIDER_NAME_OVERRIDES: Record<string, string> = {};
+
+/** Lazily-built map of provider id -> display name from pi-ai built-ins. */
+let providerNameMap: Map<string, string> | undefined;
+
+function getProviderNameMap(): Map<string, string> {
+	if (!providerNameMap) {
+		providerNameMap = new Map<string, string>();
+		for (const provider of builtinProviders()) {
+			providerNameMap.set(provider.id, provider.name);
+		}
+	}
+	return providerNameMap;
+}
+
+/**
+ * Resolve a display name for a provider id.
+ * Priority: pizza override > pi-ai built-in name > raw id.
+ */
+export function getProviderDisplayName(providerId: string): string {
+	return PROVIDER_NAME_OVERRIDES[providerId] ?? getProviderNameMap().get(providerId) ?? providerId;
+}
 
 // Schema for OpenRouter routing preferences
 const PercentileCutoffsSchema = Type.Object({
@@ -590,6 +619,23 @@ export class ModelRegistry {
 	 */
 	find(provider: string, modelId: string): Model<Api> | undefined {
 		return this.models.find((m) => m.provider === provider && m.id === modelId);
+	}
+
+	/**
+	 * Get all known provider ids (built-in + custom from models/extensions).
+	 */
+	getProviderIds(): string[] {
+		const ids = new Set<string>();
+		for (const m of this.models) ids.add(m.provider);
+		return [...ids];
+	}
+
+	/**
+	 * Get a human-readable display name for a provider id.
+	 * Uses pi-ai built-in names; falls back to the raw id.
+	 */
+	getProviderName(providerId: string): string {
+		return getProviderDisplayName(providerId);
 	}
 
 	/**

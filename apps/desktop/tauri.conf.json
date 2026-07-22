@@ -31,7 +31,7 @@
 			}
 		],
 		"security": {
-			"csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self' 'unsafe-inline' 'unsafe-eval'; connect-src 'self' ipc: http://ipc.localhost"
+			"csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self' 'unsafe-inline' 'unsafe-eval'; connect-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:* http://127.0.0.1:*"
 		}
 	},
 	"bundle": {
@@ -49,7 +49,9 @@
 			"../../dist/assets/": "assets/",
 			"../../dist/export-html/": "export-html/",
 			"vendor-bin/": "vendor/bin/",
+			"prebuilds-bin/": "prebuilds/",
 			"../../dist/package.json": "package.json",
+			"../../dist/providers.json": "providers.json",
 			"../../dist/photon_rs_bg.wasm": "photon_rs_bg.wasm"
 		}
 	}

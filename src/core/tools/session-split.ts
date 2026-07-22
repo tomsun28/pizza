@@ -25,16 +25,18 @@ export function createSessionSplitToolDefinition(): ToolDefinition<typeof sessio
 		description:
 			"Split the current conversation session, starting a new session from this point forward. " +
 			"Previous messages will no longer be included in the LLM context for subsequent turns. " +
-			"Call this when the user's intent has shifted to a new topic that is different from the current " +
-			"conversation and the previous context is no longer relevant. Do NOT call this for follow-up " +
-			"questions, clarifications, or refinements of the current task. You can call this alongside " +
-			"other tools in the same turn. " +
+			"Prefer to split EARLY and DECISIVELY whenever the user moves to a new task, a different file or area, " +
+			"or a fresh question unrelated to the current work — keeping stale context wastes tokens and degrades answers. " +
+			"Concrete signals to split: a brand-new request, switching to a different bug/feature/component, " +
+			"'also...', 'next...', or 'now do...' pivots, or any ask whose prior context no longer helps. " +
+			"Do NOT split for follow-ups, clarifications, or refinements of the SAME task in progress. " +
+			"You can call this alongside other tools in the same turn. " +
 			"IMPORTANT: Call this AT MOST ONCE per turn. After the split, your context will be refreshed " +
 			"to the new session — proceed directly with the user's requested task.",
 		promptSnippet: "Split the conversation session when the user shifts to a new topic",
 		promptGuidelines: [
-			"Call session_split when you judge the user's message starts a new, different topic.",
-			"Do not call session_split for follow-up questions, clarifications, or refinements of the current task.",
+			"Prefer to session_split promptly when the user starts a new task or a clearly different topic — err on the side of splitting when the previous context is no longer useful.",
+			"Only skip the split when the new message is a follow-up, clarification, or refinement of the SAME task in progress.",
 			"Call session_split at most once per turn. After the split, your context is refreshed — proceed with the task.",
 		],
 		parameters: sessionSplitSchema,

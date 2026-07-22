@@ -51,6 +51,7 @@ export interface SettingsConfig {
 	autocompleteMaxVisible: number;
 	quietStartup: boolean;
 	clearOnShrink: boolean;
+	safeMode: boolean;
 }
 
 export interface SettingsCallbacks {
@@ -74,6 +75,7 @@ export interface SettingsCallbacks {
 	onAutocompleteMaxVisibleChange: (maxVisible: number) => void;
 	onQuietStartupChange: (enabled: boolean) => void;
 	onClearOnShrinkChange: (enabled: boolean) => void;
+	onSafeModeChange: (enabled: boolean) => void;
 	onCancel: () => void;
 }
 
@@ -156,6 +158,13 @@ export class SettingsSelectorComponent extends Container {
 		const supportsImages = getCapabilities().images;
 
 		const items: SettingItem[] = [
+			{
+				id: "safe-mode",
+				label: "Safe mode",
+				description: "Require approval before risky tool calls (writes, edits, deletes, dangerous commands)",
+				currentValue: config.safeMode ? "true" : "false",
+				values: ["true", "false"],
+			},
 			{
 				id: "autocompact",
 				label: "Auto-compact",
@@ -364,6 +373,9 @@ export class SettingsSelectorComponent extends Container {
 				switch (id) {
 					case "autocompact":
 						callbacks.onAutoCompactChange(newValue === "true");
+						break;
+					case "safe-mode":
+						callbacks.onSafeModeChange(newValue === "true");
 						break;
 					case "show-images":
 						callbacks.onShowImagesChange(newValue === "true");

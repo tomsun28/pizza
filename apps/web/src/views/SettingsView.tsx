@@ -2,8 +2,8 @@ import { useState, useEffect, useCallback, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { PageHeader, Card, Badge, Button } from "@/components/ui";
 import { cn } from "@/lib/utils";
-import { PixelSelect, PixelSwitch } from "@pxlkit/ui-kit";
-import { listProviders, setProviderApiKey, removeProviderApiKey, type ProviderInfo } from "@/lib/transport";
+import { PixelSelect, PixelSwitch, PixelCombobox } from "@pxlkit/ui-kit";
+import { listProviders, setProviderApiKey, removeProviderApiKey, setSafeMode, type ProviderInfo } from "@/lib/transport";
 import type { RpcSessionState } from "@/lib/types";
 import { sendCommandAwait } from "@/lib/transport";
 import { Key, Trash2, Eye, EyeOff, Plus } from "lucide-react";
@@ -23,31 +23,19 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 	);
 }
 
-const PROVIDER_LABELS: Record<string, string> = {
-	anthropic: "Anthropic",
-	openai: "OpenAI",
-	google: "Google",
-	zai: "ZAI",
-	openrouter: "OpenRouter",
-	groq: "Groq",
-	mistral: "Mistral",
-	deepseek: "DeepSeek",
-	xai: "xAI",
-	fireworks: "Fireworks",
-	together: "Together",
-	perplexity: "Perplexity",
-	cohere: "Cohere",
-	"amazon-bedrock": "Amazon Bedrock",
-};
+function providerLabel(provider: { id: string; name?: string }): string {
+	return provider.name ?? provider.id;
+}
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
 
 const THINKING_OPTIONS = THINKING_LEVELS.map((level) => ({ value: level, label: level }));
 
-function GeneralTab({ state }: { state: RpcSessionState | null }) {
+function GeneralTab({ state, onRefreshState }: { state: RpcSessionState | null; onRefreshState?: () => void }) {
 	const { t, i18n } = useTranslation();
 	const [thinkingLevel, setThinkingLevel] = useState<string>(state?.thinkingLevel ?? "off");
 	const [autoCompaction, setAutoCompaction] = useState<boolean>(state?.autoCompactionEnabled ?? true);
+	const [safeMode, setSafeModeState] = useState<boolean>(state?.safeMode ?? false);
 	const [language, setLanguage] = useState<AppLanguage>(
 		(SUPPORTED_LANGUAGES.includes(i18n.language as AppLanguage) ? i18n.language : DEFAULT_LANGUAGE) as AppLanguage,
 	);
@@ -69,6 +57,18 @@ function GeneralTab({ state }: { state: RpcSessionState | null }) {
 			console.error("[settings] set_auto_compaction failed:", e);
 		}
 	}, []);
+
+	const handleSafeModeChange = useCallback(async (enabled: boolean) => {
+		setSafeModeState(enabled);
+		try {
+			const actual = await setSafeMode(enabled);
+			setSafeModeState(actual);
+			onRefreshState?.();
+		} catch (e) {
+			console.error("[settings] set_safe_mode failed:", e);
+			setSafeModeState(!enabled);
+		}
+	}, [onRefreshState]);
 
 	const handleLanguageChange = useCallback((value: string) => {
 		const lang = (SUPPORTED_LANGUAGES.includes(value as AppLanguage) ? value : DEFAULT_LANGUAGE) as AppLanguage;
@@ -123,6 +123,19 @@ function GeneralTab({ state }: { state: RpcSessionState | null }) {
 			</Card>
 
 			<Card>
+				<div className="mb-2 text-sm font-medium text-fg">{t("settings.general.safeMode")}</div>
+				<Row label={t("settings.general.safeModeLabel")}>
+					<PixelSwitch
+						label={t("settings.general.safeModeLabel")}
+						checked={safeMode}
+						onChange={handleSafeModeChange}
+						tone="cyan"
+					/>
+				</Row>
+				<p className="mt-1 text-xs text-muted">{t("settings.general.safeModeHint")}</p>
+			</Card>
+
+			<Card>
 				<div className="mb-2 text-sm font-medium text-fg">{t("settings.general.language")}</div>
 				<Row label={t("settings.general.languageDescription")}>
 					<div className="w-40">
@@ -169,7 +182,7 @@ function ProviderRow({ provider, onRefresh }: { provider: ProviderInfo; onRefres
 	}, [keyValue, provider.id, onRefresh, t]);
 
 	const handleRemove = useCallback(async () => {
-		if (!confirm(t("settings.provider.confirmRemove", { label: PROVIDER_LABELS[provider.id] ?? provider.id }))) return;
+		if (!confirm(t("settings.provider.confirmRemove", { label: providerLabel(provider) }))) return;
 		try {
 			await removeProviderApiKey(provider.id);
 			onRefresh();
@@ -178,7 +191,7 @@ function ProviderRow({ provider, onRefresh }: { provider: ProviderInfo; onRefres
 		}
 	}, [provider.id, onRefresh, t]);
 
-	const label = PROVIDER_LABELS[provider.id] ?? provider.id;
+	const label = providerLabel(provider);
 
 	return (
 		<div className="border-b border-border/60 py-3 last:border-0">
@@ -263,10 +276,11 @@ function AddProviderInline({
 
 	const providerOptions = available.map((p) => ({
 		value: p.id,
-		label: PROVIDER_LABELS[p.id] ?? p.id,
+		label: providerLabel(p),
 	}));
 
-	const label = selected ? (PROVIDER_LABELS[selected] ?? selected) : "";
+	const selectedProvider = available.find((p) => p.id === selected);
+	const label = selectedProvider ? providerLabel(selectedProvider) : "";
 
 	const handleSave = useCallback(async () => {
 		if (!selected) {
@@ -294,13 +308,13 @@ function AddProviderInline({
 			<div className="mb-2 text-xs font-medium text-fg">{t("settings.provider.addNew")}</div>
 			<div className="flex items-center gap-2">
 				<div className="flex-1">
-					<PixelSelect
+					<PixelCombobox
 						value={selected}
 						options={providerOptions}
 						onChange={(v) => { setSelected(v); setError(""); }}
 						placeholder={t("settings.provider.selectProviderPlaceholder")}
-						tone="cyan"
 						size="sm"
+						emptyMessage={t("settings.provider.noMatch")}
 					/>
 				</div>
 				{!selected && (
@@ -387,11 +401,9 @@ function ProviderTab() {
 			<Card>
 				<div className="mb-3 flex items-center justify-between">
 					<div className="text-sm font-medium text-fg">{t("settings.provider.title")}</div>
-					{available.length > 0 && (
-						<Button size="sm" tone="accent" iconLeft={<Plus className="h-3.5 w-3.5" />} onClick={() => setShowAddInline(true)}>
-							{t("settings.provider.addProvider")}
-						</Button>
-					)}
+					<Button size="sm" tone="accent" iconLeft={<Plus className="h-3.5 w-3.5" />} onClick={() => setShowAddInline(true)}>
+						{t("settings.provider.addProvider")}
+					</Button>
 				</div>
 
 				{showAddInline && (
@@ -419,8 +431,10 @@ function ProviderTab() {
 
 export default function SettingsView({
 	state,
+	onRefreshState,
 }: {
 	state: RpcSessionState | null;
+	onRefreshState?: () => void;
 }) {
 	const { t } = useTranslation();
 	const [tab, setTab] = useState<"general" | "provider">("general");
@@ -454,7 +468,7 @@ export default function SettingsView({
 				</button>
 			</div>
 
-			{tab === "general" ? <GeneralTab state={state} /> : <ProviderTab />}
+			{tab === "general" ? <GeneralTab state={state} onRefreshState={onRefreshState} /> : <ProviderTab />}
 		</div>
 	);
 }
