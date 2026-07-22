@@ -3793,6 +3793,7 @@ export class InteractiveMode {
 					autocompleteMaxVisible: this.settingsManager.getAutocompleteMaxVisible(),
 					quietStartup: this.settingsManager.getQuietStartup(),
 					clearOnShrink: this.settingsManager.getClearOnShrink(),
+					safeMode: this.settingsManager.getSafeMode(),
 				},
 				{
 					onAutoCompactChange: (enabled) => {
@@ -3896,6 +3897,11 @@ export class InteractiveMode {
 					onClearOnShrinkChange: (enabled) => {
 						this.settingsManager.setClearOnShrink(enabled);
 						this.ui.setClearOnShrink(enabled);
+					},
+					onSafeModeChange: (enabled) => {
+						this.settingsManager.setSafeMode(enabled);
+						this.facade.runtime.setSafeMode(enabled);
+						this.showStatus(enabled ? "Safe mode on — risky tools require approval" : "Safe mode off — tools auto-run");
 					},
 					onCancel: () => {
 						done();

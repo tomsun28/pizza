@@ -630,12 +630,19 @@ export async function createSessionFacade(
 		systemPrompt,
 		model: toModelConfig(model ?? ({ provider: "none", id: "none" } as Model<any>), thinkingLevel),
 		tools: activeToolDefinitions.map(toRuntimeToolDefinition),
-		// The default facade currently has no approval UI handler, so keep coding tools usable.
-		// Direct runtime/classifier consumers get the stricter defaults unless they opt out.
+		// Safe mode is the master toggle for tool approval. When off (default),
+		// tools auto-run with no approval gate. When on, risky tool calls block
+		// until the user explicitly approves them (USER_APPROVAL / USER_REJECTION).
 		classifierConfig: {
-			require_approval_writes: false,
-			require_approval_edits: false,
-			require_approval_unknown: false,
+			safe_mode: settingsManager.getSafeMode(),
+		},
+		// The facade has no built-in approval dialog; the UI (TUI / web / desktop)
+		// discovers pending approvals via the INTENT_TOOL_CALL event and resolves
+		// them through runtime.approve()/reject(). This no-op handler keeps the
+		// reactor waiting so safe mode can be toggled live.
+		approvalHandler: {
+			requestApproval: () => {},
+			cancelApproval: () => {},
 		},
 		retryAssistantErrorCompletions: true,
 		retryPolicy: new DefaultRetryPolicy({ capDelayMs: settingsManager.getRetrySettings().maxDelayMs }),

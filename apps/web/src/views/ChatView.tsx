@@ -6,6 +6,7 @@ import type { RpcSessionState, TypedEvent } from "@/lib/types";
 import { Conversation, type TimelineItem } from "@/components/Conversation";
 import { Composer, type ComposerImage } from "@/components/Composer";
 import { EmptyState } from "@/components/ui";
+import { ApprovalDialog, type PendingApproval } from "@/components/ApprovalDialog";
 import { cn } from "@/lib/utils";
 import type { LayoutOutletContext } from "@/components/Layout";
 
@@ -181,6 +182,7 @@ export default function ChatView({
 	const { t } = useTranslation();
 	const [items, setItems] = useState<TimelineItem[]>([]);
 	const [error, setError] = useState("");
+	const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
 	const activeAssistantRef = useRef<string | null>(null);
 	const seenIdsRef = useRef<Set<string>>(new Set());
 	const scrollRef = useRef<HTMLDivElement>(null);
@@ -313,6 +315,34 @@ export default function ChatView({
 			}
 		};
 
+		// INTENT_TOOL_CALL and TOOL_EXECUTION_START share the same tool_call_id.
+		// Upsert so we don't create duplicate cards / clashing React keys.
+		const toolCardUpsert = (toolCallId: string, toolName: string, argsStr: string) => {
+			updateItems((prev) => {
+				const existing = prev.find((it) => it.id === toolCallId);
+				if (existing) {
+					return prev.map((it) =>
+						it.id === toolCallId
+							? { ...it, title: toolName, toolName, toolArgs: argsStr || it.toolArgs }
+							: it,
+					);
+				}
+				return [
+					...prev,
+					{
+						id: toolCallId,
+						role: "tool",
+						title: toolName,
+						text: "",
+						status: "RUNNING",
+						streaming: true,
+						toolName,
+						toolArgs: argsStr,
+					},
+				];
+			});
+		};
+
 		switch (event.type) {
 			case "USER_MESSAGE": {
 				const text = messageText(event.payload);
@@ -422,38 +452,44 @@ export default function ChatView({
 				}
 				break;
 			}
-			case "INTENT_TOOL_CALL":
-			case "TOOL_EXECUTION_START": {
+			case "INTENT_TOOL_CALL": {
 				const payload = event.payload as Record<string, unknown>;
 				const toolCallId = payload.tool_call_id as string;
 				const toolName = payload.tool_name as string;
-				const args = payload.arguments as Record<string, unknown> | undefined;
-				const argsStr = args ? JSON.stringify(args, null, 2) : "";
-				// INTENT_TOOL_CALL and TOOL_EXECUTION_START share the same tool_call_id.
-				// Upsert so we don't create duplicate cards / clashing React keys.
-				updateItems((prev) => {
-					const existing = prev.find((it) => it.id === toolCallId);
-					if (existing) {
-						return prev.map((it) =>
-							it.id === toolCallId
-								? { ...it, title: toolName, toolName, toolArgs: argsStr || it.toolArgs }
-								: it,
-						);
-					}
-					return [
-						...prev,
-						{
-							id: toolCallId,
-							role: "tool",
-							title: toolName,
-							text: "",
-							status: "RUNNING",
-							streaming: true,
-							toolName,
-							toolArgs: argsStr,
-						},
-					];
-				});
+				const args = (payload.arguments as Record<string, unknown> | undefined) ?? {};
+				const argsStr = JSON.stringify(args, null, 2);
+				const classification = payload.classification as Record<string, unknown> | undefined;
+				// When safe mode is on, risky tool calls require explicit approval
+				// before they execute. Surface an approval dialog and block here.
+				if (payload.requires_approval === true && isForCurrent) {
+					setPendingApproval({
+						intentEventId: event.event_id,
+						toolCallId,
+						toolName,
+						arguments: args,
+						description: classification?.description as string | undefined,
+						risk: classification?.risk as string | undefined,
+						category: classification?.category as string | undefined,
+						affectedFiles: classification?.affected_files as string[] | undefined,
+					});
+				}
+				// Fall through to render the tool card (shared with TOOL_EXECUTION_START).
+				toolCardUpsert(toolCallId, toolName, argsStr);
+				break;
+			}
+			case "TOOL_EXECUTION_START": {
+				const payload = event.payload as Record<string, unknown>;
+				const toolCallId = payload.tool_call_id as string;
+				// Execution started → the tool was approved (or didn't need approval).
+				// Clear any matching pending approval dialog.
+				setPendingApproval((prev) =>
+					prev && prev.toolCallId === toolCallId ? null : prev,
+				);
+				toolCardUpsert(
+					toolCallId,
+					payload.tool_name as string,
+					payload.arguments ? JSON.stringify(payload.arguments, null, 2) : "",
+				);
 				break;
 			}
 			case "TOOL_EXECUTION_UPDATE": {
@@ -661,6 +697,10 @@ export default function ChatView({
 				isRunning={isRunning}
 				onSend={handleSend}
 				onAbort={handleAbort}
+				/>
+			<ApprovalDialog
+				approval={pendingApproval}
+				onResolved={(_id) => setPendingApproval(null)}
 			/>
 		</div>
 	);

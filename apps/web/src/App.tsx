@@ -126,6 +126,16 @@ function AppInner() {
 		setWorkspaces((prev) => prev.filter((ws) => ws.workspace_id !== workspaceId));
 	}, []);
 
+	// Refresh the session state from the sidecar. Used after settings that
+	// don't emit a dedicated event (e.g. toggling safe mode) so the root
+	// state stays in sync for components that read from it.
+	const refreshState = useCallback(() => {
+		if (!sidecarReady) return;
+		void sendCommandAwait<RpcSessionState>({ type: "get_state" }, 5000)
+			.then((r) => setState(r.data ?? null))
+			.catch(() => {});
+	}, [sidecarReady]);
+
 	useEffect(() => {
 		if (!sidecarReady) return;
 		let cancelled = false;
@@ -281,7 +291,7 @@ function AppInner() {
 								/>
 							}
 						/>
-						<Route path="/settings" element={<SettingsView state={state} />} />
+						<Route path="/settings" element={<SettingsView state={state} onRefreshState={refreshState} />} />
 						<Route path="*" element={<Navigate to="/" replace />} />
 					</Route>
 			</Routes>

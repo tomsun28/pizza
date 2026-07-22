@@ -160,6 +160,7 @@ function getFacadeSessionState(facade: SessionFacade, ptyPort?: number): RpcSess
 		autoCompactionEnabled: facade.settingsManager.getCompactionEnabled(),
 		messageCount: messages.length,
 		pendingMessageCount: 0,
+		safeMode: facade.runtime.isSafeMode,
 		ptyPort,
 	};
 }
@@ -539,6 +540,20 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 
 			case "set_follow_up_mode":
 				return success(id, "set_follow_up_mode");
+			case "approve":
+				facade.runtime.approve(command.intentEventId);
+				return success(id, "approve");
+
+			case "reject":
+				facade.runtime.reject(command.intentEventId);
+				return success(id, "reject");
+
+			case "set_safe_mode": {
+				const enabled = !!command.enabled;
+				facade.runtime.setSafeMode(enabled);
+				facade.settingsManager.setSafeMode(enabled);
+				return success(id, "set_safe_mode", { safeMode: facade.runtime.isSafeMode });
+			}
 
 			default: {
 				const unknownCommand = command as { type: string };

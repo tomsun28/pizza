@@ -90,7 +90,12 @@ export type RpcCommand =
 	| { id?: string; type: "history_tree"; action: "jump"; sessionId: string; reason?: string }
 	| { id?: string; type: "history_tree"; action: "fork"; sessionId: string }
 	| { id?: string; type: "history_tree"; action: "rename"; sessionId: string; name: string }
-	| { id?: string; type: "get_events"; eventTypes?: string[]; limit?: number; sessionScoped?: boolean };
+	| { id?: string; type: "get_events"; eventTypes?: string[]; limit?: number; sessionScoped?: boolean }
+
+	// Approval (safe mode)
+	| { id?: string; type: "approve"; intentEventId: string }
+	| { id?: string; type: "reject"; intentEventId: string }
+	| { id?: string; type: "set_safe_mode"; enabled: boolean };
 
 // ============================================================================
 // RPC Slash Command (for get_commands response)
@@ -124,6 +129,8 @@ export interface RpcSessionState {
 	pendingMessageCount: number;
 	/** Local WebSocket PTY server port for the Terminal pane (0/undefined = unavailable). */
 	ptyPort?: number;
+	/** When true, risky tool calls require explicit user approval before running. */
+	safeMode?: boolean;
 }
 
 // ============================================================================
@@ -184,6 +191,10 @@ export type RpcResponse =
 	// History tree / event forensics
 	| { id?: string; type: "response"; command: "history_tree"; success: true; data: RpcHistoryTreeResult }
 	| { id?: string; type: "response"; command: "get_events"; success: true; data: { events: RpcForensicEvent[] } }
+	// Approval (safe mode)
+	| { id?: string; type: "response"; command: "approve"; success: true }
+	| { id?: string; type: "response"; command: "reject"; success: true }
+	| { id?: string; type: "response"; command: "set_safe_mode"; success: true; data: { safeMode: boolean } }
 
 	// Error response (any command can fail)
 	| { id?: string; type: "response"; command: string; success: false; error: string };

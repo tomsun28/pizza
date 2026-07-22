@@ -171,4 +171,44 @@ describe("IntentClassifier", () => {
 			expect(result.category).toBe("unknown");
 		});
 	});
+
+	describe("safe mode", () => {
+		it("safe_mode=false disables approval even for dangerous tools", () => {
+			const c = new IntentClassifier({ safe_mode: false });
+			// Dangerous shell (rm -rf) normally always requires approval
+			expect(c.classify("cli", { command: "rm -rf /" }).requires_approval).toBe(false);
+			// file_delete (truncate) normally always requires approval
+			expect(c.classify("truncate", { path: "x" }).requires_approval).toBe(false);
+			// writes
+			expect(c.classify("write", { path: "x" }).requires_approval).toBe(false);
+			// safe tools stay safe
+			expect(c.classify("read", { path: "x" }).requires_approval).toBe(false);
+		});
+
+		it("safe_mode=true requires approval for any non-safe tool", () => {
+			const c = new IntentClassifier({ safe_mode: true });
+			expect(c.classify("write", { path: "x" }).requires_approval).toBe(true);
+			expect(c.classify("edit", { path: "x" }).requires_approval).toBe(true);
+			// shell_moderate would normally be auto-approved; safe mode forces approval
+			expect(c.classify("cli", { command: "npm install" }).requires_approval).toBe(true);
+			// safe tools never require approval
+			expect(c.classify("read", { path: "x" }).requires_approval).toBe(false);
+			expect(c.classify("ls", { path: "x" }).requires_approval).toBe(false);
+		});
+
+		it("setSafeMode toggles live", () => {
+			const c = new IntentClassifier();
+			expect(c.isSafeMode).toBe(false);
+			expect(c.classify("write", { path: "x" }).requires_approval).toBe(true); // flag default
+			c.setSafeMode(false);
+			expect(c.classify("write", { path: "x" }).requires_approval).toBe(false);
+			expect(c.classify("truncate", { path: "x" }).requires_approval).toBe(false);
+			c.setSafeMode(true);
+			expect(c.isSafeMode).toBe(true);
+			expect(c.classify("cli", { command: "npm install" }).requires_approval).toBe(true);
+			// restore undefined -> defer to flags again
+			c.setSafeMode(undefined);
+			expect(c.classify("cli", { command: "npm install" }).requires_approval).toBe(false);
+		});
+	});
 });

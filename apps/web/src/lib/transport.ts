@@ -226,6 +226,28 @@ export async function abortBash(): Promise<void> {
 	try { await sendCommandAwait({ type: "abort_bash" }, 5000); } catch { /* ignore */ }
 }
 
+// --- Tool approval (safe mode) ---
+
+/** Approve a pending tool call awaiting user approval. */
+export async function approveToolCall(intentEventId: string): Promise<void> {
+	try {
+		await sendCommandAwait({ type: "approve", intentEventId }, 5000);
+	} catch { /* ignore */ }
+}
+
+/** Reject (deny) a pending tool call awaiting user approval. */
+export async function rejectToolCall(intentEventId: string): Promise<void> {
+	try {
+		await sendCommandAwait({ type: "reject", intentEventId }, 5000);
+	} catch { /* ignore */ }
+}
+
+/** Toggle safe mode (master switch for requiring tool approval). */
+export async function setSafeMode(enabled: boolean): Promise<boolean> {
+	const r = await sendCommandAwait<{ safeMode: boolean }>({ type: "set_safe_mode", enabled }, 5000);
+	return r.data?.safeMode ?? enabled;
+}
+
 // --- Delete workspace (Tauri only) ---
 
 export async function deleteWorkspace(workspaceId: string): Promise<void> {

@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { PageHeader, Card, Badge, Button } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { PixelSelect, PixelSwitch, PixelCombobox } from "@pxlkit/ui-kit";
-import { listProviders, setProviderApiKey, removeProviderApiKey, type ProviderInfo } from "@/lib/transport";
+import { listProviders, setProviderApiKey, removeProviderApiKey, setSafeMode, type ProviderInfo } from "@/lib/transport";
 import type { RpcSessionState } from "@/lib/types";
 import { sendCommandAwait } from "@/lib/transport";
 import { Key, Trash2, Eye, EyeOff, Plus } from "lucide-react";
@@ -31,10 +31,11 @@ const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as 
 
 const THINKING_OPTIONS = THINKING_LEVELS.map((level) => ({ value: level, label: level }));
 
-function GeneralTab({ state }: { state: RpcSessionState | null }) {
+function GeneralTab({ state, onRefreshState }: { state: RpcSessionState | null; onRefreshState?: () => void }) {
 	const { t, i18n } = useTranslation();
 	const [thinkingLevel, setThinkingLevel] = useState<string>(state?.thinkingLevel ?? "off");
 	const [autoCompaction, setAutoCompaction] = useState<boolean>(state?.autoCompactionEnabled ?? true);
+	const [safeMode, setSafeModeState] = useState<boolean>(state?.safeMode ?? false);
 	const [language, setLanguage] = useState<AppLanguage>(
 		(SUPPORTED_LANGUAGES.includes(i18n.language as AppLanguage) ? i18n.language : DEFAULT_LANGUAGE) as AppLanguage,
 	);
@@ -56,6 +57,18 @@ function GeneralTab({ state }: { state: RpcSessionState | null }) {
 			console.error("[settings] set_auto_compaction failed:", e);
 		}
 	}, []);
+
+	const handleSafeModeChange = useCallback(async (enabled: boolean) => {
+		setSafeModeState(enabled);
+		try {
+			const actual = await setSafeMode(enabled);
+			setSafeModeState(actual);
+			onRefreshState?.();
+		} catch (e) {
+			console.error("[settings] set_safe_mode failed:", e);
+			setSafeModeState(!enabled);
+		}
+	}, [onRefreshState]);
 
 	const handleLanguageChange = useCallback((value: string) => {
 		const lang = (SUPPORTED_LANGUAGES.includes(value as AppLanguage) ? value : DEFAULT_LANGUAGE) as AppLanguage;
@@ -107,6 +120,19 @@ function GeneralTab({ state }: { state: RpcSessionState | null }) {
 						<Badge tone="warning">{t("settings.general.compacting")}</Badge>
 					</Row>
 				)}
+			</Card>
+
+			<Card>
+				<div className="mb-2 text-sm font-medium text-fg">{t("settings.general.safeMode")}</div>
+				<Row label={t("settings.general.safeModeLabel")}>
+					<PixelSwitch
+						label={t("settings.general.safeModeLabel")}
+						checked={safeMode}
+						onChange={handleSafeModeChange}
+						tone="cyan"
+					/>
+				</Row>
+				<p className="mt-1 text-xs text-muted">{t("settings.general.safeModeHint")}</p>
 			</Card>
 
 			<Card>
@@ -405,8 +431,10 @@ function ProviderTab() {
 
 export default function SettingsView({
 	state,
+	onRefreshState,
 }: {
 	state: RpcSessionState | null;
+	onRefreshState?: () => void;
 }) {
 	const { t } = useTranslation();
 	const [tab, setTab] = useState<"general" | "provider">("general");
@@ -440,7 +468,7 @@ export default function SettingsView({
 				</button>
 			</div>
 
-			{tab === "general" ? <GeneralTab state={state} /> : <ProviderTab />}
+			{tab === "general" ? <GeneralTab state={state} onRefreshState={onRefreshState} /> : <ProviderTab />}
 		</div>
 	);
 }

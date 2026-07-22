@@ -505,6 +505,198 @@ describe("Reactor (event-driven core)", () => {
 		runtime.dispose();
 	});
 
+	it("blocks a tool for approval in safe mode until approved", async () => {
+		const cwd = makeTempDir();
+		const registry = makeCliRegistry();
+
+		let calls = 0;
+		const client: LLMClient = {
+			async complete(): Promise<LLMResponse> {
+				calls++;
+				if (calls === 1) {
+					return {
+						content: [
+							{ type: "tool_call", id: "write1", name: "cli", arguments: { command: "echo hi > out.txt" } } as ContentBlock,
+						],
+						provider: "test",
+						model: "test",
+						usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, cost: 0 },
+						stopReason: "tool_use",
+					};
+				}
+				return {
+					content: [{ type: "text", text: "done" } as ContentBlock],
+					provider: "test",
+					model: "test",
+					usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, cost: 0 },
+					stopReason: "stop",
+				};
+			},
+		};
+
+		const runtime = new EventSourcedRuntime({
+			cwd,
+			agentDir: cwd,
+			toolRegistry: registry,
+			llmClient: client,
+			// safe_mode on → file-writing shell redirection requires approval.
+			classifierConfig: { safe_mode: true },
+			// A no-op approval handler (like the facade uses) keeps the reactor
+			// waiting; resolution comes from runtime.approve()/reject().
+			approvalHandler: { requestApproval: () => {}, cancelApproval: () => {} },
+			systemPrompt: "",
+			model: { provider: "test", model_id: "test" },
+			tools: [],
+		});
+
+		// Drive the prompt without awaiting — it should block on approval.
+		const promptPromise = runtime.prompt("write a file");
+
+		// Wait until an INTENT_TOOL_CALL is recorded, then approve it.
+		await new Promise<void>((resolve) => {
+			const unsub = runtime.store.subscribe((event) => {
+				if (event.type === "INTENT_TOOL_CALL") {
+					unsub();
+					resolve();
+				}
+			});
+		});
+
+		const intent = runtime.store.query({ types: ["INTENT_TOOL_CALL"] });
+		expect(intent).toHaveLength(1);
+		expect((intent[0].payload as { requires_approval: boolean }).requires_approval).toBe(true);
+
+		// Approve via the runtime (emits USER_APPROVAL → reactor resolves).
+		runtime.approve(intent[0].event_id);
+
+		await promptPromise;
+
+		const ends = runtime.store.query({ types: ["TOOL_EXECUTION_END"] });
+		expect(ends).toHaveLength(1);
+		expect((ends[0].payload as { is_error: boolean }).is_error).toBe(false);
+		expect(runtime.store.query({ types: ["AGENT_TURN_COMPLETED"] })).toHaveLength(1);
+
+		runtime.dispose();
+	});
+
+	it("rejects a tool in safe mode when runtime.reject() is called", async () => {
+		const cwd = makeTempDir();
+		const registry = makeCliRegistry();
+
+		let calls = 0;
+		const client: LLMClient = {
+			async complete(): Promise<LLMResponse> {
+				calls++;
+				if (calls === 1) {
+					return {
+						content: [
+							{ type: "tool_call", id: "write1", name: "cli", arguments: { command: "echo hi > out.txt" } } as ContentBlock,
+						],
+						provider: "test",
+						model: "test",
+						usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, cost: 0 },
+						stopReason: "tool_use",
+					};
+				}
+				return {
+					content: [{ type: "text", text: "done" } as ContentBlock],
+					provider: "test",
+					model: "test",
+					usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, cost: 0 },
+					stopReason: "stop",
+				};
+			},
+		};
+
+		const runtime = new EventSourcedRuntime({
+			cwd,
+			agentDir: cwd,
+			toolRegistry: registry,
+			llmClient: client,
+			classifierConfig: { safe_mode: true },
+			approvalHandler: { requestApproval: () => {}, cancelApproval: () => {} },
+			systemPrompt: "",
+			model: { provider: "test", model_id: "test" },
+			tools: [],
+		});
+
+		const promptPromise = runtime.prompt("write a file");
+
+		await new Promise<void>((resolve) => {
+			const unsub = runtime.store.subscribe((event) => {
+				if (event.type === "INTENT_TOOL_CALL") {
+					unsub();
+					resolve();
+				}
+			});
+		});
+
+		const intent = runtime.store.query({ types: ["INTENT_TOOL_CALL"] })[0];
+		runtime.reject(intent.event_id);
+
+		await promptPromise;
+
+		const ends = runtime.store.query({ types: ["TOOL_EXECUTION_END"] });
+		expect(ends).toHaveLength(1);
+		expect((ends[0].payload as { is_error: boolean }).is_error).toBe(true);
+		expect(JSON.stringify((ends[0].payload as { result: unknown }).result)).toContain("rejected by user");
+
+		runtime.dispose();
+	});
+
+	it("safe_mode=false bypasses approval even for dangerous tools", async () => {
+		const cwd = makeTempDir();
+		const registry = makeCliRegistry();
+
+		let calls = 0;
+		const client: LLMClient = {
+			async complete(): Promise<LLMResponse> {
+				calls++;
+				if (calls === 1) {
+					return {
+						content: [
+							{ type: "tool_call", id: "danger", name: "cli", arguments: { command: "sudo whoami" } } as ContentBlock,
+						],
+						provider: "test",
+						model: "test",
+						usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, cost: 0 },
+						stopReason: "tool_use",
+					};
+				}
+				return {
+					content: [{ type: "text", text: "done" } as ContentBlock],
+					provider: "test",
+					model: "test",
+					usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, cost: 0 },
+					stopReason: "stop",
+				};
+			},
+		};
+
+		const runtime = new EventSourcedRuntime({
+			cwd,
+			agentDir: cwd,
+			toolRegistry: registry,
+			llmClient: client,
+			classifierConfig: { safe_mode: false },
+			approvalHandler: { requestApproval: () => {}, cancelApproval: () => {} },
+			systemPrompt: "",
+			model: { provider: "test", model_id: "test" },
+			tools: [],
+		});
+
+		await runtime.prompt("run dangerous command");
+
+		const intent = runtime.store.query({ types: ["INTENT_TOOL_CALL"] })[0];
+		expect((intent.payload as { requires_approval: boolean }).requires_approval).toBe(false);
+		// Tool ran to completion without blocking on approval.
+		const ends = runtime.store.query({ types: ["TOOL_EXECUTION_END"] });
+		expect(ends).toHaveLength(1);
+		expect((ends[0].payload as { is_error: boolean }).is_error).toBe(false);
+
+		runtime.dispose();
+	});
+
 	it("aggregates completed tools by tool_call_id when causal chain is unavailable", async () => {
 		const cwd = makeTempDir();
 		const store = new SqliteEventStore("reactor-causality-fallback", ":memory:");

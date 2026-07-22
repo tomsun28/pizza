@@ -376,6 +376,18 @@ export class EventSourcedRuntime {
 	setApprovalHandler(approvalHandler: ApprovalHandler): void {
 		this.config.approvalHandler = approvalHandler;
 	}
+	/**
+	 * Toggle safe mode at runtime. When on, risky tool calls require explicit
+	 * user approval before executing.
+	 */
+	setSafeMode(enabled: boolean): void {
+		this.classifier.setSafeMode(enabled);
+	}
+
+	/** Whether safe mode is currently active. */
+	get isSafeMode(): boolean {
+		return this.classifier.isSafeMode;
+	}
 
 	private _createDefaultProjection(): SessionProjection {
 		const desc: SessionDescriptor = {

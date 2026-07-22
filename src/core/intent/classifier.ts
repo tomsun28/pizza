@@ -19,6 +19,16 @@ export interface ClassifierConfig {
 	require_approval_shell_moderate?: boolean;
 	/** Require user approval before unknown tools. */
 	require_approval_unknown?: boolean;
+	/**
+	 * Master toggle for safe mode.
+	 * - `true`: require approval for risky tool calls (writes, edits, deletes,
+	 *   dangerous shell, unknown). This is the strict default policy.
+	 * - `false`: never require approval — tools auto-run. Even categories that
+	 *   normally always need approval (delete, dangerous) are bypassed.
+	 * - `undefined` (not set): defer to the individual require_approval_* flags
+	 *   below (backward-compatible behavior).
+	 */
+	safe_mode?: boolean;
 
 	/** @deprecated Use require_approval_writes. Historical alias. */
 	approve_writes?: boolean;
@@ -31,6 +41,7 @@ export interface ClassifierConfig {
 }
 
 interface ResolvedClassifierConfig {
+	safe_mode: boolean | undefined;
 	require_approval_writes: boolean;
 	require_approval_edits: boolean;
 	require_approval_shell_moderate: boolean;
@@ -38,6 +49,7 @@ interface ResolvedClassifierConfig {
 }
 
 const DEFAULT_CLASSIFIER_CONFIG: ResolvedClassifierConfig = {
+	safe_mode: undefined,
 	require_approval_writes: true,
 	require_approval_edits: true,
 	require_approval_shell_moderate: false,
@@ -66,8 +78,39 @@ export class IntentClassifier {
 
 	/**
 	 * Classify a tool call by name and arguments.
+	 *
+	 * Applies the `safe_mode` master toggle as a final override:
+	 * - safe_mode === false  → never require approval (tools auto-run)
+	 * - safe_mode === true   → require approval for any risky category
+	 * - safe_mode undefined  → use the individual require_approval_* flags
 	 */
 	classify(toolName: string, args: Record<string, unknown>): IntentClassification {
+		const result = this._classifyRaw(toolName, args);
+		if (this.config.safe_mode === false) {
+			result.requires_approval = false;
+		} else if (this.config.safe_mode === true && result.risk !== "safe") {
+			result.requires_approval = true;
+		}
+		return result;
+	}
+
+	/**
+	 * Apply safe mode without changing individual require_approval_* flags.
+	 * Passing `undefined` restores deferred (flag-based) behavior.
+	 */
+	setSafeMode(safeMode: boolean | undefined): void {
+		this.config = { ...this.config, safe_mode: safeMode };
+	}
+
+	/** Whether safe mode is currently active (explicitly on). */
+	get isSafeMode(): boolean {
+		return this.config.safe_mode === true;
+	}
+
+	/**
+	 * Raw classification by name and arguments (before safe_mode override).
+	 */
+	private _classifyRaw(toolName: string, args: Record<string, unknown>): IntentClassification {
 		// Built-in tool classification
 		switch (toolName) {
 			case "read":
@@ -263,6 +306,19 @@ export class IntentClassifier {
 		category: IntentCategory,
 		args: Record<string, unknown>,
 	): IntentClassification {
+		const result = this._classifyByCategoryRaw(category, args);
+		if (this.config.safe_mode === false) {
+			result.requires_approval = false;
+		} else if (this.config.safe_mode === true && result.risk !== "safe") {
+			result.requires_approval = true;
+		}
+		return result;
+	}
+
+	private _classifyByCategoryRaw(
+		category: IntentCategory,
+		args: Record<string, unknown>,
+	): IntentClassification {
 		const toolName = String(args.tool_name ?? "unknown");
 
 		switch (category) {
@@ -329,6 +385,7 @@ export class IntentClassifier {
 
 function resolveClassifierConfig(config: ClassifierConfig): ResolvedClassifierConfig {
 	return {
+		safe_mode: config.safe_mode ?? DEFAULT_CLASSIFIER_CONFIG.safe_mode,
 		require_approval_writes:
 			config.require_approval_writes ?? config.approve_writes ?? DEFAULT_CLASSIFIER_CONFIG.require_approval_writes,
 		require_approval_edits:

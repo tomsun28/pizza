@@ -73,6 +73,13 @@
 		"copied": "Copied",
 		"copy": "Copy"
 	},
+	"approval": {
+		"title": "Approve tool call",
+		"hint": "The agent is waiting for your approval.",
+		"approve": "Approve",
+		"reject": "Reject",
+		"riskPrefix": "Risk:"
+	},
 	"history": {
 		"title": "History",
 		"description": "Session tree and branch navigation",
@@ -149,7 +156,10 @@
 			"status": "Status",
 			"compacting": "Compacting...",
 			"language": "Language",
-			"languageDescription": "Interface display language"
+			"languageDescription": "Interface display language",
+			"safeMode": "Safe Mode",
+			"safeModeLabel": "Require approval",
+			"safeModeHint": "When on, risky tool calls (file writes, edits, deletes, dangerous shell) pause for your approval before running."
 		},
 		"provider": {
 			"title": "Providers",

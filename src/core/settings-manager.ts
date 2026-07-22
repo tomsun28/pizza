@@ -73,6 +73,7 @@ export interface Settings {
 	branchSummary?: BranchSummarySettings;
 	retry?: RetrySettings;
 	hideThinkingBlock?: boolean;
+	safeMode?: boolean; // default: false - when true, risky tool calls require explicit approval (safe mode)
 	shellPath?: string; // Custom shell path (e.g., for Cygwin users on Windows)
 	quietStartup?: boolean;
 	shellCommandPrefix?: string; // Prefix prepended to every bash command (e.g., "shopt -s expand_aliases" for alias support)
@@ -659,6 +660,16 @@ export class SettingsManager {
 			baseDelayMs: this.settings.retry?.baseDelayMs ?? 2000,
 			maxDelayMs: this.settings.retry?.maxDelayMs ?? 60000,
 		};
+	}
+
+	getSafeMode(): boolean {
+		return this.settings.safeMode ?? false;
+	}
+
+	setSafeMode(enabled: boolean): void {
+		this.globalSettings.safeMode = enabled;
+		this.markModified("safeMode");
+		this.save();
 	}
 
 	getHideThinkingBlock(): boolean {

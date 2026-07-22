@@ -73,6 +73,13 @@
 		"copied": "已复制",
 		"copy": "复制"
 	},
+	"approval": {
+		"title": "审批工具调用",
+		"hint": "Agent 正在等待你的确认。",
+		"approve": "批准",
+		"reject": "拒绝",
+		"riskPrefix": "风险:"
+	},
 	"history": {
 		"title": "历史",
 		"description": "会话树与分支导航",
@@ -149,7 +156,10 @@
 			"status": "状态",
 			"compacting": "压缩中...",
 			"language": "语言",
-			"languageDescription": "界面显示语言"
+			"languageDescription": "界面显示语言",
+			"safeMode": "安全模式",
+			"safeModeLabel": "需要审批",
+			"safeModeHint": "开启后，有风险的工具调用（文件写入、编辑、删除、危险命令）在执行前会暂停等待你确认。"
 		},
 		"provider": {
 			"title": "服务商",

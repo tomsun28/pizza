@@ -104,6 +104,10 @@ export type RpcResponse =
 	// History tree / event forensics
 	| { id?: string; type: "response"; command: "history_tree"; success: true; data: RpcHistoryTreeResult }
 	| { id?: string; type: "response"; command: "get_events"; success: true; data: { events: RpcForensicEvent[] } }
+	// Approval (safe mode)
+	| { id?: string; type: "response"; command: "approve"; success: true }
+	| { id?: string; type: "response"; command: "reject"; success: true }
+	| { id?: string; type: "response"; command: "set_safe_mode"; success: true; data: { safeMode: boolean } }
 
 	// Error response (any command can fail)
 	| { id?: string; type: "response"; command: string; success: false; error: string };
