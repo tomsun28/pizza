@@ -77,7 +77,51 @@
 		"title": "历史",
 		"description": "会话树与分支导航",
 		"comingSoon": "即将推出",
-		"comingSoonDescription": "历史树可视化将在未来版本中提供。"
+		"comingSoonDescription": "分支树可视化将显示在这里。",
+		"search": "搜索分支…",
+		"refresh": "刷新",
+		"emptyTitle": "还没有分支",
+		"emptyDescription": "在 Chat 发一条消息即可创建根会话，然后从任意节点分叉。",
+		"noMatch": "没有匹配的分支。",
+		"forkFromHere": "从这里分叉",
+		"jumpHere": "跳转到此分支",
+		"rename": "重命名分支",
+		"renamePrompt": "分支名称：",
+		"copyId": "复制会话 id",
+		"position": "位置",
+		"depth": "深度",
+		"root": "根"
+	},
+	"timeline": {
+		"title": "时间线",
+		"description": "原始事件流与回放",
+		"comingSoonDescription": "事件时间线将显示在这里。",
+		"search": "过滤事件…",
+		"emptyTitle": "暂无事件",
+		"emptyDescription": "该工作区的事件将在此流式显示。",
+		"catUser": "用户",
+		"catAgent": "Agent",
+		"catTools": "工具",
+		"catReactor": "Reactor",
+		"catSession": "会话",
+		"catCompaction": "压缩",
+		"catRuntime": "运行时",
+		"errorsOnly": "仅错误",
+		"filesOnly": "文件变更",
+		"replayFromHere": "从这里重放",
+		"replayHint": "以此事件为根派生新会话"
+	},
+	"terminal": {
+		"title": "终端",
+		"toggle": "切换终端",
+		"collapse": "收起终端",
+		"comingSoonDescription": "终端将显示在这里。",
+		"hint": "在当前工作区运行 shell 命令。",
+		"prompt": "输入命令…",
+		"running": "运行中…"
+	},
+	"dock": {
+		"toggleRight": "切换侧边面板"
 	},
 	"theme": {
 		"switchToLight": "切换到浅色",

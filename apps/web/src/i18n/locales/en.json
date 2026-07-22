@@ -77,7 +77,51 @@
 		"title": "History",
 		"description": "Session tree and branch navigation",
 		"comingSoon": "Coming soon",
-		"comingSoonDescription": "History tree visualization will be available in a future update."
+		"comingSoonDescription": "Branch tree visualization will appear here.",
+		"search": "Search branches…",
+		"refresh": "Refresh",
+		"emptyTitle": "No branches yet",
+		"emptyDescription": "Send a message in Chat to create the root session, then fork from any point.",
+		"noMatch": "No branches match your search.",
+		"forkFromHere": "Fork from here",
+		"jumpHere": "Jump to this branch",
+		"rename": "Rename branch",
+		"renamePrompt": "Branch name:",
+		"copyId": "Copy session id",
+		"position": "Position",
+		"depth": "depth",
+		"root": "root"
+	},
+	"timeline": {
+		"title": "Timeline",
+		"description": "Raw event stream and replay",
+		"comingSoonDescription": "The event timeline will appear here.",
+		"search": "Filter events…",
+		"emptyTitle": "No events",
+		"emptyDescription": "Events for this workspace will stream here.",
+		"catUser": "User",
+		"catAgent": "Agent",
+		"catTools": "Tools",
+		"catReactor": "Reactor",
+		"catSession": "Session",
+		"catCompaction": "Compaction",
+		"catRuntime": "Runtime",
+		"errorsOnly": "Errors",
+		"filesOnly": "File changes",
+		"replayFromHere": "Replay from here",
+		"replayHint": "Fork a new session from this event"
+	},
+	"terminal": {
+		"title": "Terminal",
+		"toggle": "Toggle terminal",
+		"collapse": "Collapse terminal",
+		"comingSoonDescription": "Terminal will appear here.",
+		"hint": "Run a shell command in this workspace.",
+		"prompt": "Type a command…",
+		"running": "Running…"
+	},
+	"dock": {
+		"toggleRight": "Toggle side panel"
 	},
 	"theme": {
 		"switchToLight": "Switch to light",

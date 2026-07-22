@@ -82,7 +82,15 @@ export type RpcCommand =
 	| { id?: string; type: "get_messages" }
 
 	// Commands (available for invocation via prompt)
-	| { id?: string; type: "get_commands" };
+	| { id?: string; type: "get_commands" }
+
+	// History tree / event forensics (web docks)
+	| { id?: string; type: "history_tree"; action: "list"; query?: string }
+	| { id?: string; type: "history_tree"; action: "view"; sessionId: string; maxMessages?: number }
+	| { id?: string; type: "history_tree"; action: "jump"; sessionId: string; reason?: string }
+	| { id?: string; type: "history_tree"; action: "fork"; sessionId: string }
+	| { id?: string; type: "history_tree"; action: "rename"; sessionId: string; name: string }
+	| { id?: string; type: "get_events"; eventTypes?: string[]; limit?: number; sessionScoped?: boolean };
 
 // ============================================================================
 // RPC Slash Command (for get_commands response)
@@ -171,8 +179,60 @@ export type RpcResponse =
 	// Commands
 	| { id?: string; type: "response"; command: "get_commands"; success: true; data: { commands: RpcSlashCommand[] } }
 
+	// History tree / event forensics
+	| { id?: string; type: "response"; command: "history_tree"; success: true; data: RpcHistoryTreeResult }
+	| { id?: string; type: "response"; command: "get_events"; success: true; data: { events: RpcForensicEvent[] } }
+
 	// Error response (any command can fail)
 	| { id?: string; type: "response"; command: string; success: false; error: string };
+
+// ============================================================================
+// History Tree / Event Forensics payloads (shared with web docks)
+// ============================================================================
+
+/** A flattened history-tree node (one session), as returned by `history_tree list`. */
+export interface RpcHistoryTreeNode {
+	session_id: string;
+	thread_id: string;
+	name?: string;
+	created_at: number;
+	created_by: string;
+	parent_session_id?: string;
+	depth: number;
+	child_count: number;
+	is_active: boolean;
+	closed: boolean;
+	snippet?: string;
+	/** Event id the branch was forked at (present when it has a parent). */
+	fork_at_event_id?: string;
+}
+
+/** One session's message previews, as returned by `history_tree view`. */
+export interface RpcHistorySessionView {
+	session_id: string;
+	name?: string;
+	messages: string[];
+	message_count: number;
+}
+
+/** Discriminated result of the `history_tree` command by action. */
+export type RpcHistoryTreeResult =
+	| { action: "list"; nodes: RpcHistoryTreeNode[] }
+	| { action: "view"; view: RpcHistorySessionView | null }
+	| { action: "jump"; session_id: string; reopened: boolean }
+	| { action: "fork"; session_id: string }
+	| { action: "rename"; ok: boolean };
+
+/** A raw event projected for the timeline dock. */
+export interface RpcForensicEvent {
+	event_id: string;
+	type: string;
+	timestamp: number;
+	actor_id: string;
+	caused_by?: string;
+	thread_id?: string;
+	payload: unknown;
+}
 
 // ============================================================================
 // Extension UI Events (stdout)

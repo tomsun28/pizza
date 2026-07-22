@@ -15,6 +15,10 @@ export {
 	type ModelInfo,
 	type ThinkingLevel,
 	type RpcSlashCommand,
+	type RpcHistoryTreeNode,
+	type RpcHistorySessionView,
+	type RpcHistoryTreeResult,
+	type RpcForensicEvent,
 	classifyLine,
 	PROTOCOL_VERSION,
 } from "@pizza/protocol";

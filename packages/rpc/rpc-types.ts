@@ -13,12 +13,18 @@ export {
 	type StdoutLine,
 	type ModelInfo,
 	type ThinkingLevel,
+	type RpcHistoryTreeNode,
+	type RpcHistorySessionView,
+	type RpcHistoryTreeResult,
+	type RpcForensicEvent,
 	classifyLine,
 	PROTOCOL_VERSION,
 } from "@pizza/protocol";
 
 import type {
 	RpcSessionState as ProtocolSessionState,
+	RpcHistoryTreeResult,
+	RpcForensicEvent,
 } from "@pizza/protocol";
 
 import type { AgentMessage, ThinkingLevel } from "../../src/core/agent/types.js";
@@ -94,6 +100,10 @@ export type RpcResponse =
 
 	// Commands
 	| { id?: string; type: "response"; command: "get_commands"; success: true; data: { commands: RpcSlashCommand[] } }
+
+	// History tree / event forensics
+	| { id?: string; type: "response"; command: "history_tree"; success: true; data: RpcHistoryTreeResult }
+	| { id?: string; type: "response"; command: "get_events"; success: true; data: { events: RpcForensicEvent[] } }
 
 	// Error response (any command can fail)
 	| { id?: string; type: "response"; command: string; success: false; error: string };

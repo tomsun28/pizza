@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { StatusDot, ThemeToggle, Button } from "./ui";
 import { BrandIcon } from "./BrandIcon";
+import WorkspacePane from "./WorkspacePane";
 import { cn } from "@/lib/utils";
 import { deleteWorkspace, revealWorkspace } from "@/lib/transport";
 import type { RpcSessionState, WorkspaceMeta } from "@/lib/types";
@@ -403,8 +404,10 @@ export default function Layout({
 				</div>
 			</aside>
 
-			<main className="flex-1 overflow-y-auto">
-				<Outlet context={{ sidebarCollapsed: collapsed } satisfies LayoutOutletContext} />
+			<main className="min-w-0 flex-1 overflow-hidden">
+				<WorkspacePane workspace={workspace}>
+					<Outlet context={{ sidebarCollapsed: collapsed } satisfies LayoutOutletContext} />
+				</WorkspacePane>
 			</main>
 		</div>
 	);
