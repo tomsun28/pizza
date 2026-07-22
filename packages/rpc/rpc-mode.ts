@@ -29,6 +29,7 @@ import { createLocalBashOperations } from "../../src/core/tools/bash.js";
 import { exportFromFile } from "../../src/core/export-html/index.js";
 import { buildHistoryTreeNodes } from "../../src/core/projection/history-tree.js";
 import { killTrackedDetachedChildren } from "../../src/utils/shell.js";
+import { startPtyServer, type PtyServer } from "../pty/pty-server.js";
 import { type Theme, theme } from "../../packages/tui/theme/theme.js";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
 import type {
@@ -145,7 +146,7 @@ function resolveSessionId(facade: SessionFacade, ref: string): string {
 	return parsed.sessionId;
 }
 
-function getFacadeSessionState(facade: SessionFacade): RpcSessionState {
+function getFacadeSessionState(facade: SessionFacade, ptyPort?: number): RpcSessionState {
 	const projection = facade.getProjection();
 	const descriptor = projection.getDescriptor();
 	const messages = projection.buildContext().messages;
@@ -159,6 +160,7 @@ function getFacadeSessionState(facade: SessionFacade): RpcSessionState {
 		autoCompactionEnabled: facade.settingsManager.getCompactionEnabled(),
 		messageCount: messages.length,
 		pendingMessageCount: 0,
+		ptyPort,
 	};
 }
 
@@ -171,6 +173,14 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 	let unsubscribe: (() => void) | undefined;
 	let shuttingDown = false;
 	const signalCleanupHandlers: Array<() => void> = [];
+	let ptyServer: PtyServer | undefined;
+	// Start the local PTY-over-WebSocket server for the Terminal pane. We await
+	// only the socket bind (fast, never blocks on node-pty, which loads lazily
+	// per connection) so `ptyPort` is ready before the first get_state. Any
+	// failure is non-fatal — ptyPort stays undefined and the pane degrades.
+	try {
+		ptyServer = await startPtyServer({ cwd: process.cwd() });
+	} catch { /* PTY server unavailable; terminal pane degrades */ }
 
 	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
 		writeRawStdout(serializeJsonLine(obj));
@@ -235,6 +245,7 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 		}
 		unsubscribe?.();
 		await Promise.resolve(facade.dispose());
+		await ptyServer?.close().catch(() => {});
 		detachInput();
 		process.stdin.pause();
 		process.exit(exitCode);
@@ -263,7 +274,7 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 				return success(id, "abort");
 
 			case "get_state":
-				return success(id, "get_state", getFacadeSessionState(facade));
+				return success(id, "get_state", getFacadeSessionState(facade, ptyServer?.port));
 
 			case "set_model": {
 				const models = facade.modelRegistry?.getAvailable() ?? [];

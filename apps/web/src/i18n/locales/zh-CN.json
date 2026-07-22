@@ -83,8 +83,11 @@
 		"emptyTitle": "还没有分支",
 		"emptyDescription": "在 Chat 发一条消息即可创建根会话，然后从任意节点分叉。",
 		"noMatch": "没有匹配的分支。",
-		"forkFromHere": "从这里分叉",
+		"forkFromHere": "从此处分叉",
+		"forkHint": "创建新子分支（若当前分支开放，则冻结它）",
 		"jumpHere": "跳转到此分支",
+		"jumpOpenHint": "不会创建新分支",
+		"jumpClosedHint": "从此点创建新分支",
 		"rename": "重命名分支",
 		"renamePrompt": "分支名称：",
 		"copyId": "复制会话 id",
@@ -118,7 +121,10 @@
 		"comingSoonDescription": "终端将显示在这里。",
 		"hint": "在当前工作区运行 shell 命令。",
 		"prompt": "输入命令…",
-		"running": "运行中…"
+		"running": "运行中…",
+		"exited": "进程已退出",
+		"connectionError": "终端连接错误。",
+		"unavailable": "当前环境不支持交互式终端。"
 	},
 	"dock": {
 		"toggleRight": "切换侧边面板"
@@ -168,6 +174,7 @@
 			"keyEmpty": "API 密钥不能为空",
 			"selectProvider": "请先选择服务商",
 			"selectProviderPlaceholder": "选择服务商...",
+			"noMatch": "没有匹配的服务商。",
 			"confirmRemove": "确认移除 {{label}} 的 API 密钥?"
 		}
 	},

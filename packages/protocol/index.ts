@@ -122,6 +122,8 @@ export interface RpcSessionState {
 	autoCompactionEnabled: boolean;
 	messageCount: number;
 	pendingMessageCount: number;
+	/** Local WebSocket PTY server port for the Terminal pane (0/undefined = unavailable). */
+	ptyPort?: number;
 }
 
 // ============================================================================

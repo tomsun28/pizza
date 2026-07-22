@@ -1,132 +1,138 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { runBash, abortBash } from "@/lib/transport";
-import { cn } from "@/lib/utils";
-
-interface TermEntry {
-	id: number;
-	command: string;
-	output: string;
-	exitCode?: number;
-	cancelled?: boolean;
-	running?: boolean;
-}
+import { Terminal as XTerm } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
+import "@xterm/xterm/css/xterm.css";
 
 /**
- * Terminal — front-end for the sidecar `bash` / `abort_bash` RPC, scoped to
- * the active workspace. Request/response model: each command runs to
- * completion and its combined output is appended to the log.
+ * Terminal — a real interactive terminal (xterm.js) backed by a local PTY
+ * exposed over WebSocket by the sidecar (`packages/pty/pty-server.ts`).
+ *
+ * Each mounted instance owns one WS connection → one PTY shell. When the pane
+ * is closed/unmounted the shell is killed. `ptyPort` comes from the session
+ * state (`get_state` → `ptyPort`); if it is missing the PTY server could not
+ * start and we show a graceful message.
  */
-export default function Terminal({ workspace }: { workspace?: string | null }) {
+export default function Terminal({ workspace, ptyPort }: { workspace?: string | null; ptyPort?: number }) {
 	const { t } = useTranslation();
-	const [entries, setEntries] = useState<TermEntry[]>([]);
-	const [input, setInput] = useState("");
-	const [running, setRunning] = useState(false);
-	const history = useRef<string[]>([]);
-	const histIndex = useRef<number>(-1);
-	const nextId = useRef(0);
-	const scrollRef = useRef<HTMLDivElement>(null);
-	const inputRef = useRef<HTMLInputElement>(null);
-
-	// Reset the log when the workspace changes (data is workspace-scoped).
-	useEffect(() => {
-		setEntries([]);
-		setInput("");
-		setRunning(false);
-		history.current = [];
-		histIndex.current = -1;
-	}, [workspace]);
+	const containerRef = useRef<HTMLDivElement | null>(null);
+	const xtermRef = useRef<XTerm | null>(null);
+	const fitRef = useRef<FitAddon | null>(null);
+	const wsRef = useRef<WebSocket | null>(null);
+	const [status, setStatus] = useState<"idle" | "connecting" | "ready" | "error" | "unavailable">(
+		ptyPort ? "connecting" : "unavailable",
+	);
 
 	useEffect(() => {
-		scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-	}, [entries]);
-
-	const submit = useCallback(async () => {
-		const command = input.trim();
-		if (!command || running) return;
-		const id = nextId.current++;
-		history.current.push(command);
-		histIndex.current = history.current.length;
-		setEntries((prev) => [...prev, { id, command, output: "", running: true }]);
-		setInput("");
-		setRunning(true);
-		try {
-			const result = await runBash(command);
-			setEntries((prev) => prev.map((e) => e.id === id ? {
-				...e,
-				output: result.output,
-				exitCode: result.exitCode,
-				cancelled: result.cancelled,
-				running: false,
-			} : e));
-		} catch (err) {
-			setEntries((prev) => prev.map((e) => e.id === id ? {
-				...e,
-				output: err instanceof Error ? err.message : String(err),
-				exitCode: 1,
-				running: false,
-			} : e));
-		} finally {
-			setRunning(false);
-		}
-	}, [input, running]);
-
-	const onKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
-		if (e.key === "Enter") { e.preventDefault(); void submit(); return; }
-		if (e.ctrlKey && (e.key === "c" || e.key === "C")) {
-			if (running) void abortBash();
+		if (!ptyPort) {
+			setStatus("unavailable");
 			return;
 		}
-		if (e.key === "ArrowUp") {
-			e.preventDefault();
-			if (history.current.length === 0) return;
-			histIndex.current = Math.max(0, histIndex.current - 1);
-			setInput(history.current[histIndex.current] ?? "");
-		} else if (e.key === "ArrowDown") {
-			e.preventDefault();
-			if (history.current.length === 0) return;
-			histIndex.current = Math.min(history.current.length, histIndex.current + 1);
-			setInput(history.current[histIndex.current] ?? "");
-		}
-	}, [submit, running]);
+		const container = containerRef.current;
+		if (!container) return;
 
+		const term = new XTerm({
+			fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+			fontSize: 12,
+			cursorBlink: true,
+			scrollback: 5000,
+			allowProposedApi: true,
+		});
+		const fit = new FitAddon();
+		term.loadAddon(fit);
+		term.open(container);
+		fit.fit();
+		xtermRef.current = term;
+		fitRef.current = fit;
+
+		setStatus("connecting");
+
+		let closedByUs = false;
+		const wsUrl = `ws://127.0.0.1:${ptyPort}`;
+		const ws = new WebSocket(wsUrl);
+		wsRef.current = ws;
+
+		const send = (obj: Record<string, unknown>): void => {
+			if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+		};
+
+		const spawn = (): void => {
+			const cols = term.cols ?? 80;
+			const rows = term.rows ?? 24;
+			send({ type: "spawn", cwd: workspace ?? undefined, cols, rows });
+		};
+
+		ws.onopen = () => {
+			setStatus("ready");
+			spawn();
+		};
+		ws.onmessage = (ev) => {
+			let msg: Record<string, unknown>;
+			try {
+				msg = JSON.parse(typeof ev.data === "string" ? ev.data : "");
+			} catch {
+				return;
+			}
+			switch (msg.type) {
+				case "output":
+					if (typeof msg.data === "string") term.write(msg.data);
+					break;
+				case "ready":
+					break;
+				case "exit":
+					term.writeln(`\r\n\x1b[33m[${t("terminal.exited")}${typeof msg.exitCode === "number" ? " " + msg.exitCode : ""}]\x1b[0m`);
+					break;
+				case "error":
+					setStatus("error");
+					term.writeln(`\r\n\x1b[31m${typeof msg.message === "string" ? msg.message : "error"}\x1b[0m`);
+					break;
+			}
+		};
+		ws.onerror = () => {
+			setStatus("error");
+			term.writeln(`\r\n\x1b[31m${t("terminal.connectionError")}\x1b[0m`);
+		};
+		ws.onclose = () => {
+			if (!closedByUs) setStatus("error");
+		};
+
+		const disposableInput = term.onData((data) => send({ type: "input", data }));
+		const disposableResize = term.onResize(({ cols, rows }) => send({ type: "resize", cols, rows }));
+
+		const onResize = (): void => { try { fit.fit(); } catch { /* ignore */ } };
+		const resizeObserver = new ResizeObserver(onResize);
+		resizeObserver.observe(container);
+		// Fit once layout settles.
+		const fitTimer = setTimeout(() => { try { fit.fit(); } catch { /* ignore */ } }, 0);
+
+		return () => {
+			closedByUs = true;
+			clearTimeout(fitTimer);
+			resizeObserver.disconnect();
+			disposableInput.dispose();
+			disposableResize.dispose();
+			try { ws.close(); } catch { /* ignore */ }
+			wsRef.current = null;
+			term.dispose();
+			xtermRef.current = null;
+			fitRef.current = null;
+		};
+	}, [ptyPort, workspace, t]);
+
+	// The container is always mounted; xterm paints into it when a ptyPort exists.
 	return (
-		<div className="flex h-full flex-col bg-bg font-mono text-xs" onClick={() => inputRef.current?.focus()}>
-			<div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
-				{entries.length === 0 && (
-					<div className="text-muted">{t("terminal.hint")}</div>
-				)}
-				{entries.map((e) => (
-					<div key={e.id} className="mb-1">
-						<div className="flex items-center gap-1.5">
-							<span className="text-success">$</span>
-							<span className="text-fg">{e.command}</span>
-							{e.running && <span className="text-muted">…</span>}
-							{!e.running && e.exitCode != null && e.exitCode !== 0 && (
-								<span className="text-danger">[{e.exitCode}]</span>
-							)}
-						</div>
-						{e.output && (
-							<pre className="whitespace-pre-wrap break-all text-muted">{e.output}</pre>
-						)}
-					</div>
-				))}
-			</div>
-			<div className="flex shrink-0 items-center gap-1.5 border-t border-border px-3 py-1.5">
-				<span className={cn(running ? "text-muted" : "text-success")}>$</span>
-				<input
-					ref={inputRef}
-					value={input}
-					onChange={(e) => setInput(e.target.value)}
-					onKeyDown={onKeyDown}
-					disabled={running}
-					spellCheck={false}
-					autoCapitalize="off"
-					autoComplete="off"
-					placeholder={running ? t("terminal.running") : t("terminal.prompt")}
-					className="flex-1 bg-transparent text-fg placeholder:text-muted focus:outline-none disabled:opacity-50"
-				/>
-			</div>
+		<div className="relative h-full w-full bg-bg">
+			<div ref={containerRef} className="h-full w-full" />
+			{status === "unavailable" && (
+				<div className="absolute inset-0 flex items-center justify-center px-4 text-center">
+					<div className="font-mono text-xs text-muted">{t("terminal.unavailable")}</div>
+				</div>
+			)}
+			{status === "error" && (
+				<div className="pointer-events-none absolute right-2 top-2 rounded bg-surface-2/80 px-1.5 py-0.5 font-mono text-[10px] text-danger">
+					{t("terminal.connectionError")}
+				</div>
+			)}
 		</div>
 	);
 }

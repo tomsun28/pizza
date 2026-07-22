@@ -20,9 +20,11 @@ const BOTTOM_MAX = 640;
  */
 export default function WorkspacePane({
 	workspace,
+	ptyPort,
 	children,
 }: {
 	workspace?: string | null;
+	ptyPort?: number;
 	children: ReactNode;
 }) {
 	const { t } = useTranslation();
@@ -94,7 +96,7 @@ export default function WorkspacePane({
 						onResize={clampBottom}
 					/>
 					<div className="shrink-0" style={{ height: bottomHeight }}>
-						<BottomDock workspace={workspace} onCollapse={() => setBottomOpen(false)} />
+						<BottomDock workspace={workspace} ptyPort={ptyPort} onCollapse={() => setBottomOpen(false)} />
 					</div>
 				</>
 			) : (

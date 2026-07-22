@@ -405,7 +405,7 @@ export default function Layout({
 			</aside>
 
 			<main className="min-w-0 flex-1 overflow-hidden">
-				<WorkspacePane workspace={workspace}>
+				<WorkspacePane workspace={workspace} ptyPort={state?.ptyPort}>
 					<Outlet context={{ sidebarCollapsed: collapsed } satisfies LayoutOutletContext} />
 				</WorkspacePane>
 			</main>

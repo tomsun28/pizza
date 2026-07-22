@@ -7,7 +7,7 @@
  * Runtime lookup is `vendor/bin/${process.platform}-${process.arch}/<tool>`
  * (see src/utils/tools-manager.ts), so only that subdirectory is needed.
  */
-import { cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -32,5 +32,21 @@ mkdirSync(stagingRoot, { recursive: true });
 // tauri.conf.json maps: "vendor-bin/": "vendor/bin/"
 // so we want stagingRoot/<key>/{fd,rg}.
 cpSync(srcDir, path.join(stagingRoot, key), { recursive: true });
+
+// Also stage node-pty prebuilds (pty.node + spawn-helper) for the Terminal PTY.
+// Runtime lookup is binDir/prebuilds/<key>/ (see packages/pty/unix-pty.ts),
+// and tauri.conf.json maps "prebuilds-bin/": "prebuilds/".
+const ptySrc = path.join(repoRoot, "node_modules", "node-pty", "prebuilds", key);
+const ptyStage = path.join(repoRoot, "apps", "desktop", "prebuilds-bin", key);
+rmSync(path.join(repoRoot, "apps", "desktop", "prebuilds-bin"), { recursive: true, force: true });
+if (existsSync(ptySrc)) {
+	mkdirSync(path.join(repoRoot, "apps", "desktop", "prebuilds-bin"), { recursive: true });
+	cpSync(ptySrc, ptyStage, { recursive: true });
+	// spawn-helper must be executable.
+	try { chmodSync(path.join(ptyStage, "spawn-helper"), 0o755); } catch { /* ignore */ }
+	console.log(`prepare-desktop-vendor: staged node-pty prebuilds ${key} -> apps/desktop/prebuilds-bin/${key}`);
+} else {
+	console.warn(`prepare-desktop-vendor: WARNING node-pty prebuilds not found at ${ptySrc}`);
+}
 
 console.log(`prepare-desktop-vendor: staged ${key} -> ${path.relative(repoRoot, stagingRoot)}/${key}`);

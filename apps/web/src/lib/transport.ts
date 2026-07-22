@@ -246,6 +246,8 @@ export async function revealWorkspace(cwd: string): Promise<void> {
 
 export interface ProviderInfo {
 	id: string;
+	/** Human-readable display name (from pi-ai built-ins); falls back to id. */
+	name?: string;
 	has_api_key: boolean;
 	auth_type: string | null;
 }

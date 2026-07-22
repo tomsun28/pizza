@@ -196,16 +196,34 @@ export default function BranchTreeExplorer({ workspace }: { workspace?: string |
 			{/* Context menu */}
 			{menu && (
 				<div
-					className="fixed z-50 min-w-44 rounded-md border border-border bg-surface-2 py-1 shadow-lg"
+					className="fixed z-50 min-w-52 rounded-md border border-border bg-surface-2 py-1 shadow-lg"
 					style={{ left: menu.x, top: menu.y }}
 					onMouseDown={(e) => e.stopPropagation()}
 				>
-					<MenuItem icon={GitFork} label={t("history.forkFromHere")} onClick={() => void onFork(menu.node)} />
+					{/* Jump is the natural primary action for open branches (just
+						switches the active pointer, no new node). For closed branches
+						it reopens by forking (creates a new node). Disabled on the
+						active session (no-op). */}
 					<MenuItem
 						icon={CornerUpRight}
 						label={t("history.jumpHere")}
+						hint={
+							menu.node.is_active
+								? undefined
+								: menu.node.closed
+									? t("history.jumpClosedHint")
+									: t("history.jumpOpenHint")
+						}
 						disabled={menu.node.is_active}
 						onClick={() => void onJump(menu.node)}
+					/>
+					{/* Fork always creates a new child branch; if the source is open
+						and at HEAD, it gets frozen at the fork point. */}
+					<MenuItem
+						icon={GitFork}
+						label={t("history.forkFromHere")}
+						hint={t("history.forkHint")}
+						onClick={() => void onFork(menu.node)}
 					/>
 					<MenuItem icon={Pencil} label={t("history.rename")} onClick={() => void onRename(menu.node)} />
 					<div className="my-1 h-px bg-border" />
@@ -223,11 +241,13 @@ export default function BranchTreeExplorer({ workspace }: { workspace?: string |
 function MenuItem({
 	icon: Icon,
 	label,
+	hint,
 	onClick,
 	disabled,
 }: {
 	icon: typeof GitFork;
 	label: string;
+	hint?: string;
 	onClick: () => void;
 	disabled?: boolean;
 }) {
@@ -235,13 +255,17 @@ function MenuItem({
 		<button
 			disabled={disabled}
 			onClick={onClick}
+			title={hint}
 			className={cn(
-				"flex w-full items-center gap-2 px-3 py-1.5 text-left font-mono text-xs transition-colors",
+				"flex w-full items-start gap-2 px-3 py-1.5 text-left font-mono text-xs transition-colors",
 				disabled ? "cursor-not-allowed text-muted/40" : "text-fg hover:bg-accent/10 hover:text-accent",
 			)}
 		>
-			<Icon className="h-3.5 w-3.5 shrink-0" />
-			<span>{label}</span>
+			<Icon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+			<span className="flex flex-col gap-0.5">
+				<span>{label}</span>
+				{hint && <span className="text-[10px] font-normal text-muted">{hint}</span>}
+			</span>
 		</button>
 	);
 }

@@ -49,5 +49,6 @@ collect.sh
 .vendor-tools/
 # Staged platform-specific vendor binaries for desktop bundle
 /apps/desktop/vendor-bin/
+/apps/desktop/prebuilds-bin/
 /apps/desktop/target/
 docs/

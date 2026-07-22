@@ -9,9 +9,11 @@ import Terminal from "./Terminal";
  */
 export default function BottomDock({
 	workspace,
+	ptyPort,
 	onCollapse,
 }: {
 	workspace?: string | null;
+	ptyPort?: number;
 	onCollapse: () => void;
 }) {
 	const { t } = useTranslation();
@@ -31,7 +33,7 @@ export default function BottomDock({
 				</button>
 			</div>
 			<div className="min-h-0 flex-1">
-				<Terminal workspace={workspace} />
+				<Terminal workspace={workspace} ptyPort={ptyPort} />
 			</div>
 		</div>
 	);

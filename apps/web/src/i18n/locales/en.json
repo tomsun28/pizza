@@ -84,7 +84,10 @@
 		"emptyDescription": "Send a message in Chat to create the root session, then fork from any point.",
 		"noMatch": "No branches match your search.",
 		"forkFromHere": "Fork from here",
+		"forkHint": "Creates a new child branch (freezes this one if open)",
 		"jumpHere": "Jump to this branch",
+		"jumpOpenHint": "No new branch is created",
+		"jumpClosedHint": "Creates a new branch from this point",
 		"rename": "Rename branch",
 		"renamePrompt": "Branch name:",
 		"copyId": "Copy session id",
@@ -118,7 +121,10 @@
 		"comingSoonDescription": "Terminal will appear here.",
 		"hint": "Run a shell command in this workspace.",
 		"prompt": "Type a command…",
-		"running": "Running…"
+		"running": "Running…",
+		"exited": "process exited",
+		"connectionError": "Terminal connection error.",
+		"unavailable": "Interactive terminal is unavailable in this environment."
 	},
 	"dock": {
 		"toggleRight": "Toggle side panel"
@@ -168,6 +174,7 @@
 			"keyEmpty": "API key cannot be empty",
 			"selectProvider": "Select a provider first",
 			"selectProviderPlaceholder": "Select a provider...",
+			"noMatch": "No providers match your search.",
 			"confirmRemove": "Remove API key for {{label}}?"
 		}
 	},

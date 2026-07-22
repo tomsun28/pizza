@@ -3,12 +3,37 @@ import { createServer } from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { fileURLToPath } from "node:url";
 
-const BUILTIN_PROVIDERS = [
-	"anthropic", "openai", "google", "zai", "openrouter",
-	"groq", "mistral", "deepseek", "xai", "fireworks",
-	"together", "perplexity", "cohere", "amazon-bedrock",
-];
+/**
+ * Built-in provider id -> display name map.
+ *
+ * Source of truth: `dist/providers.json`, generated from pi-ai at build time
+ * (scripts/generate-providers.mjs). Falls back to importing pi-ai directly if
+ * the generated file is missing (e.g. before a build). Keep in sync with
+ * getProviderDisplayName() in src/core/model-registry.ts.
+ */
+let providerNamesCache = null;
+async function loadProviderNames() {
+	if (providerNamesCache) return providerNamesCache;
+	const generated = path.join(fileURLToPath(new URL("../../..", import.meta.url)), "dist", "providers.json");
+	try {
+		providerNamesCache = JSON.parse(fs.readFileSync(generated, "utf8"));
+		return providerNamesCache;
+	} catch {
+		// Pre-build dev fallback: derive from pi-ai directly.
+		try {
+			const { builtinProviders } = await import("@earendil-works/pi-ai/providers/all");
+			const map = {};
+			for (const p of builtinProviders()) map[p.id] = p.name;
+			providerNamesCache = map;
+			return map;
+		} catch {
+			providerNamesCache = {};
+			return providerNamesCache;
+		}
+	}
+}
 
 function authPath() {
 	return path.join(os.homedir(), ".pizza", "agent", "auth.json");
@@ -30,20 +55,24 @@ function writeAuth(data) {
 	fs.writeFileSync(authPath(), JSON.stringify(data, null, 2), { mode: 0o600 });
 }
 
-function listProviders() {
+async function listProviders() {
 	const auth = readAuth();
+	const names = await loadProviderNames();
+	// Stable display order: built-in providers sorted by id, then custom ones.
+	const builtinIds = Object.keys(names).sort();
 	const providers = [];
-	for (const id of BUILTIN_PROVIDERS) {
+	for (const id of builtinIds) {
 		const cred = auth[id];
 		providers.push({
 			id,
+			name: names[id] ?? id,
 			has_api_key: cred != null,
 			auth_type: cred?.type ?? null,
 		});
 	}
 	for (const key of Object.keys(auth)) {
-		if (!BUILTIN_PROVIDERS.includes(key)) {
-			providers.push({ id: key, has_api_key: true, auth_type: auth[key]?.type ?? null });
+		if (!names[key]) {
+			providers.push({ id: key, name: key, has_api_key: true, auth_type: auth[key]?.type ?? null });
 		}
 	}
 	return providers;
@@ -218,7 +247,7 @@ export function pizzaRpcBridge() {
 
 			server.middlewares.use("/rpc/providers", (req, res) => {
 				if (req.method === "GET") {
-					sendJson(res, 200, listProviders());
+					listProviders().then((p) => sendJson(res, 200, p)).catch((e) => sendJson(res, 500, { error: e.message }));
 					return;
 				}
 				if (req.method === "POST") {
