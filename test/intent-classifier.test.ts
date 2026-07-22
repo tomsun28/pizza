@@ -102,6 +102,28 @@ describe("IntentClassifier", () => {
 				expect(result.category).toBe("shell_dangerous");
 			}
 		});
+		it("should not flag temp-file removal under a path as 'Delete from root'", () => {
+			// Regression: 'rm -f /tmp/file' matched the old 'rm -[rf] /' pattern
+			// because the leading '/' of /tmp was treated as deleting root.
+			const safeRemovals = [
+				"rm -f /tmp/pizza-pty.log",
+				"cd /tmp && rm -f /tmp/pizza-pty.log && cat log",
+				"rm /var/folders/abc/scratch.tmp",
+			];
+			for (const cmd of safeRemovals) {
+				const result = classifier.classify("cli", { command: cmd });
+				expect(result.category).not.toBe("shell_dangerous");
+				expect(result.risk).not.toBe("dangerous");
+			}
+		});
+		it("should still flag genuine root deletion as dangerous", () => {
+			const rootDeletions = ["rm -rf /", "rm -rf /*", "rm -f /"];
+			for (const cmd of rootDeletions) {
+				const result = classifier.classify("cli", { command: cmd });
+				expect(result.risk).toBe("dangerous");
+				expect(result.requires_approval).toBe(true);
+			}
+		});
 
 		it("should classify moderate commands", () => {
 			const moderateCmds = ["npm install express", "git commit -m 'fix'", "mkdir -p /some/path"];

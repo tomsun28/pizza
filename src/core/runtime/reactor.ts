@@ -686,7 +686,7 @@ export class Reactor {
 
 		if (payload.requires_approval) {
 			if (!this.config.approvalHandler) {
-				this._emitToolExecutionEnd(payload.tool_call_id, payload.tool_name, {
+				this._emitToolExecutionRejected(payload.tool_call_id, payload.tool_name, {
 					content: [{ type: "text", text: "Tool execution requires approval, but no approval handler is available." }],
 					is_error: true,
 					error_message: "Approval required but no approval handler is available",
@@ -711,7 +711,7 @@ export class Reactor {
 			});
 
 			if (!approved) {
-				this._emitToolExecutionEnd(payload.tool_call_id, payload.tool_name, {
+				this._emitToolExecutionRejected(payload.tool_call_id, payload.tool_name, {
 					content: [{ type: "text", text: "Tool execution rejected by user." }],
 					is_error: true,
 					error_message: "User rejected the tool call",
@@ -794,6 +794,24 @@ export class Reactor {
 			},
 			caused_by: causedBy,
 		});
+	}
+	// Emit a START→END pair for tool calls that never actually execute (e.g.
+	// rejected by user, or approval required but no handler available). Previously
+	// these branches emitted only END, leaving an unpaired event in the log and
+	// breaking START/END matching for projections/timeline UI.
+	private _emitToolExecutionRejected(
+		tool_call_id: string,
+		tool_name: string,
+		result: ToolExecutionResult,
+		causedBy: string,
+	): void {
+		this._emit({
+			actor_id: "runtime",
+			type: "TOOL_EXECUTION_START",
+			payload: { tool_call_id, tool_name, arguments: {} },
+			caused_by: causedBy,
+		});
+		this._emitToolExecutionEnd(tool_call_id, tool_name, result, causedBy);
 	}
 
 	// ─── TOOL_EXECUTION_END ─────────────────────────────────────────────────

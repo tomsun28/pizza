@@ -165,7 +165,7 @@ export class IntentClassifier {
 		// Dangerous patterns
 		const dangerousPatterns: Array<{ pattern: RegExp; description: string }> = [
 			{ pattern: /\brm\s+-[a-z]*r/i, description: "Recursive delete" },
-			{ pattern: /\brm\s+-[rf]\s+\//i, description: "Delete from root" },
+			{ pattern: /\brm\s+-[a-z]*[rf]\s+\/(?:\s|$|\*)/i, description: "Delete from root" },
 			{ pattern: /\bsudo\s+/i, description: "Elevated privileges" },
 			{ pattern: /\bcurl\b.*\|\s*bash/i, description: "Download and execute" },
 			{ pattern: /\bwget\b.*\|\s*bash/i, description: "Download and execute" },

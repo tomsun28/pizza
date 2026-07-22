@@ -492,7 +492,9 @@ describe("Reactor (event-driven core)", () => {
 
 		const starts = runtime.store.query({ types: ["TOOL_EXECUTION_START"] });
 		const ends = runtime.store.query({ types: ["TOOL_EXECUTION_END"] });
-		expect(starts).toHaveLength(0);
+		// A rejected/blocked tool call still emits a START→END pair so the event
+		// log stays consistent (no orphan END without a matching START).
+		expect(starts).toHaveLength(1);
 		expect(ends).toHaveLength(1);
 		expect((ends[0].payload as { is_error: boolean }).is_error).toBe(true);
 		expect(JSON.stringify((ends[0].payload as { result: unknown }).result)).toContain("no approval handler");
