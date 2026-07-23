@@ -69,7 +69,7 @@ export type ParsedBuiltinToolInput =
 /**
  * Parse builtin command with optional heredoc.
  * Supports:
- *   write <path> <<EOF
+ *   write <path> <<EOF       (also <<'EOF' / <<"EOF")
  *   line1
  *   line2
  *   EOF
@@ -77,13 +77,16 @@ export type ParsedBuiltinToolInput =
 export function parseBuiltinCommandWithHeredoc(input: string): ParsedBuiltinCommand | null {
 	const trimmed = input.trim();
 	
-	// Match: command args <<DELIM\ncontent\nDELIM
-	const heredocMatch = trimmed.match(/^(.*?)\s+<<\s*(\w+)\s*\n([\s\S]*)\n\2\s*$/);
+	// Match: command args <<['"]DELIM\ncontent\nDELIM
+	// Group 1 = prefix, group 2 = optional opening quote, group 3 = delimiter
+	// word, group 4 = content. Supports <<EOF, <<'EOF', and <<"EOF". The
+	// closing delimiter is always the bare word (shell semantics).
+	const heredocMatch = trimmed.match(/^(.*?)\s+<<\s*(['"]?)(\w+)\2\s*\n([\s\S]*)\n\3\s*$/);
 	if (!heredocMatch) {
 		return null;
 	}
 	
-	const [, prefix, delimiter, content] = heredocMatch;
+	const [, prefix, , , content] = heredocMatch;
 	const parts = splitShellWords(prefix.trim());
 	
 	return {

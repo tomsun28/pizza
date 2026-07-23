@@ -304,10 +304,11 @@ function AppInner() {
 									sidecarReady={sidecarReady}
 									sidecarExitCode={sidecarExitCode}
 				workspace={workspace}
+				onRefreshState={refreshState}
 								/>
 							}
 						/>
-						<Route path="/settings" element={<SettingsView state={state} onRefreshState={refreshState} />} />
+						<Route path="/settings" element={<SettingsView state={state} />} />
 						<Route path="*" element={<Navigate to="/" replace />} />
 					</Route>
 			</Routes>

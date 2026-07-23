@@ -150,8 +150,58 @@ function getFacadeSessionState(facade: SessionFacade, ptyPort?: number): RpcSess
 	const projection = facade.getProjection();
 	const descriptor = projection.getDescriptor();
 	const messages = projection.buildContext().messages;
+	const resolvedModel = facade.modelRegistry?.find(facade.model.provider, facade.model.model_id);
+	const contextWindow = (resolvedModel as { contextWindow?: number } | undefined)?.contextWindow ?? 0;
+
+	// Context usage estimate — uses the last assistant usage when available,
+	// falling back to a rough char/4 estimate for trailing messages.
+	let contextUsage: RpcSessionState["contextUsage"];
+	if (contextWindow > 0) {
+		let tokens: number | null = null;
+		// Find last assistant usage to get an accurate context token count.
+		for (let i = messages.length - 1; i >= 0; i--) {
+			const msg = messages[i] as { role?: string; usage?: { totalTokens?: number; input?: number; output?: number; cacheRead?: number; cacheWrite?: number }; stopReason?: string };
+			if (msg.role === "assistant" && msg.usage && msg.stopReason !== "aborted" && msg.stopReason !== "error") {
+				const u = msg.usage;
+				tokens = u.totalTokens || (u.input ?? 0) + (u.output ?? 0) + (u.cacheRead ?? 0) + (u.cacheWrite ?? 0);
+				// Add rough estimate for any messages after the last usage.
+				for (let j = i + 1; j < messages.length; j++) {
+					tokens += estimateMessageTokens(messages[j] as AgentMessage);
+				}
+				break;
+			}
+		}
+		if (tokens === null) {
+			let estimated = 0;
+			for (const message of messages) {
+				estimated += estimateMessageTokens(message as AgentMessage);
+			}
+			tokens = estimated;
+		}
+		contextUsage = {
+			tokens,
+			contextWindow,
+			percent: (tokens / contextWindow) * 100,
+		};
+	}
+
+	// Cumulative token usage across all assistant messages.
+	let totalInput = 0, totalOutput = 0, totalCacheRead = 0, totalCacheWrite = 0, totalCost = 0;
+	for (const msg of messages) {
+		const m = msg as { role?: string; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: { total?: number } } };
+		if (m.role === "assistant" && m.usage) {
+			const u = m.usage;
+			totalInput += u.input ?? 0;
+			totalOutput += u.output ?? 0;
+			totalCacheRead += u.cacheRead ?? 0;
+			totalCacheWrite += u.cacheWrite ?? 0;
+			totalCost += u.cost?.total ?? 0;
+		}
+	}
+	const tokenUsage = { totalInput, totalOutput, totalCacheRead, totalCacheWrite, totalCost };
+
 	return {
-		model: facade.modelRegistry?.find(facade.model.provider, facade.model.model_id),
+		model: resolvedModel,
 		thinkingLevel: (facade.thinkingLevel ?? "off") as RpcSessionState["thinkingLevel"],
 		isStreaming: facade.isRunning,
 		isCompacting: false,
@@ -162,7 +212,20 @@ function getFacadeSessionState(facade: SessionFacade, ptyPort?: number): RpcSess
 		pendingMessageCount: 0,
 		safeMode: facade.runtime.isSafeMode,
 		ptyPort,
+		contextUsage,
+		tokenUsage,
 	};
+}
+
+/** Rough token estimate for a message (chars / 4). Used when no usage data is available. */
+function estimateMessageTokens(msg: AgentMessage): number {
+	const content = "content" in msg ? (msg as { content?: unknown }).content : undefined;
+	const text = typeof content === "string"
+		? content
+		: Array.isArray(content)
+			? content.filter((c) => (c as { type?: string }).type === "text").map((c) => (c as { text?: string }).text ?? "").join("")
+			: "";
+	return Math.ceil(text.length / 4);
 }
 
 /**
@@ -477,7 +540,7 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 						});
 					}
 					case "fork": {
-						const desc = sessionManager.forkFromSession(command.sessionId);
+						const desc = sessionManager.forkFromSession(command.sessionId, { preserveHistory: false });
 						return success(id, "history_tree", { action: "fork", session_id: desc.session_id });
 					}
 					case "rename": {
@@ -554,6 +617,23 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 				facade.settingsManager.setSafeMode(enabled);
 				return success(id, "set_safe_mode", { safeMode: facade.runtime.isSafeMode });
 			}
+		case "new_session": {
+			const desc = facade.runtime.sessionManager?.createSession("user_explicit");
+			const sessionId = desc?.session_id ?? facade.runtime.sessionManager?.getActiveSessionId() ?? "";
+			return success(id, "new_session", { sessionId });
+		}
+
+		case "get_skills": {
+			const enableSkills = facade.settingsManager.getEnableSkillCommands();
+			const skills = enableSkills
+				? (facade.resourceLoader?.getSkills().skills ?? []).map((s) => ({
+						command: `skill:${s.name}`,
+						name: s.name,
+						description: s.description,
+					}))
+				: [];
+			return success(id, "get_skills", { skills });
+		}
 
 			default: {
 				const unknownCommand = command as { type: string };

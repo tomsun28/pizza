@@ -37,6 +37,16 @@ export interface RpcClientOptions {
 	model?: string;
 	/** Additional CLI arguments */
 	args?: string[];
+	/**
+	 * Spawn the agent as a standalone binary instead of `node <cliPath>`.
+	 *
+	 * When true, {@link cliPath} is treated as the path to the compiled binary
+	 * (e.g. the `bun build --compile` output) and is spawned directly without a
+	 * `node` prefix. This is required when the agent runs from its compiled
+	 * binary distribution — the default `spawn("node", [cliPath, ...])` would
+	 * fail because no `node` runtime is bundled with the binary.
+	 */
+	binary?: boolean;
 }
 
 export interface ModelInfo {
@@ -84,10 +94,28 @@ export class RpcClient {
 			args.push(...this.options.args);
 		}
 
-		this.process = spawn("node", [cliPath, ...args], {
+		// In binary mode the cliPath IS the compiled executable — spawn it
+		// directly without a `node` prefix. In node mode, run `node cliPath`.
+		const command = this.options.binary ? cliPath : "node";
+		const commandArgs = this.options.binary ? args : [cliPath, ...args];
+
+		this.process = spawn(command, commandArgs, {
 			cwd: this.options.cwd,
 			env: { ...process.env, ...this.options.env },
 			stdio: ["pipe", "pipe", "pipe"],
+		});
+
+		// Capture spawn errors (e.g. ENOENT when the binary/cliPath does not
+		// exist) so they surface via getStderr()/start() instead of leaking as
+		// unhandled 'error' events on the ChildProcess.
+		this.process.on("error", (err: Error) => {
+			const message = `Failed to spawn agent process: ${err.message}`;
+			this.stderr += `\n${message}`;
+			// Reject any in-flight start() waiters via the exit-code check below.
+			for (const pending of this.pendingRequests.values()) {
+				pending.reject(new Error(message));
+			}
+			this.pendingRequests.clear();
 		});
 
 		// Collect stderr for debugging
@@ -104,8 +132,10 @@ export class RpcClient {
 		// Wait a moment for process to initialize
 		await new Promise((resolve) => setTimeout(resolve, 100));
 
-		if (this.process.exitCode !== null) {
-			throw new Error(`Agent process exited immediately with code ${this.process.exitCode}. Stderr: ${this.stderr}`);
+		if (this.process.exitCode !== null || this.process.signalCode !== null || !this.process.pid) {
+			throw new Error(
+				`Agent process failed to start (exitCode=${this.process.exitCode}, signal=${this.process.signalCode}). Stderr: ${this.stderr}`,
+			);
 		}
 	}
 

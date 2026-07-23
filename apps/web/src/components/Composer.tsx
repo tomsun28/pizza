@@ -1,9 +1,119 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowUp, Square, Mic, Plus, ChevronDown, Check, X } from "lucide-react";
+import { ArrowUp, Square, Mic, Plus, ChevronDown, Check, X, Loader2, Shield, ShieldCheck, ImagePlus, Sparkles, MessageSquarePlus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
-import { sendCommandAwait } from "@/lib/transport";
-import type { RpcSessionState, ModelInfo } from "@/lib/types";
+import { sendCommandAwait, setSafeMode, newSession, getSkills, type SkillInfo } from "@/lib/transport";
+import type { RpcSessionState, RpcContextUsage, RpcTokenUsage, ModelInfo } from "@/lib/types";
+
+function isTauri(): boolean {
+	return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+/** Format a token count compactly (e.g. 12.3k, 1.2M). */
+function formatTokens(n: number): string {
+	if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+	if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+	return `${n}`;
+}
+
+/** Small circular progress ring showing context window usage. */
+function ContextRing({
+	contextUsage,
+	tokenUsage,
+}: {
+	contextUsage?: RpcContextUsage;
+	tokenUsage?: RpcTokenUsage;
+}) {
+	const { t } = useTranslation();
+	const [hover, setHover] = useState(false);
+	const wrapRef = useRef<HTMLDivElement>(null);
+
+	const percent = contextUsage?.percent ?? null;
+	const tokens = contextUsage?.tokens ?? null;
+	const contextWindow = contextUsage?.contextWindow ?? 0;
+
+	// Clamp for the arc; null → show as 0 (unknown).
+	const pct = percent !== null ? Math.min(100, Math.max(0, percent)) : 0;
+	const known = percent !== null && tokens !== null;
+
+	// Color based on usage level.
+	const color = !known
+		? "var(--color-muted, #888)"
+		: pct > 90
+			? "var(--color-danger, #ef4444)"
+			: pct > 70
+				? "var(--color-warning, #f59e0b)"
+				: "var(--color-success, #22c55e)";
+
+	// SVG arc geometry.
+	const size = 16;
+	const stroke = 2.5;
+	const r = (size - stroke) / 2;
+	const circumference = 2 * Math.PI * r;
+	const dashOffset = circumference * (1 - pct / 100);
+
+	const inputTokens = tokenUsage?.totalInput ?? 0;
+	const outputTokens = tokenUsage?.totalOutput ?? 0;
+	const cacheRead = tokenUsage?.totalCacheRead ?? 0;
+	const cacheWrite = tokenUsage?.totalCacheWrite ?? 0;
+	const cost = tokenUsage?.totalCost ?? 0;
+
+	const tooltipLines = known
+		? [
+				`${t("composer.contextUsed")}: ${formatTokens(tokens!)} / ${formatTokens(contextWindow)} (${percent!.toFixed(1)}%)`,
+				`${t("composer.inputTokens")}: ${formatTokens(inputTokens)}`,
+				`${t("composer.outputTokens")}: ${formatTokens(outputTokens)}`,
+			]
+		: [
+				`${t("composer.contextUsed")}: ? / ${formatTokens(contextWindow)}`,
+				`${t("composer.inputTokens")}: ${formatTokens(inputTokens)}`,
+				`${t("composer.outputTokens")}: ${formatTokens(outputTokens)}`,
+			];
+	if (cacheRead > 0) tooltipLines.push(`${t("composer.cacheRead")}: ${formatTokens(cacheRead)}`);
+	if (cacheWrite > 0) tooltipLines.push(`${t("composer.cacheWrite")}: ${formatTokens(cacheWrite)}`);
+	if (cost > 0) tooltipLines.push(`${t("composer.cost")}: $${cost.toFixed(3)}`);
+
+	return (
+		<div
+			ref={wrapRef}
+			className="relative flex items-center"
+			onMouseEnter={() => setHover(true)}
+			onMouseLeave={() => setHover(false)}
+		>
+			<svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="shrink-0">
+				<circle
+					cx={size / 2}
+					cy={size / 2}
+					r={r}
+					fill="none"
+					stroke="var(--color-border, #333)"
+					strokeWidth={stroke}
+				/>
+				<circle
+					cx={size / 2}
+					cy={size / 2}
+					r={r}
+					fill="none"
+					stroke={color}
+					strokeWidth={stroke}
+					strokeLinecap="round"
+					strokeDasharray={circumference}
+					strokeDashoffset={dashOffset}
+					transform={`rotate(-90 ${size / 2} ${size / 2})`}
+				/>
+			</svg>
+			{hover && (
+				<div className="absolute bottom-full right-0 z-30 mb-2 w-max max-w-[16rem] rounded-lg border border-border bg-surface px-3 py-2 text-[11px] text-fg shadow-lg">
+					{tooltipLines.map((line, i) => (
+						<div key={i} className={i === 0 ? "font-medium" : "text-muted"}>
+							{line}
+						</div>
+					))}
+				</div>
+			)}
+		</div>
+	);
+}
 
 export interface ComposerImage {
 	/** base64-encoded payload (no data URL prefix) */
@@ -54,23 +164,34 @@ export function Composer({
 	state,
 	onSend,
 	onAbort,
+	onRefreshState,
 }: {
 	sidecarReady: boolean;
 	isRunning: boolean;
 	state: RpcSessionState | null;
 	onSend: (message: string, images?: ComposerImage[]) => void;
 	onAbort: () => void;
+	onRefreshState?: () => void;
 }) {
 	const [input, setInput] = useState("");
 	const [images, setImages] = useState<ComposerImage[]>([]);
 	const [models, setModels] = useState<ModelInfo[]>([]);
 	const [recording, setRecording] = useState(false);
+	const [transcribing, setTranscribing] = useState(false);
 	const [modelMenuOpen, setModelMenuOpen] = useState(false);
+	const [approvalMenuOpen, setApprovalMenuOpen] = useState(false);
 	const { t } = useTranslation();
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const recognitionRef = useRef<SpeechRecognition | null>(null);
+	const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+	const audioChunksRef = useRef<Blob[]>([]);
+	const mediaStreamRef = useRef<MediaStream | null>(null);
 	const modelMenuRef = useRef<HTMLDivElement>(null);
+	const approvalMenuRef = useRef<HTMLDivElement>(null);
+	const plusMenuRef = useRef<HTMLDivElement>(null);
+	const [plusMenuOpen, setPlusMenuOpen] = useState(false);
+	const [skills, setSkills] = useState<SkillInfo[]>([]);
 
 	// Only show models whose provider has valid auth. Models without auth
 	// (hasAuth === false) are hidden from the selector entirely — they can't
@@ -79,7 +200,9 @@ export function Composer({
 
 	const hasSpeechSupport =
 		typeof window !== "undefined" &&
-		("SpeechRecognition" in window || "webkitSpeechRecognition" in window);
+		(isTauri() ||
+			"SpeechRecognition" in window ||
+			"webkitSpeechRecognition" in window);
 
 	useEffect(() => {
 		if (!sidecarReady) return;
@@ -111,6 +234,8 @@ export function Composer({
 	useEffect(() => {
 		return () => {
 			recognitionRef.current?.stop();
+			mediaRecorderRef.current?.stop();
+			mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
 		};
 	}, []);
 
@@ -125,6 +250,43 @@ export function Composer({
 		document.addEventListener("mousedown", onClick);
 		return () => document.removeEventListener("mousedown", onClick);
 	}, [modelMenuOpen]);
+
+	// Close approval policy menu on outside click.
+	useEffect(() => {
+		if (!approvalMenuOpen) return;
+		const onClick = (e: MouseEvent) => {
+			if (approvalMenuRef.current && !approvalMenuRef.current.contains(e.target as Node)) {
+				setApprovalMenuOpen(false);
+			}
+		};
+		document.addEventListener("mousedown", onClick);
+		return () => document.removeEventListener("mousedown", onClick);
+	}, [approvalMenuOpen]);
+
+	// Load available skills (invocable as slash commands) for the + menu.
+	useEffect(() => {
+		if (!sidecarReady) return;
+		let cancelled = false;
+		(async () => {
+			const list = await getSkills();
+			if (!cancelled) setSkills(list);
+		})();
+		return () => {
+			cancelled = true;
+		};
+	}, [sidecarReady, state?.sessionId]);
+
+	// Close + menu on outside click.
+	useEffect(() => {
+		if (!plusMenuOpen) return;
+		const onClick = (e: MouseEvent) => {
+			if (plusMenuRef.current && !plusMenuRef.current.contains(e.target as Node)) {
+				setPlusMenuOpen(false);
+			}
+		};
+		document.addEventListener("mousedown", onClick);
+		return () => document.removeEventListener("mousedown", onClick);
+	}, [plusMenuOpen]);
 
 	// Optimistic local override — set immediately on user selection so the
 	// trigger label updates without waiting for the MODEL_CHANGED round-trip.
@@ -152,7 +314,113 @@ export function Composer({
 		}
 	}, []);
 
+	// Approval policy for the current session (safe mode). Selected inline in
+	// the composer so the user can choose per-session without visiting Settings.
+	const safeMode = state?.safeMode ?? false;
+	const handleApprovalPolicyChange = useCallback(async (enabled: boolean) => {
+		setApprovalMenuOpen(false);
+		try {
+			await setSafeMode(enabled);
+			onRefreshState?.();
+		} catch (e) {
+			console.error("[composer] set_safe_mode failed:", e);
+		}
+	}, [onRefreshState]);
+
+	// Start a fresh conversation session (new context scope).
+	const handleNewSession = useCallback(async () => {
+		setPlusMenuOpen(false);
+		const sessionId = await newSession();
+		if (sessionId) {
+			onRefreshState?.();
+		}
+	}, [onRefreshState]);
+
+	// Insert a skill invocation (slash command) into the input and focus it.
+	const handleInsertSkill = useCallback((command: string) => {
+		setPlusMenuOpen(false);
+		setInput((prev) => {
+			const insert = `/${command} `;
+			// Put the slash command on its own line so it parses correctly,
+			// then the user can type arguments / context below it.
+			if (!prev.trim()) return insert;
+			return `${prev.trimEnd()}\n${insert}`;
+		});
+		// Refocus the textarea so the user can continue typing arguments.
+		requestAnimationFrame(() => textareaRef.current?.focus());
+	}, []);
+
 	const startRecording = useCallback(() => {
+		if (isTauri()) {
+			// Desktop (Tauri): use MediaRecorder to capture audio, then
+			// transcribe via the Rust backend (OpenAI Whisper API).
+			void (async () => {
+				try {
+					const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+					mediaStreamRef.current = stream;
+					const mimeType = MediaRecorder.isTypeSupported("audio/webm")
+						? "audio/webm"
+						: "audio/mp4";
+					const recorder = new MediaRecorder(stream, { mimeType });
+					audioChunksRef.current = [];
+					recorder.ondataavailable = (e) => {
+						if (e.data.size > 0) audioChunksRef.current.push(e.data);
+					};
+					recorder.onstop = () => {
+						// Stop all audio tracks.
+						mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
+						mediaStreamRef.current = null;
+
+						const blob = new Blob(audioChunksRef.current, { type: mimeType });
+						audioChunksRef.current = [];
+						if (blob.size === 0) {
+							setTranscribing(false);
+							return;
+						}
+						// Convert to base64 and invoke Tauri transcribe command.
+						const reader = new FileReader();
+						reader.onload = async () => {
+							const result = reader.result;
+							if (typeof result !== "string") {
+								setTranscribing(false);
+								return;
+							}
+							const comma = result.indexOf(",");
+							const b64 = comma >= 0 ? result.slice(comma + 1) : result;
+							try {
+								const { invoke } = await import("@tauri-apps/api/core");
+								const text = await invoke<string>("transcribe_audio", {
+									audioB64: b64,
+									mimeType,
+								});
+								if (text) {
+									setInput((prev) => (prev ? prev.trimEnd() + " " : "") + text);
+								}
+							} catch (e) {
+								console.error("[composer] transcribe failed:", e);
+								const msg = e instanceof Error ? e.message : String(e);
+								// Show error as a brief placeholder — user will see it.
+								setInput((prev) => prev + (prev ? " " : "") + `[${msg}]`);
+							} finally {
+								setTranscribing(false);
+							}
+						};
+						reader.onerror = () => setTranscribing(false);
+						reader.readAsDataURL(blob);
+					};
+					mediaRecorderRef.current = recorder;
+					setRecording(true);
+					recorder.start();
+				} catch (e) {
+					console.error("[composer] mic access failed:", e);
+					setRecording(false);
+					setTranscribing(false);
+				}
+			})();
+			return;
+		}
+
+		// Browser: use Web Speech API for real-time dictation.
 		const win = window as unknown as {
 			SpeechRecognition?: new () => SpeechRecognition;
 			webkitSpeechRecognition?: new () => SpeechRecognition;
@@ -188,6 +456,15 @@ export function Composer({
 	}, []);
 
 	const stopRecording = useCallback(() => {
+		if (isTauri()) {
+			const recorder = mediaRecorderRef.current;
+			if (recorder && recorder.state !== "inactive") {
+				setRecording(false);
+				setTranscribing(true);
+				recorder.stop();
+			}
+			return;
+		}
 		recognitionRef.current?.stop();
 	}, []);
 
@@ -308,6 +585,8 @@ export function Composer({
 					<div className="mt-1 flex items-center justify-between gap-2">
 						{/* Left cluster */}
 						<div className="flex items-center gap-1">
+
+						{/* + button: multi-action menu (new session, attach, skills) */}
 							<input
 								ref={fileInputRef}
 								type="file"
@@ -316,19 +595,140 @@ export function Composer({
 								className="hidden"
 								onChange={handleFileChange}
 							/>
-							<button
-								type="button"
-								disabled={!sidecarReady}
-								onClick={() => fileInputRef.current?.click()}
-								className="flex h-8 w-8 items-center justify-center rounded-full text-muted transition-colors hover:bg-surface hover:text-fg disabled:opacity-40"
-								title={t("composer.attachImage")}
-							>
-								<Plus className="h-4 w-4" />
-							</button>
+							<div className="relative" ref={plusMenuRef}>
+								<button
+									type="button"
+									disabled={!sidecarReady}
+									onClick={() => setPlusMenuOpen((o) => !o)}
+									className="flex h-8 w-8 items-center justify-center rounded-full text-muted transition-colors hover:bg-surface hover:text-fg disabled:opacity-40"
+									title={t("composer.add")}
+								>
+									<Plus className="h-4 w-4" />
+								</button>
+								{plusMenuOpen && (
+									<div className="absolute bottom-full left-0 z-50 mb-2 w-64 rounded-xl border border-border bg-surface p-1 shadow-xl">
+										<button
+											type="button"
+											onClick={() => void handleNewSession()}
+											className="flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors hover:bg-surface-2"
+										>
+											<MessageSquarePlus className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted" />
+											<span className="min-w-0 flex-1">
+												<span className="block text-fg">{t("composer.newSession")}</span>
+												<span className="block text-[10px] text-muted">{t("composer.newSessionHint")}</span>
+											</span>
+										</button>
+										<button
+											type="button"
+											onClick={() => {
+												setPlusMenuOpen(false);
+												fileInputRef.current?.click();
+											}}
+											className="flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors hover:bg-surface-2"
+										>
+											<ImagePlus className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted" />
+											<span className="min-w-0 flex-1">
+												<span className="block text-fg">{t("composer.attachImage")}</span>
+												<span className="block text-[10px] text-muted">{t("composer.attachImageHint")}</span>
+											</span>
+										</button>
+										{skills.length > 0 && (
+											<>
+												<div className="my-1 border-t border-border/60" />
+												<div className="px-2.5 py-1 text-[10px] uppercase tracking-wider text-muted">
+													{t("composer.skills")}
+												</div>
+												<div className="max-h-52 overflow-y-auto">
+													{skills.map((s) => (
+														<button
+															key={s.command}
+															type="button"
+															onClick={() => handleInsertSkill(s.command)}
+															title={s.description}
+															className="flex w-full items-start gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-surface-2"
+														>
+															<Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted" />
+															<span className="min-w-0 flex-1">
+																<span className="block truncate text-fg">{s.name}</span>
+																{s.description && (
+																	<span className="block truncate text-[10px] text-muted">{s.description}</span>
+																)}
+															</span>
+														</button>
+													))}
+												</div>
+											</>
+										)}
+									</div>
+								)}
+							</div>
+							{/* Approval policy selector — chooses safe mode for the current session */}
+							<div className="relative" ref={approvalMenuRef}>
+								<button
+									type="button"
+									disabled={!sidecarReady}
+									onClick={() => setApprovalMenuOpen((o) => !o)}
+									className={cn(
+										"flex items-center gap-1 rounded-full px-2.5 py-1 text-xs transition-colors disabled:opacity-40",
+										safeMode
+											? "text-warning hover:bg-surface"
+											: "text-muted hover:bg-surface hover:text-fg",
+									)}
+									title={t("composer.approvalPolicy")}
+								>
+									{safeMode ? (
+										<Shield className="h-3.5 w-3.5" />
+									) : (
+										<ShieldCheck className="h-3.5 w-3.5" />
+									)}
+									<span>{safeMode ? t("composer.approvalOn") : t("composer.approvalOff")}</span>
+									<ChevronDown className="h-3 w-3" />
+								</button>
+								{approvalMenuOpen && (
+									<div className="absolute bottom-full left-0 z-20 mb-2 w-56 rounded-xl border border-border bg-surface p-1 shadow-lg">
+										<button
+											type="button"
+											onClick={() => void handleApprovalPolicyChange(false)}
+											className={cn(
+												"flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors hover:bg-surface-2",
+												!safeMode ? "text-fg" : "text-muted",
+											)}
+										>
+											<ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+											<span className="min-w-0 flex-1">
+												<span className="block text-fg">{t("composer.approvalOff")}</span>
+												<span className="block text-[10px] text-muted">{t("composer.approvalOffHint")}</span>
+											</span>
+											{!safeMode && <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" />}
+										</button>
+										<button
+											type="button"
+											onClick={() => void handleApprovalPolicyChange(true)}
+											className={cn(
+												"flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors hover:bg-surface-2",
+												safeMode ? "text-fg" : "text-muted",
+											)}
+										>
+											<Shield className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+											<span className="min-w-0 flex-1">
+												<span className="block text-fg">{t("composer.approvalOn")}</span>
+												<span className="block text-[10px] text-muted">{t("composer.approvalOnHint")}</span>
+											</span>
+											{safeMode && <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" />}
+										</button>
+									</div>
+								)}
+							</div>
 						</div>
 
 						{/* Right cluster */}
 						<div className="flex items-center gap-1">
+							{/* Context usage ring — shows current context window occupancy */}
+							<ContextRing
+								contextUsage={state?.contextUsage}
+								tokenUsage={state?.tokenUsage}
+							/>
+
 							{/* Model selector */}
 							<div className="relative" ref={modelMenuRef}>
 								<button
@@ -388,17 +788,29 @@ export function Composer({
 							{/* Mic */}
 							<button
 								type="button"
-								disabled={!hasSpeechSupport || !sidecarReady}
+								disabled={!hasSpeechSupport || !sidecarReady || transcribing}
 								onClick={recording ? stopRecording : startRecording}
 								className={cn(
 									"flex h-8 w-8 items-center justify-center rounded-full transition-colors disabled:opacity-40",
 									recording
 										? "bg-danger/10 text-danger"
-										: "text-muted hover:bg-surface hover:text-fg",
+										: transcribing
+											? "text-accent"
+											: "text-muted hover:bg-surface hover:text-fg",
 								)}
-								title={recording ? t("composer.stopDictation") : t("composer.voiceInput")}
+								title={
+									transcribing
+										? t("composer.transcribing")
+										: recording
+											? t("composer.stopDictation")
+											: t("composer.voiceInput")
+								}
 							>
-								<Mic className="h-4 w-4" />
+								{transcribing ? (
+									<Loader2 className="h-4 w-4 animate-spin" />
+								) : (
+									<Mic className="h-4 w-4" />
+								)}
 							</button>
 
 							{/* Send / Stop */}

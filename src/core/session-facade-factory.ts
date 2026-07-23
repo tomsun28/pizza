@@ -10,7 +10,8 @@
 
 import { join } from "node:path";
 import { type Model, streamSimple } from "@earendil-works/pi-ai/compat";
-import { getAgentDir, getDocsPath } from "../config.js";
+import { APP_NAME, getAgentDir, getDocsPath, getMainMemoryDir, getMainSoulPath } from "../config.js";
+import { getMainAgentGuidelines, isSoulUninitialized } from "./main-agent.js";
 import type { AgentMessage, AgentTool, ThinkingLevel } from "./agent/index.js";
 import { AuthStorage } from "./auth-storage.js";
 import { estimateContextTokens } from "./compaction/index.js";
@@ -45,6 +46,7 @@ import { allToolNames, createToolDefinition, DEFAULT_LLM_TOOLS, type ToolName } 
 import { createHistoryTreeToolDefinition } from "./tools/history-tree.js";
 import { buildSessionBreadcrumb } from "./projection/history-tree.js";
 import { createSessionSplitToolDefinition } from "./tools/session-split.js";
+import { createDelegateToolDefinition } from "./tools/delegate.js";
 import { wrapToolDefinitions } from "./tools/tool-definition-wrapper.js";
 
 export interface CreateSessionFacadeOptions {
@@ -93,6 +95,13 @@ export interface CreateSessionFacadeOptions {
 	isContinuing?: boolean;
 	/** Context token budget. Default: model.contextWindow ?? 128000. */
 	contextBudget?: number;
+
+	/** Whether this session is the persistent (main) agent. */
+	isMainAgent?: boolean;
+	/** Main agent working directory (defaults to cwd when isMainAgent). */
+	mainDir?: string;
+	/** Main agent memory directory (defaults to <mainDir>/memory). */
+	memoryDir?: string;
 }
 
 export interface CreateSessionFacadeResult {
@@ -229,6 +238,9 @@ export async function createSessionFacade(
 ): Promise<CreateSessionFacadeResult> {
 	const cwd = options.cwd ?? process.cwd();
 	const agentDir = options.agentDir ?? getAgentDir();
+	const isMainAgent = options.isMainAgent ?? false;
+	const mainDir = options.mainDir ?? cwd;
+	const memoryDir = options.memoryDir ?? (isMainAgent ? getMainMemoryDir(mainDir) : undefined);
 
 	const authPath = options.agentDir ? join(agentDir, "auth.json") : undefined;
 	const modelsPath = options.agentDir ? join(agentDir, "models.json") : undefined;
@@ -238,7 +250,14 @@ export async function createSessionFacade(
 
 	let resourceLoader = options.resourceLoader;
 	if (!resourceLoader) {
-		resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
+		resourceLoader = new DefaultResourceLoader({
+			cwd,
+			agentDir,
+			settingsManager,
+			isMainAgent,
+			mainDir: isMainAgent ? mainDir : undefined,
+			memoryDir,
+		});
 		await resourceLoader.reload();
 	}
 
@@ -355,6 +374,20 @@ export async function createSessionFacade(
 			sources.set(definition.name, createSyntheticSourceInfo(`<sdk:${definition.name}>`, { source: "sdk" }));
 		}
 
+		// Main-agent-only: register the `delegate` tool for cross-workspace
+		// orchestration. Not exposed to normal per-project workspaces. The tool
+		// is always available to the main agent regardless of the `tools`
+		// allowlist (it is a core capability of the persistent agent, not an
+		// opt-in built-in).
+		if (isMainAgent && includeTool("delegate")) {
+			const delegateDefinition = createDelegateToolDefinition({ agentDir, mainDir }) as ExtensionToolDefinition;
+			definitions.set(delegateDefinition.name, delegateDefinition);
+			sources.set(
+				delegateDefinition.name,
+				createSyntheticSourceInfo(`<builtin:${delegateDefinition.name}>`, { source: "builtin" }),
+			);
+		}
+
 		availableToolDefinitions = Array.from(definitions.values());
 		availableToolSources = sources;
 	};
@@ -390,6 +423,23 @@ export async function createSessionFacade(
 			}
 		}
 
+		// Main-agent identity + long-term memory index + guidelines.
+		const soulFile = isMainAgent ? resourceLoader.getSoulFile?.() : undefined;
+		const longTermMemory = isMainAgent ? resourceLoader.getLongTermMemory?.() : undefined;
+		let mainAgentBanner: string | undefined;
+		if (isMainAgent && memoryDir) {
+			const soulPath = mainDir ? getMainSoulPath(mainDir) : undefined;
+			const soulUninitialized = soulFile && soulPath
+				? isSoulUninitialized(soulFile.content, APP_NAME)
+				: false;
+			if (soulUninitialized && soulPath) {
+				mainAgentBanner = `IMPORTANT — ACTION REQUIRED BEFORE ANSWERING:\nYour soul file (${soulPath}) is a placeholder. Your identity, values, and voice are all marked [NOT YET DEFINED]. Before you answer the user's question, you MUST first ask them to define who you are: what name should you go by, what role should you play, what tone should you use, what values should you hold? Tell the user they can describe it in conversation (and you will write it to the soul file) or edit the file directly. This is mandatory — do not skip it. After the user has defined your soul, never repeat this request.`;
+			}
+			for (const guideline of getMainAgentGuidelines(memoryDir, { soulPath, soulUninitialized })) {
+				promptGuidelines.push(guideline);
+			}
+		}
+
 		let prompt = buildSystemPrompt({
 			cwd,
 			skills: resourceLoader.getSkills().skills,
@@ -399,6 +449,9 @@ export async function createSessionFacade(
 			selectedTools: definitions.map((definition) => definition.name),
 			toolSnippets,
 			promptGuidelines,
+			soulFile,
+			longTermMemory,
+			mainAgentBanner,
 		});
 
 		// Append session-position breadcrumb (~15-40 tokens) so the model
@@ -435,6 +488,9 @@ export async function createSessionFacade(
 	 * the breadcrumb stays in sync without a full tool rebuild.
 	 */
 	const refreshSystemPromptWithBreadcrumb = (): string => {
+		if (isMainAgent) {
+			resourceLoader.refreshMainAgentResources?.();
+		}
 		systemPrompt = buildPromptForTools(activeToolDefinitions);
 		if (runtime) {
 			runtime.setSystemPrompt(systemPrompt);

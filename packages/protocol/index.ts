@@ -95,7 +95,9 @@ export type RpcCommand =
 	// Approval (safe mode)
 	| { id?: string; type: "approve"; intentEventId: string }
 	| { id?: string; type: "reject"; intentEventId: string }
-	| { id?: string; type: "set_safe_mode"; enabled: boolean };
+	| { id?: string; type: "set_safe_mode"; enabled: boolean }
+	| { id?: string; type: "new_session" }
+	| { id?: string; type: "get_skills" };
 
 // ============================================================================
 // RPC Slash Command (for get_commands response)
@@ -111,6 +113,15 @@ export interface RpcSlashCommand {
 	source: "extension" | "prompt" | "skill";
 	/** Source metadata for the owning resource */
 	sourceInfo: unknown;
+}
+
+/** A user-invocable skill (from ~/.pizza skills), as returned by get_skills. */
+export interface RpcSkillInfo {
+	/** Command name without leading slash (e.g. "skill:my-skill"). */
+	command: string;
+	/** Human-readable name. */
+	name: string;
+	description?: string;
 }
 
 // ============================================================================
@@ -131,6 +142,27 @@ export interface RpcSessionState {
 	ptyPort?: number;
 	/** When true, risky tool calls require explicit user approval before running. */
 	safeMode?: boolean;
+	/** Estimated context window usage for the current session. */
+	contextUsage?: RpcContextUsage;
+	/** Cumulative token usage across all assistant messages in the session. */
+	tokenUsage?: RpcTokenUsage;
+}
+
+export interface RpcContextUsage {
+	/** Estimated context tokens, or null if unknown. */
+	tokens: number | null;
+	/** Model context window size in tokens. */
+	contextWindow: number;
+	/** Context usage as percentage of context window (0-100), or null if unknown. */
+	percent: number | null;
+}
+
+export interface RpcTokenUsage {
+	totalInput: number;
+	totalOutput: number;
+	totalCacheRead: number;
+	totalCacheWrite: number;
+	totalCost: number;
 }
 
 // ============================================================================
@@ -195,6 +227,8 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "approve"; success: true }
 	| { id?: string; type: "response"; command: "reject"; success: true }
 	| { id?: string; type: "response"; command: "set_safe_mode"; success: true; data: { safeMode: boolean } }
+	| { id?: string; type: "response"; command: "new_session"; success: true; data: { sessionId: string } }
+	| { id?: string; type: "response"; command: "get_skills"; success: true; data: { skills: RpcSkillInfo[] } }
 
 	// Error response (any command can fail)
 	| { id?: string; type: "response"; command: string; success: false; error: string };

@@ -137,13 +137,21 @@ export class SessionManager {
 	 * The source session is frozen at the current head if it was tracking HEAD,
 	 * and the forked descriptor reuses the source start boundary so context still
 	 * includes the source conversation.
+	 *
+	 * @param preserveHistory - When true (default), the forked session starts at
+	 *   the source's start boundary, preserving the full source conversation.
+	 *   When false, the forked session starts at the fork point (the source's
+	 *   end boundary or current HEAD), excluding the source's earlier history.
+	 *   Use false when the source's history is large and would cause context
+	 *   overflow (e.g. forking from an old, long-running session).
 	 */
-	forkFromSession(session_id: string): SessionDescriptor {
+	forkFromSession(session_id: string, options?: { preserveHistory?: boolean }): SessionDescriptor {
 		const source = this.sessions.get(session_id);
 		if (!source) {
 			throw new Error(`Session not found: ${session_id}`);
 		}
 
+		const preserveHistory = options?.preserveHistory ?? true;
 		const forkAtEventId =
 			source.event_range.end_event_id === "HEAD"
 				? this.store.head ?? source.event_range.start_event_id
@@ -154,7 +162,7 @@ export class SessionManager {
 
 		const forked = this.createSession("fork", source.name, {
 			parentSessionId: source.session_id,
-			startEventId: source.event_range.start_event_id,
+			startEventId: preserveHistory ? source.event_range.start_event_id : forkAtEventId,
 			summaryEventId: source.summary_event_id,
 		});
 

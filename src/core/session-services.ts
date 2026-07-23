@@ -34,6 +34,12 @@ export interface CreateSessionServicesOptions {
 	modelRegistry?: ModelRegistry;
 	extensionFlagValues?: Map<string, boolean | string>;
 	resourceLoaderOptions?: Omit<DefaultResourceLoaderOptions, "cwd" | "agentDir" | "settingsManager">;
+	/** Whether this is the persistent (main) agent. */
+	isMainAgent?: boolean;
+	/** Main agent working directory. */
+	mainDir?: string;
+	/** Main agent memory directory. */
+	memoryDir?: string;
 }
 
 
@@ -118,6 +124,9 @@ export async function createSessionServices(
 		cwd,
 		agentDir,
 		settingsManager,
+		isMainAgent: options.isMainAgent,
+		mainDir: options.mainDir,
+		memoryDir: options.memoryDir,
 	});
 	await resourceLoader.reload();
 

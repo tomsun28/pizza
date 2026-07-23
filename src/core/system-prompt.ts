@@ -59,6 +59,50 @@ export interface BuildSystemPromptOptions {
 	contextFiles?: Array<{ path: string; content: string }>;
 	/** Pre-loaded skills. */
 	skills?: Skill[];
+	/** Soul file placed at the very top of the prompt (main agent only). */
+	soulFile?: { path: string; content: string };
+	/** Long-term memory entries placed after the soul, before the body (main agent only). */
+	longTermMemory?: Array<{ path: string; content: string }>;
+	/**
+	 * A mandatory-action banner placed at the very top of the prompt (before
+	 * Identity) when the main agent's soul is still a placeholder. The model
+	 * is instructed to address this before answering the user.
+	 */
+	mainAgentBanner?: string;
+}
+
+/**
+ * Build the identity/long-term-memory prefix injected at the top of the prompt
+ * for the persistent main agent. Returns an empty string for normal workspaces.
+ */
+function buildMainAgentPrefix(options: {
+	soulFile?: { path: string; content: string };
+	longTermMemory?: Array<{ path: string; content: string }>;
+	mainAgentBanner?: string;
+}): string {
+	let prefix = "";
+
+	// The banner goes ABOVE Identity so it is the very first thing the model
+	// sees — this maximizes the chance the model acts on it before answering.
+	if (options.mainAgentBanner) {
+		prefix += `${options.mainAgentBanner}\n\n---\n\n`;
+	}
+
+	if (options.soulFile) {
+		prefix += `# Identity\n\n${options.soulFile.content.trim()}\n\n`;
+	}
+
+	const memory = options.longTermMemory ?? [];
+	if (memory.length > 0) {
+		prefix += "# Long-Term Memory\n\n";
+		prefix +=
+			"Your long-term memory index is below. Read the referenced files on demand with the read command.\n\n";
+		for (const { path: filePath, content } of memory) {
+			prefix += `## ${filePath}\n\n${content.trim()}\n\n`;
+		}
+	}
+
+	return prefix;
 }
 
 /** Build the system prompt with tools, guidelines, and context */
@@ -72,8 +116,12 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		cwd,
 		contextFiles: providedContextFiles,
 		skills: providedSkills,
+		soulFile,
+		longTermMemory,
+		mainAgentBanner,
 	} = options;
 	const resolvedCwd = cwd;
+	const mainAgentPrefix = buildMainAgentPrefix({ soulFile, longTermMemory, mainAgentBanner });
 	const promptCwd = resolvedCwd.replace(/\\/g, "/");
 
 	const now = new Date();
@@ -88,7 +136,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	const skills = providedSkills ?? [];
 
 	if (customPrompt) {
-		let prompt = customPrompt;
+		let prompt = mainAgentPrefix + customPrompt;
 
 		if (appendSection) {
 			prompt += appendSection;
@@ -203,7 +251,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		'- cli("ls -lah *.py") - List files with shell glob expansion',
 	].join("\n");
 
-	let prompt = [
+	let prompt = mainAgentPrefix + [
 		"You are an expert coding assistant. You help users by reading files, executing commands, editing code, and writing new files.",
 		"",
 		"Available tools:",

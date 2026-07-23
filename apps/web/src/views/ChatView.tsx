@@ -6,7 +6,7 @@ import type { RpcSessionState, TypedEvent } from "@/lib/types";
 import { Conversation, type TimelineItem } from "@/components/Conversation";
 import { Composer, type ComposerImage } from "@/components/Composer";
 import { EmptyState } from "@/components/ui";
-import { ApprovalDialog, type PendingApproval } from "@/components/ApprovalDialog";
+import { approveToolCall, rejectToolCall } from "@/lib/transport";
 import { cn } from "@/lib/utils";
 import type { LayoutOutletContext } from "@/components/Layout";
 
@@ -172,17 +172,18 @@ export default function ChatView({
 	sidecarReady,
 	sidecarExitCode,
 	workspace,
+	onRefreshState,
 }: {
 	state: RpcSessionState | null;
 	sidecarReady: boolean;
 	sidecarExitCode: number | null;
 	workspace?: string | null;
+	onRefreshState?: () => void;
 }) {
 	const { sidebarCollapsed } = useOutletContext<LayoutOutletContext>() ?? { sidebarCollapsed: false };
 	const { t } = useTranslation();
 	const [items, setItems] = useState<TimelineItem[]>([]);
 	const [error, setError] = useState("");
-	const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
 	const activeAssistantRef = useRef<string | null>(null);
 	const seenIdsRef = useRef<Set<string>>(new Set());
 	const scrollRef = useRef<HTMLDivElement>(null);
@@ -317,13 +318,24 @@ export default function ChatView({
 
 		// INTENT_TOOL_CALL and TOOL_EXECUTION_START share the same tool_call_id.
 		// Upsert so we don't create duplicate cards / clashing React keys.
-		const toolCardUpsert = (toolCallId: string, toolName: string, argsStr: string) => {
+		const toolCardUpsert = (
+			toolCallId: string,
+			toolName: string,
+			argsStr: string,
+			approval?: TimelineItem["pendingApproval"],
+		) => {
 			updateItems((prev) => {
 				const existing = prev.find((it) => it.id === toolCallId);
 				if (existing) {
 					return prev.map((it) =>
 						it.id === toolCallId
-							? { ...it, title: toolName, toolName, toolArgs: argsStr || it.toolArgs }
+							? {
+									...it,
+									title: toolName,
+									toolName,
+									toolArgs: argsStr || it.toolArgs,
+									...(approval ? { pendingApproval: approval } : {}),
+								}
 							: it,
 					);
 				}
@@ -334,10 +346,11 @@ export default function ChatView({
 						role: "tool",
 						title: toolName,
 						text: "",
-						status: "RUNNING",
-						streaming: true,
+						status: approval ? "PENDING" : "RUNNING",
+						streaming: !approval,
 						toolName,
 						toolArgs: argsStr,
+						...(approval ? { pendingApproval: approval } : {}),
 					},
 				];
 			});
@@ -460,30 +473,33 @@ export default function ChatView({
 				const argsStr = JSON.stringify(args, null, 2);
 				const classification = payload.classification as Record<string, unknown> | undefined;
 				// When safe mode is on, risky tool calls require explicit approval
-				// before they execute. Surface an approval dialog and block here.
-				if (payload.requires_approval === true && isForCurrent) {
-					setPendingApproval({
-						intentEventId: event.event_id,
-						toolCallId,
-						toolName,
-						arguments: args,
-						description: classification?.description as string | undefined,
-						risk: classification?.risk as string | undefined,
-						category: classification?.category as string | undefined,
-						affectedFiles: classification?.affected_files as string[] | undefined,
-					});
-				}
-				// Fall through to render the tool card (shared with TOOL_EXECUTION_START).
-				toolCardUpsert(toolCallId, toolName, argsStr);
+				// before they execute. Render the approval inline on the tool card
+				// (only for the active workspace; background ones just block).
+				const requiresApproval = payload.requires_approval === true && isForCurrent;
+				const approval = requiresApproval
+					? {
+							intentEventId: event.event_id,
+							risk: classification?.risk as string | undefined,
+							category: classification?.category as string | undefined,
+							description: classification?.description as string | undefined,
+							affectedFiles: classification?.affected_files as string[] | undefined,
+							status: "pending" as const,
+						}
+					: undefined;
+				toolCardUpsert(toolCallId, toolName, argsStr, approval);
 				break;
 			}
 			case "TOOL_EXECUTION_START": {
 				const payload = event.payload as Record<string, unknown>;
 				const toolCallId = payload.tool_call_id as string;
-				// Execution started → the tool was approved (or didn't need approval).
-				// Clear any matching pending approval dialog.
-				setPendingApproval((prev) =>
-					prev && prev.toolCallId === toolCallId ? null : prev,
+				// Execution started -> the tool was approved (or did not need approval).
+				// Transition the card out of pending-approval into running.
+				updateItems((prev) =>
+					prev.map((it) =>
+						it.id === toolCallId && it.role === "tool"
+							? { ...it, pendingApproval: undefined, status: "RUNNING", streaming: true }
+							: it,
+					),
 				);
 				toolCardUpsert(
 					toolCallId,
@@ -543,15 +559,17 @@ export default function ChatView({
 				});
 				break;
 			}
+			case "SESSION_CREATED":
 			case "SESSION_FORKED":
 			case "SESSION_JUMPED": {
-				// The active session changed (user jumped/forked from the
-				// BranchTreeExplorer, or replayed from the Timeline). Our
-				// current items belong to the OLD session — reload from
-				// get_messages for the NEW active session. Only react to
-				// events for the current workspace. Debounced so a fork
-				// (which emits SESSION_CREATED + SESSION_FORKED in quick
-				// succession) only triggers one reload.
+				// The active session changed (user started a new session,
+				// jumped/forked from the BranchTreeExplorer, or replayed
+				// from the Timeline). Our current items belong to the OLD
+				// session — reload from get_messages for the NEW active
+				// session. Only react to events for the current workspace.
+				// Debounced so a fork (which emits SESSION_CREATED +
+				// SESSION_FORKED in quick succession) only triggers one
+				// reload.
 				if (!isForCurrent) break;
 				if (sessionSwitchTimer.current) clearTimeout(sessionSwitchTimer.current);
 				sessionSwitchTimer.current = setTimeout(() => {
@@ -640,6 +658,45 @@ export default function ChatView({
 		}
 	}, []);
 
+	// Resolve an inline tool-call approval (approve/reject). Optimistically
+	// updates the card, then fires the RPC; reverts on failure.
+	const handleResolveApproval = useCallback(
+		(intentEventId: string, toolCallId: string, approved: boolean) => {
+			setItems((prev) =>
+				prev.map((it) =>
+					it.id === toolCallId && it.pendingApproval
+						? {
+								...it,
+								pendingApproval: { ...it.pendingApproval, status: approved ? "approved" : "rejected" },
+								status: approved ? it.status : "REJECTED",
+								streaming: approved ? it.streaming : false,
+							}
+						: it,
+				),
+			);
+			(async () => {
+				try {
+					if (approved) {
+						await approveToolCall(intentEventId);
+					} else {
+						await rejectToolCall(intentEventId);
+					}
+				} catch (e) {
+					// Revert the optimistic update on failure.
+					setItems((prev) =>
+						prev.map((it) =>
+							it.id === toolCallId && it.pendingApproval
+								? { ...it, pendingApproval: { ...it.pendingApproval, status: "pending" }, status: "PENDING", streaming: false }
+								: it,
+						),
+					);
+					setError(e instanceof Error ? e.message : String(e));
+				}
+			})();
+		},
+		[],
+	);
+
 	const isRunning = state?.isStreaming ?? false;
 
 	// Session title: first user message (like Codex/ChatGPT), else workspace name.
@@ -677,11 +734,12 @@ export default function ChatView({
 						/>
 					</div>
 				) : (
-					<Conversation
-						items={items}
-						sidecarReady={sidecarReady}
-						sidecarExitCode={sidecarExitCode}
-					/>
+				<Conversation
+					items={items}
+					sidecarReady={sidecarReady}
+					sidecarExitCode={sidecarExitCode}
+					onResolveApproval={handleResolveApproval}
+				/>
 				)}
 			</div>
 			{error && (
@@ -697,11 +755,8 @@ export default function ChatView({
 				isRunning={isRunning}
 				onSend={handleSend}
 				onAbort={handleAbort}
+				onRefreshState={onRefreshState}
 				/>
-			<ApprovalDialog
-				approval={pendingApproval}
-				onResolved={(_id) => setPendingApproval(null)}
-			/>
 		</div>
 	);
 }

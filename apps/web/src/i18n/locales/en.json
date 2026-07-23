@@ -8,7 +8,9 @@
 		"settings": "Settings",
 		"error": "Error",
 		"starting": "Starting...",
-		"backToChat": "Back to Chat"
+		"backToChat": "Back to Chat",
+		"back": "Back",
+		"forward": "Forward"
 	},
 	"layout": {
 		"brandTagline": "Create together.",
@@ -53,9 +55,26 @@
 		"configureApiKey": "Configure API key in Settings →",
 		"stopDictation": "Stop dictation",
 		"voiceInput": "Voice input",
+		"transcribing": "Transcribing...",
 		"stop": "Stop",
 		"send": "Send",
-		"sendHint": "enter to send · shift+enter for newline"
+		"sendHint": "enter to send · shift+enter for newline",
+		"approvalPolicy": "Approval policy for this session",
+		"approvalOff": "Auto",
+		"approvalOffHint": "Run tools without asking",
+		"approvalOn": "Approve",
+		"approvalOnHint": "Pause risky tool calls for your approval",
+		"contextUsed": "Context",
+		"inputTokens": "Input",
+		"outputTokens": "Output",
+		"cacheRead": "Cache read",
+		"cacheWrite": "Cache write",
+		"cost": "Cost",
+		"add": "Add",
+		"newSession": "New session",
+		"newSessionHint": "Start a fresh conversation",
+		"attachImageHint": "Attach an image to your message",
+		"skills": "Skills"
 	},
 	"conversation": {
 		"showLess": "Show less",
@@ -78,7 +97,9 @@
 		"hint": "The agent is waiting for your approval.",
 		"approve": "Approve",
 		"reject": "Reject",
-		"riskPrefix": "Risk:"
+		"riskPrefix": "Risk:",
+		"approved": "Approved",
+		"rejected": "Rejected"
 	},
 	"history": {
 		"title": "History",

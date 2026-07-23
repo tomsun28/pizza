@@ -23,6 +23,7 @@ fn main() {
 			bridge::set_provider_api_key,
 			bridge::remove_provider_api_key,
 			bridge::set_window_background,
+			bridge::transcribe_audio,
 		])
 		.setup(|_app| {
 			#[cfg(debug_assertions)]
