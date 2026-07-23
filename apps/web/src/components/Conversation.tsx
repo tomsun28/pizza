@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { Markdown } from "./Markdown";
+import { Button, Badge } from "@/components/ui";
 import {
 	Terminal,
 	ChevronRight,
@@ -12,6 +13,7 @@ import {
 	Brain,
 	Loader2,
 	AlertCircle,
+	ShieldAlert,
 } from "lucide-react";
 
 export interface TimelineItem {
@@ -29,6 +31,15 @@ export interface TimelineItem {
 	isError?: boolean;
 	/** Attached images as data URLs (for user messages). */
 	images?: string[];
+	/** Pending approval for a risky tool call (safe mode on). */
+	pendingApproval?: {
+		intentEventId: string;
+		risk?: string;
+		category?: string;
+		description?: string;
+		affectedFiles?: string[];
+		status: "pending" | "approved" | "rejected";
+	};
 }
 
 const COLLAPSE_LINES = 5;
@@ -111,27 +122,113 @@ function formatToolArgs(toolArgs?: string): string {
 	}
 }
 
-function ToolCard({ item }: { item: TimelineItem }) {
+function approvalRiskTone(risk?: string): "neutral" | "warning" | "danger" {
+	switch (risk) {
+		case "dangerous":
+			return "danger";
+		case "moderate":
+			return "warning";
+		default:
+			return "neutral";
+	}
+}
+
+/** Inline approval card rendered inside a tool card when safe mode pauses a risky call. */
+function ApprovalSection({
+	approval,
+	onResolve,
+}: {
+	approval: NonNullable<TimelineItem["pendingApproval"]>;
+	onResolve?: (approved: boolean) => void;
+}) {
+	const { t } = useTranslation();
+	const pending = approval.status === "pending";
+	return (
+		<div className="rounded-md border border-warning/30 bg-warning/5 px-3 py-2.5">
+			<div className="flex flex-wrap items-center gap-2">
+				<ShieldAlert className="h-3.5 w-3.5 shrink-0 text-warning" />
+				<span className="text-[11px] font-semibold uppercase tracking-wide text-warning">
+					{t("approval.title")}
+				</span>
+				{approval.risk && (
+					<Badge tone={approvalRiskTone(approval.risk)}>
+						{t("approval.riskPrefix")} {approval.risk}
+					</Badge>
+				)}
+				{approval.category && <Badge tone="neutral">{approval.category}</Badge>}
+			</div>
+			{approval.description && (
+				<p className="mt-1.5 text-xs leading-relaxed text-muted">{approval.description}</p>
+			)}
+			{approval.affectedFiles && approval.affectedFiles.length > 0 && (
+				<div className="mt-1.5 flex flex-col gap-0.5">
+					{approval.affectedFiles.map((f) => (
+						<code key={f} className="block truncate font-mono text-[11px] text-fg" title={f}>
+							{f}
+						</code>
+					))}
+				</div>
+			)}
+			{pending && onResolve ? (
+				<div className="mt-2.5 flex items-center gap-2">
+					<Button
+						size="sm"
+						tone="danger"
+						variant="soft"
+						onClick={() => onResolve(false)}
+					>
+						{t("approval.reject")}
+					</Button>
+					<Button size="sm" tone="accent" variant="solid" onClick={() => onResolve(true)}>
+						{t("approval.approve")}
+					</Button>
+				</div>
+			) : approval.status === "approved" ? (
+				<span className="mt-1.5 block font-mono text-[11px] uppercase tracking-widest text-accent">
+					{t("approval.approved")}
+				</span>
+			) : approval.status === "rejected" ? (
+				<span className="mt-1.5 block font-mono text-[11px] uppercase tracking-widest text-danger">
+					{t("approval.rejected")}
+				</span>
+			) : null}
+		</div>
+	);
+}
+
+function ToolCard({
+	item,
+	onResolveApproval,
+}: {
+	item: TimelineItem;
+	onResolveApproval?: (intentEventId: string, toolCallId: string, approved: boolean) => void;
+}) {
 	const { t } = useTranslation();
 	const command = formatToolArgs(item.toolArgs);
 	const running = item.streaming && !item.toolResult;
+	const approval = item.pendingApproval;
+	const awaitingApproval = approval?.status === "pending";
 	return (
 		<div className="my-4 flex justify-start">
 			<div
 				className={cn(
 					"w-full max-w-full overflow-hidden rounded-xl border bg-surface-2/40",
-					item.isError ? "border-danger/30" : "border-border",
+					item.isError ? "border-danger/30" : awaitingApproval ? "border-warning/40" : "border-border",
 				)}
 			>
 				<div className="flex items-center justify-between gap-3 px-3.5 py-2">
 					<span className="flex items-center gap-2 font-mono text-[11px] font-semibold uppercase tracking-wide text-fg">
-						<Terminal className="h-3.5 w-3.5 text-accent" />
+						{awaitingApproval ? (
+							<ShieldAlert className="h-3.5 w-3.5 text-warning" />
+						) : (
+							<Terminal className="h-3.5 w-3.5 text-accent" />
+						)}
 						{item.toolName || item.title}
 					</span>
 					<span
 						className={cn(
 							"flex items-center gap-1 font-mono text-[10px] uppercase tracking-widest",
-							item.isError ? "text-danger" : running ? "text-accent" : "text-muted",
+							item.isError ? "text-danger" : awaitingApproval ? "text-warning" : running ? "text-accent" : "text-muted",
 						)}
 					>
 						{running && <Loader2 className="h-3 w-3 animate-spin" />}
@@ -145,6 +242,16 @@ function ToolCard({ item }: { item: TimelineItem }) {
 							<span className="mr-1.5 select-none text-accent">$</span>
 							<span className="whitespace-pre-wrap break-words">{command}</span>
 						</div>
+					)}
+					{approval && (
+						<ApprovalSection
+							approval={approval}
+							onResolve={
+								onResolveApproval
+									? (approved) => onResolveApproval(approval.intentEventId, item.id, approved)
+									: undefined
+							}
+						/>
 					)}
 					{item.toolResult && <CollapsibleCode text={item.toolResult} isError={item.isError} />}
 					{running && !item.toolResult && (
@@ -288,10 +395,12 @@ function AssistantMessage({ item }: { item: TimelineItem }) {
 
 export function Conversation({
 	items,
+	onResolveApproval,
 }: {
 	items: TimelineItem[];
 	sidecarReady: boolean;
 	sidecarExitCode: number | null;
+	onResolveApproval?: (intentEventId: string, toolCallId: string, approved: boolean) => void;
 }) {
 	if (items.length === 0) {
 		return <div className="flex min-h-[calc(100vh-200px)] flex-col items-center justify-center gap-4 text-center text-muted" />;
@@ -301,7 +410,7 @@ export function Conversation({
 		<div className="mx-auto max-w-3xl px-6 pb-32 pt-4">
 			{items.map((item) => {
 				if (item.role === "user") return <UserBubble key={item.id} item={item} />;
-				if (item.role === "tool") return <ToolCard key={item.id} item={item} />;
+				if (item.role === "tool") return <ToolCard key={item.id} item={item} onResolveApproval={onResolveApproval} />;
 				// Skip empty assistant bubbles (turns that produced only tool calls).
 				if (!item.streaming && !item.text && !item.thinking && !(item.images && item.images.length > 0)) {
 					return null;

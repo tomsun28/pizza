@@ -250,6 +250,7 @@ export class InteractiveMode {
 	private extensionEditor: ExtensionEditorComponent | undefined = undefined;
 	private approvalDialogComponent: ApprovalDialogComponent | undefined = undefined;
 	private pendingApprovalEventId: string | undefined = undefined;
+	private approvalOverlayHandle: OverlayHandle | undefined = undefined;
 	private extensionTerminalInputUnsubscribers = new Set<() => void>();
 	private extensionWidgetsAbove = new Map<string, Component & { dispose?(): void }>();
 	private extensionWidgetsBelow = new Map<string, Component & { dispose?(): void }>();
@@ -2117,9 +2118,16 @@ export class InteractiveMode {
 				if (eid) this.facade.runtime.reject(eid);
 			},
 		);
-		this.editorContainer.clear();
-		this.editorContainer.addChild(this.approvalDialogComponent);
-		this.ui.setFocus(this.approvalDialogComponent);
+		// Render the approval dialog as a centered overlay ON TOP of the
+		// existing UI (instead of swapping out the editor). This avoids the
+		// full-screen flicker that clearing/re-adding the editor container
+		// caused. The overlay captures keyboard focus for approve/reject.
+		this.approvalOverlayHandle = this.ui.showOverlay(this.approvalDialogComponent, {
+			anchor: "center",
+			width: "60%",
+			maxHeight: "70%",
+			margin: 2,
+		});
 		this.ui.requestRender();
 	}
 
@@ -2131,11 +2139,8 @@ export class InteractiveMode {
 		if (eid) {
 			this.facade.runtime.reject(eid);
 		}
-		if (!this.extensionSelector && !this.extensionInput && !this.extensionEditor) {
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.editor);
-			this.ui.setFocus(this.editor);
-		}
+		this.approvalOverlayHandle?.hide();
+		this.approvalOverlayHandle = undefined;
 		this.ui.requestRender();
 	}
 

@@ -97,7 +97,9 @@
 		"hint": "The agent is waiting for your approval.",
 		"approve": "Approve",
 		"reject": "Reject",
-		"riskPrefix": "Risk:"
+		"riskPrefix": "Risk:",
+		"approved": "Approved",
+		"rejected": "Rejected"
 	},
 	"history": {
 		"title": "History",

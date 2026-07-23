@@ -46,6 +46,7 @@ import { allToolNames, createToolDefinition, DEFAULT_LLM_TOOLS, type ToolName } 
 import { createHistoryTreeToolDefinition } from "./tools/history-tree.js";
 import { buildSessionBreadcrumb } from "./projection/history-tree.js";
 import { createSessionSplitToolDefinition } from "./tools/session-split.js";
+import { createDelegateToolDefinition } from "./tools/delegate.js";
 import { wrapToolDefinitions } from "./tools/tool-definition-wrapper.js";
 
 export interface CreateSessionFacadeOptions {
@@ -371,6 +372,20 @@ export async function createSessionFacade(
 			if (!includeTool(definition.name)) continue;
 			definitions.set(definition.name, definition);
 			sources.set(definition.name, createSyntheticSourceInfo(`<sdk:${definition.name}>`, { source: "sdk" }));
+		}
+
+		// Main-agent-only: register the `delegate` tool for cross-workspace
+		// orchestration. Not exposed to normal per-project workspaces. The tool
+		// is always available to the main agent regardless of the `tools`
+		// allowlist (it is a core capability of the persistent agent, not an
+		// opt-in built-in).
+		if (isMainAgent && includeTool("delegate")) {
+			const delegateDefinition = createDelegateToolDefinition({ agentDir, mainDir }) as ExtensionToolDefinition;
+			definitions.set(delegateDefinition.name, delegateDefinition);
+			sources.set(
+				delegateDefinition.name,
+				createSyntheticSourceInfo(`<builtin:${delegateDefinition.name}>`, { source: "builtin" }),
+			);
 		}
 
 		availableToolDefinitions = Array.from(definitions.values());

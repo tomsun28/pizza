@@ -97,7 +97,9 @@
 		"hint": "Agent 正在等待你的确认。",
 		"approve": "批准",
 		"reject": "拒绝",
-		"riskPrefix": "风险:"
+		"riskPrefix": "风险:",
+		"approved": "已批准",
+		"rejected": "已拒绝"
 	},
 	"history": {
 		"title": "历史",

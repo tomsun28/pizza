@@ -288,7 +288,7 @@ export function getMainAgentGuidelines(
 		`When you learn a stable fact about the user, write it to the appropriate file under ${memoryDir} (create a new file for a new topic and add it to _index.md).`,
 		`When you notice outdated or inaccurate information in memory, update or delete the corresponding file under ${memoryDir} and keep _index.md in sync.`,
 		"Memory you write during a session is loaded into the system prompt at the next session boundary (after session_split), not immediately.",
-		"You can delegate a task to a sub-agent in another project directory by running the pizza CLI, e.g. `pizza --cwd /path/to/project -p \"fix the auth bug in login.ts\"`; keep that project's context out of this conversation.",
+		"You can delegate a task to a sub-agent in another project directory with the `delegate` tool. Call `delegate` with list_workspaces=true first to see which project directories are available, then delegate with `cwd` and `task`. The sub-agent runs in its own workspace and only its final reply enters this conversation — keep other projects' context out of this conversation by delegating instead of handling them inline.",
 	);
 
 	return guidelines;
