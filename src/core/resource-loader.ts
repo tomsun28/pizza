@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import chalk from "chalk";
-import { CONFIG_DIR_NAME } from "../config.js";
+import { CONFIG_DIR_NAME, getMainDir, getMainMemoryDir } from "../config.js";
 import { loadThemeFromPath, type Theme } from "../../packages/tui/theme/theme.js";
 import type { ResourceDiagnostic } from "./diagnostics.js";
 
@@ -326,8 +326,8 @@ export class DefaultResourceLoader implements ResourceLoader {
 			this.longTermMemory = [];
 			return;
 		}
-		const mainDir = this.mainDir ?? this.cwd;
-		const memoryDir = this.memoryDir ?? join(mainDir, "memory");
+		const mainDir = this.mainDir ?? getMainDir();
+		const memoryDir = this.memoryDir ?? getMainMemoryDir(mainDir);
 		this.soulFile = loadSoulFile(mainDir);
 		this.longTermMemory = loadLongTermMemory(memoryDir);
 	}

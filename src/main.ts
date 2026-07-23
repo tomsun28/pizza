@@ -480,8 +480,8 @@ export async function main(args: string[], options?: MainOptions) {
 			console.error(chalk.red("Another main agent instance is already running. Use --main-dir to use a different directory, or stop the other instance."));
 			process.exit(1);
 		}
-		// Lock is auto-released on process exit via the handler inside acquireMainLock.
-		void mainLock;
+		// Lock auto-releases on process exit via the handler inside acquireMainLock.
+		// Keep the reference alive for the lifetime of the process.
 	}
 
 	// When running as main agent, cwd becomes the main working directory.

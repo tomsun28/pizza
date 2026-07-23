@@ -63,8 +63,12 @@ export interface BuildSystemPromptOptions {
 	soulFile?: { path: string; content: string };
 	/** Long-term memory entries placed after the soul, before the body (main agent only). */
 	longTermMemory?: Array<{ path: string; content: string }>;
-	/** Whether this prompt is for the persistent (main) agent. */
-	isMainAgent?: boolean;
+	/**
+	 * A mandatory-action banner placed at the very top of the prompt (before
+	 * Identity) when the main agent's soul is still a placeholder. The model
+	 * is instructed to address this before answering the user.
+	 */
+	mainAgentBanner?: string;
 }
 
 /**
@@ -74,8 +78,15 @@ export interface BuildSystemPromptOptions {
 function buildMainAgentPrefix(options: {
 	soulFile?: { path: string; content: string };
 	longTermMemory?: Array<{ path: string; content: string }>;
+	mainAgentBanner?: string;
 }): string {
 	let prefix = "";
+
+	// The banner goes ABOVE Identity so it is the very first thing the model
+	// sees — this maximizes the chance the model acts on it before answering.
+	if (options.mainAgentBanner) {
+		prefix += `${options.mainAgentBanner}\n\n---\n\n`;
+	}
 
 	if (options.soulFile) {
 		prefix += `# Identity\n\n${options.soulFile.content.trim()}\n\n`;
@@ -107,9 +118,10 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		skills: providedSkills,
 		soulFile,
 		longTermMemory,
+		mainAgentBanner,
 	} = options;
 	const resolvedCwd = cwd;
-	const mainAgentPrefix = buildMainAgentPrefix({ soulFile, longTermMemory });
+	const mainAgentPrefix = buildMainAgentPrefix({ soulFile, longTermMemory, mainAgentBanner });
 	const promptCwd = resolvedCwd.replace(/\\/g, "/");
 
 	const now = new Date();

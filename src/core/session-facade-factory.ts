@@ -10,8 +10,8 @@
 
 import { join } from "node:path";
 import { type Model, streamSimple } from "@earendil-works/pi-ai/compat";
-import { getAgentDir, getDocsPath, getMainMemoryDir } from "../config.js";
-import { getMainAgentGuidelines } from "./main-agent.js";
+import { APP_NAME, getAgentDir, getDocsPath, getMainMemoryDir, getMainSoulPath } from "../config.js";
+import { getMainAgentGuidelines, isSoulUninitialized } from "./main-agent.js";
 import type { AgentMessage, AgentTool, ThinkingLevel } from "./agent/index.js";
 import { AuthStorage } from "./auth-storage.js";
 import { estimateContextTokens } from "./compaction/index.js";
@@ -411,8 +411,16 @@ export async function createSessionFacade(
 		// Main-agent identity + long-term memory index + guidelines.
 		const soulFile = isMainAgent ? resourceLoader.getSoulFile?.() : undefined;
 		const longTermMemory = isMainAgent ? resourceLoader.getLongTermMemory?.() : undefined;
+		let mainAgentBanner: string | undefined;
 		if (isMainAgent && memoryDir) {
-			for (const guideline of getMainAgentGuidelines(memoryDir)) {
+			const soulPath = mainDir ? getMainSoulPath(mainDir) : undefined;
+			const soulUninitialized = soulFile && soulPath
+				? isSoulUninitialized(soulFile.content, APP_NAME)
+				: false;
+			if (soulUninitialized && soulPath) {
+				mainAgentBanner = `IMPORTANT — ACTION REQUIRED BEFORE ANSWERING:\nYour soul file (${soulPath}) is a placeholder. Your identity, values, and voice are all marked [NOT YET DEFINED]. Before you answer the user's question, you MUST first ask them to define who you are: what name should you go by, what role should you play, what tone should you use, what values should you hold? Tell the user they can describe it in conversation (and you will write it to the soul file) or edit the file directly. This is mandatory — do not skip it. After the user has defined your soul, never repeat this request.`;
+			}
+			for (const guideline of getMainAgentGuidelines(memoryDir, { soulPath, soulUninitialized })) {
 				promptGuidelines.push(guideline);
 			}
 		}
@@ -428,7 +436,7 @@ export async function createSessionFacade(
 			promptGuidelines,
 			soulFile,
 			longTermMemory,
-			isMainAgent,
+			mainAgentBanner,
 		});
 
 		// Append session-position breadcrumb (~15-40 tokens) so the model

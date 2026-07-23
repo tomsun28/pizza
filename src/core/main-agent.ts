@@ -24,7 +24,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { basename, join } from "node:path";
-import { getMainMemoryDir, getMainSoulPath } from "../config.js";
+import { APP_NAME, getMainMemoryDir, getMainSoulPath } from "../config.js";
 
 export interface SoulFile {
 	path: string;
@@ -36,22 +36,65 @@ export interface MemoryEntry {
 	content: string;
 }
 
-const DEFAULT_SOUL_TEMPLATE = `---
-description: Aria's soul definition — a long-term programming companion that persists across projects and time.
+/**
+ * The marker placed in the default SOUL.md placeholder to signal that the user
+ * has not yet defined the agent's identity. The agent sees this in its own
+ * Identity section and uses it as a cue to invite the user to define who it is.
+ */
+export const SOUL_PLACEHOLDER_MARKER = "[NOT YET DEFINED]";
+
+/**
+ * Build the default SOUL.md placeholder. Unlike a pre-filled identity, this is
+ * an empty template with `[NOT YET DEFINED]` markers — the user (or the agent,
+ * on the user's behalf during conversation) fills it in to define the agent's
+ * identity, values, and voice.
+ */
+function buildDefaultSoulTemplate(_appName: string): string {
+	return `---
+description: Soul not yet defined — talk to your agent to define its identity.
 tags: [identity, soul, persistent-agent, memory]
 ---
 # Identity
-You are Aria, the user's long-term programming companion. You exist across
-projects and across time. Edit this file to define your own personality.
+
+${SOUL_PLACEHOLDER_MARKER}
+
+This soul file is a placeholder. The user has not yet defined who you are.
+When the user describes what they want (a name, a role, a tone, values they
+want you to hold, a language they want you to speak), write their choices into
+this file using the write or edit command. The user can also edit this file
+directly.
+
+# Language
+
+${SOUL_PLACEHOLDER_MARKER}
+
+The language(s) you should use when talking to the user. Can be a single
+language (e.g. "中文", "English") or a preference (e.g. "match the user's
+language", "English for code, 中文 for chat").
 
 # Values
-- Proactively remember the user's preferences and past decisions.
-- Review relevant long-term memory when starting a new topic.
-- Be honest about uncertainty; verify before asserting.
+
+${SOUL_PLACEHOLDER_MARKER}
 
 # Voice
-Concise, direct, and opinionated when it helps.
+
+${SOUL_PLACEHOLDER_MARKER}
 `;
+}
+
+/**
+ * Detect whether a soul file's content is still the untouched placeholder.
+ * Used to decide whether the agent should proactively invite the user to define
+ * its identity during conversation.
+ *
+ * Checks for the presence of the {@link SOUL_PLACEHOLDER_MARKER} rather than
+ * exact string matching, so minor whitespace edits by the user don't cause a
+ * false "initialized" reading — as long as any section is still marked
+ * `[NOT YET DEFINED]`, the soul is considered uninitialized.
+ */
+export function isSoulUninitialized(content: string, _appName: string): boolean {
+	return content.includes(SOUL_PLACEHOLDER_MARKER);
+}
 
 const DEFAULT_INDEX_TEMPLATE = `# Memory Index
 
@@ -81,7 +124,7 @@ export function initializeMainAgent(mainDir: string, memoryDir?: string): boolea
 	mkdirSync(resolvedMemoryDir, { recursive: true });
 
 	if (!existsSync(soulPath)) {
-		writeFileSync(soulPath, DEFAULT_SOUL_TEMPLATE, "utf-8");
+		writeFileSync(soulPath, buildDefaultSoulTemplate(APP_NAME), "utf-8");
 	}
 
 	const indexPath = join(resolvedMemoryDir, "_index.md");
@@ -126,9 +169,11 @@ export function loadLongTermMemory(memoryDir: string): MemoryEntry[] {
 
 	const indexPath = join(memoryDir, "_index.md");
 	let indexContent = "";
+	let indexExists = false;
 	if (existsSync(indexPath)) {
 		try {
 			indexContent = readFileSync(indexPath, "utf-8");
+			indexExists = true;
 		} catch {
 			indexContent = "";
 		}
@@ -137,7 +182,17 @@ export function loadLongTermMemory(memoryDir: string): MemoryEntry[] {
 	const memoryFiles = listMemoryFiles(memoryDir);
 	const reconciled = reconcileIndex(indexContent, memoryFiles);
 
-	return [{ path: indexPath, content: reconciled }];
+	// If the index file is absent AND there are no unindexed files to report,
+	// there is nothing meaningful to inject — avoid advertising a path that
+	// does not exist on disk.
+	if (!indexExists && reconciled.length === 0) {
+		return [];
+	}
+
+	// Use a synthetic label when the index file is missing so the model does
+	// not believe a real file exists at that path.
+	const path = indexExists ? indexPath : `<memory index (not yet created at ${indexPath})>`;
+	return [{ path, content: reconciled }];
 }
 
 function listMemoryFiles(memoryDir: string): string[] {
@@ -161,10 +216,16 @@ function listMemoryFiles(memoryDir: string): string[] {
 /**
  * Append consistency notes to the raw index content so the agent always sees an
  * accurate picture of the memory directory even if `_index.md` drifted.
+ *
+ * Only filenames that appear as the first token of a list item (`- foo.md ...`)
+ * are treated as indexed entries, so prose mentions of `README.md` inside a
+ * description do not produce false "stale" reports.
  */
 function reconcileIndex(indexContent: string, memoryFiles: string[]): string {
 	const listedFiles = new Set<string>();
-	for (const match of indexContent.matchAll(/([A-Za-z0-9._-]+\.md)/g)) {
+	// Match the first filename-like token of each bullet list item. Anchoring
+	// to the start of a line + bullet avoids matching `.md` mentions in prose.
+	for (const match of indexContent.matchAll(/^\s*[-*]\s+([A-Za-z0-9._-]+\.md)\b/gm)) {
 		listedFiles.add(basename(match[1]));
 	}
 
@@ -187,16 +248,50 @@ function reconcileIndex(indexContent: string, memoryFiles: string[]): string {
 	return result.length > 0 ? `${result}\n` : "";
 }
 
-/** Guidelines appended to the system prompt when running as the main agent. */
-export function getMainAgentGuidelines(memoryDir: string): string[] {
-	return [
+/** Options for {@link getMainAgentGuidelines}. */
+export interface MainAgentGuidelinesOptions {
+	/** Path to the soul file, so the agent can edit it. */
+	soulPath?: string;
+	/** True when the soul file is still the untouched default template. */
+	soulUninitialized?: boolean;
+}
+
+/**
+ * Guidelines appended to the system prompt when running as the main agent.
+ *
+ * When `soulUninitialized` is true, an extra guideline is prepended instructing
+ * the agent to proactively invite the user to define its identity — either by
+ * editing the soul file directly or by describing what they want in
+ * conversation, in which case the agent updates the file itself.
+ */
+export function getMainAgentGuidelines(
+	memoryDir: string,
+	options?: MainAgentGuidelinesOptions,
+): string[] {
+	const guidelines: string[] = [];
+
+	if (options?.soulUninitialized && options?.soulPath) {
+		guidelines.push(
+			`IMPORTANT: Your soul file (${options.soulPath}) is a placeholder — your identity, values, and voice are all marked [NOT YET DEFINED]. You MUST proactively invite the user to define who you are. In your FIRST response to the user, before addressing their question, ask them to describe what kind of agent they want: a name, a role, a tone, values they want you to hold. Tell them they can either describe it in conversation (and you will write it to the soul file) or edit the file directly. This is required — do not skip it. After the user has defined your soul, never repeat this invitation.`,
+		);
+	}
+
+	if (options?.soulPath) {
+		guidelines.push(
+			`When the user asks you to remember a preference, update your personality, or change your voice/values, edit your soul file at ${options.soulPath} with the write or edit command. Treat the soul as your self-definition: keep it concise and meaningful. When the user describes what they want, write it into the soul file immediately — do not just acknowledge, actually update the file.`,
+		);
+	}
+
+	guidelines.push(
 		"You are a persistent agent: your identity lives in the Identity section and your long-term memory index is in the Long-Term Memory section of this prompt.",
 		"Before starting a new topic, review the relevant long-term memory; the index is in the prompt, read the specific memory file with the read command when you need details.",
 		`When you learn a stable fact about the user, write it to the appropriate file under ${memoryDir} (create a new file for a new topic and add it to _index.md).`,
 		`When you notice outdated or inaccurate information in memory, update or delete the corresponding file under ${memoryDir} and keep _index.md in sync.`,
 		"Memory you write during a session is loaded into the system prompt at the next session boundary (after session_split), not immediately.",
 		"You can delegate a task to a sub-agent in another project directory by running the pizza CLI, e.g. `pizza --cwd /path/to/project -p \"fix the auth bug in login.ts\"`; keep that project's context out of this conversation.",
-	];
+	);
+
+	return guidelines;
 }
 
 // ── Single-instance lockfile ───────────────────────────────────────────────
@@ -219,11 +314,28 @@ function isProcessAlive(pid: number): boolean {
  * Acquire a best-effort single-instance lock for the main agent.
  * Returns a lock handle on success, or null if another live instance holds it.
  * A stale lock (owning process no longer alive) is reclaimed automatically.
+ *
+ * The create path uses `flag: "wx"` (exclusive create) to avoid the TOCTOU
+ * race between `existsSync` and `writeFileSync`.
  */
 export function acquireMainLock(mainDir: string): MainAgentLock | null {
 	mkdirSync(mainDir, { recursive: true });
 	const lockPath = join(mainDir, ".lock");
 
+	// Fast path: atomically create the lock file. If it does not exist yet,
+	// `wx` succeeds and we own the lock.
+	try {
+		writeFileSync(lockPath, String(process.pid), { encoding: "utf-8", flag: "wx" });
+	} catch (error) {
+		// EEXIST → a lock file is present; fall through to the reclaim path.
+		// Anything else (e.g. permission error) → give up.
+		if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+			return null;
+		}
+	}
+
+	// Reclaim path: a lock file already exists. Check whether its owner is
+	// still alive; if not, overwrite it and take ownership.
 	if (existsSync(lockPath)) {
 		let ownerPid = NaN;
 		try {
@@ -234,12 +346,12 @@ export function acquireMainLock(mainDir: string): MainAgentLock | null {
 		if (!Number.isNaN(ownerPid) && ownerPid !== process.pid && isProcessAlive(ownerPid)) {
 			return null;
 		}
-	}
-
-	try {
-		writeFileSync(lockPath, String(process.pid), "utf-8");
-	} catch {
-		return null;
+		// Owner is dead or it's our own pid (re-entrant call) — reclaim.
+		try {
+			writeFileSync(lockPath, String(process.pid), "utf-8");
+		} catch {
+			return null;
+		}
 	}
 
 	let released = false;
