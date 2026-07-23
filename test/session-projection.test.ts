@@ -332,6 +332,31 @@ describe("SessionManager", () => {
 		]);
 	});
 
+	it("should fork without preserving history when preserveHistory is false", () => {
+		const mgr = new SessionManager(store, store);
+		const source = mgr.createSession("user_explicit", "Original");
+		store.append({ actor_id: "user", type: "USER_MESSAGE", payload: { content: "source message" } });
+
+		const forked = mgr.forkFromSession(source.session_id, { preserveHistory: false });
+		store.append({ actor_id: "user", type: "USER_MESSAGE", payload: { content: "fork message" } });
+
+		const forkProjection = mgr.getSessionProjection(forked.session_id)!;
+		const textContents = (messages: ReturnType<typeof forkProjection.buildContext>["messages"]) =>
+			messages.map((message) => ("content" in message ? message.content : undefined));
+		// Fork should NOT include the source's "source message" — only "fork message"
+		expect(forked.event_range.start_event_id).not.toBe(source.event_range.start_event_id);
+		expect(textContents(forkProjection.buildContext().messages)).toEqual(["fork message"]);
+	});
+
+	it("should fork preserving history by default (backward compat)", () => {
+		const mgr = new SessionManager(store, store);
+		const source = mgr.createSession("user_explicit", "Original");
+		store.append({ actor_id: "user", type: "USER_MESSAGE", payload: { content: "source message" } });
+
+		const forked = mgr.forkFromSession(source.session_id);
+		expect(forked.event_range.start_event_id).toBe(source.event_range.start_event_id);
+	});
+
 	it("should persist sessions to disk", () => {
 		{
 			const mgr = new SessionManager(store, store);

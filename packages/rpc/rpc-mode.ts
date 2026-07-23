@@ -540,7 +540,7 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 						});
 					}
 					case "fork": {
-						const desc = sessionManager.forkFromSession(command.sessionId);
+						const desc = sessionManager.forkFromSession(command.sessionId, { preserveHistory: false });
 						return success(id, "history_tree", { action: "fork", session_id: desc.session_id });
 					}
 					case "rename": {

@@ -45,6 +45,12 @@ const DEFAULT_CONTEXT_WINDOW = 128000;
 const DEFAULT_RESERVE_TOKENS = 16384;
 const DEFAULT_KEEP_RECENT_TOKENS = 20000;
 
+/**
+ * Ratio threshold above which a provider-reported usage is considered stale.
+ * See compaction.ts for the full rationale.
+ */
+const STALE_USAGE_RATIO = 1.5;
+
 const SUMMARIZATION_PROMPT = `The messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.
 
 Use this EXACT format:
@@ -269,6 +275,23 @@ function estimateMessagesTokens(messages: AgentMessage[]): number {
 	const usageInfo = findLastAssistantUsage(messages);
 	if (!usageInfo) {
 		return messages.reduce((sum, message) => sum + estimateMessageTokens(message), 0);
+	}
+
+	// Detect stale usage: if our char/4 estimate of the prefix messages
+	// significantly exceeds the provider-reported total, the message list has
+	// grown beyond what the provider saw (e.g. after a session fork). Fall back
+	// to full estimation to avoid underestimating context size.
+	let prefixEstimatedTokens = 0;
+	for (let i = 0; i <= usageInfo.index; i++) {
+		prefixEstimatedTokens += estimateMessageTokens(messages[i]!);
+	}
+
+	if (prefixEstimatedTokens > usageInfo.totalTokens * STALE_USAGE_RATIO) {
+		let trailingTokens = 0;
+		for (let i = usageInfo.index + 1; i < messages.length; i++) {
+			trailingTokens += estimateMessageTokens(messages[i]!);
+		}
+		return prefixEstimatedTokens + trailingTokens;
 	}
 
 	let trailingTokens = 0;

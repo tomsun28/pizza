@@ -101,8 +101,26 @@ function getLastAssistantUsageInfo(messages: AgentMessage[]): { usage: Usage; in
 }
 
 /**
+ * Ratio threshold above which a provider-reported usage is considered stale.
+ *
+ * After a session fork or switch, the message list may include messages from a
+ * different context. The last assistant usage's totalTokens reflects the context
+ * size at the time of that call, not the current (larger) context. If our
+ * char/4 estimate of the prefix messages exceeds the reported usage by more than
+ * this factor, the usage is unreliable and we fall back to full estimation.
+ *
+ * The 1.5x factor accounts for the inherent inaccuracy of the chars/4 heuristic
+ * compared to the provider's tokenizer (can differ by ~30-40% for non-English
+ * text or efficient tokenizers).
+ */
+const STALE_USAGE_RATIO = 1.5;
+
+/**
  * Estimate context tokens from messages, using the last assistant usage when available.
  * If there are messages after the last usage, estimate their tokens with estimateTokens.
+ *
+ * Falls back to full char/4 estimation when the provider-reported usage appears stale
+ * (e.g. after a session fork that merged in messages from a different context).
  */
 export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEstimate {
 	const usageInfo = getLastAssistantUsageInfo(messages);
@@ -121,6 +139,29 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
 	}
 
 	const usageTokens = calculateContextTokens(usageInfo.usage);
+
+	// Detect stale usage: estimate the tokens of all messages up to and including
+	// the usage point. If the estimate significantly exceeds the reported usage,
+	// the message list has grown beyond what the provider saw (e.g. after a fork).
+	let prefixEstimatedTokens = 0;
+	for (let i = 0; i <= usageInfo.index; i++) {
+		prefixEstimatedTokens += estimateTokens(messages[i]);
+	}
+
+	if (prefixEstimatedTokens > usageTokens * STALE_USAGE_RATIO) {
+		// Usage is stale — fall back to full estimation
+		let estimated = prefixEstimatedTokens;
+		for (let i = usageInfo.index + 1; i < messages.length; i++) {
+			estimated += estimateTokens(messages[i]);
+		}
+		return {
+			tokens: estimated,
+			usageTokens: 0,
+			trailingTokens: estimated,
+			lastUsageIndex: usageInfo.index,
+		};
+	}
+
 	let trailingTokens = 0;
 	for (let i = usageInfo.index + 1; i < messages.length; i++) {
 		trailingTokens += estimateTokens(messages[i]);

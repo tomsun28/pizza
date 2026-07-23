@@ -170,7 +170,7 @@ export class EventStoreExtensionSessionManager implements ExtensionSessionManage
 				return { session_id: result.descriptor.session_id, reopened: result.reopened };
 			},
 			fork: (sessionId) => {
-				const desc = manager.forkFromSession(sessionId);
+				const desc = manager.forkFromSession(sessionId, { preserveHistory: false });
 				return { session_id: desc.session_id };
 			},
 		};

@@ -252,6 +252,64 @@ describe("getLastAssistantUsage", () => {
 	});
 });
 
+describe("estimateContextTokens – stale usage detection", () => {
+	it("should use provider-reported usage when it matches the message list", () => {
+		// Normal case: usage reflects the actual context size
+		const messages: AgentMessage[] = [
+			createUserMessage("Hello world"),
+			createAssistantMessage("Hi", createMockUsage(10, 5)),
+		];
+		const estimate = estimateContextTokens(messages);
+		// usage totalTokens = 15, trailing = 0 → tokens = 15
+		expect(estimate.tokens).toBe(15);
+		expect(estimate.usageTokens).toBe(15);
+	});
+
+	it("should fall back to full estimation when usage is stale (fork scenario)", () => {
+		// Fork scenario: many messages exist BEFORE the last assistant usage
+		// that were not part of its context. The usage's totalTokens (150)
+		// is much less than the estimated tokens of all messages up to that
+		// point, so the usage is stale.
+		const largePrefix = "x".repeat(4000); // ~1000 tokens at chars/4
+		const messages: AgentMessage[] = [
+			createUserMessage(largePrefix), // ~1000 tokens — from a different session
+			createUserMessage(largePrefix), // ~1000 tokens — from a different session
+			createAssistantMessage("response", createMockUsage(100, 50)), // usage says 150 tokens
+			createUserMessage("trailing message"), // ~4 tokens
+		];
+		const estimate = estimateContextTokens(messages);
+		// Without stale detection: 150 + 4 = 154 (wildly underestimates)
+		// With stale detection: ~1000 + 1000 + ~38 + 4 = ~2042 (full estimation)
+		expect(estimate.tokens).toBeGreaterThan(1500);
+		expect(estimate.usageTokens).toBe(0); // usage was stale, not used
+	});
+
+	it("should not fall back when usage is close to the estimate", () => {
+		// Usage (200 tokens) is close to the estimated prefix (~175 tokens).
+		// The 1.5x ratio threshold means 175 < 200 * 1.5 = 300, so usage is trusted.
+		const messages: AgentMessage[] = [
+			createUserMessage("x".repeat(200)), // ~50 tokens
+			createAssistantMessage("response", createMockUsage(150, 50)), // 200 tokens
+			createUserMessage("x".repeat(200)), // ~50 tokens trailing
+		];
+		const estimate = estimateContextTokens(messages);
+		// usage totalTokens = 200, trailing = 50 → tokens = 250
+		expect(estimate.tokens).toBe(250);
+		expect(estimate.usageTokens).toBe(200);
+	});
+
+	it("should handle no usage messages by estimating all tokens", () => {
+		const messages: AgentMessage[] = [
+			createUserMessage("x".repeat(400)), // ~100 tokens
+			createUserMessage("x".repeat(400)), // ~100 tokens
+		];
+		const estimate = estimateContextTokens(messages);
+		expect(estimate.tokens).toBe(200);
+		expect(estimate.usageTokens).toBe(0);
+		expect(estimate.lastUsageIndex).toBeNull();
+	});
+});
+
 describe("shouldCompact", () => {
 	it("should return true when context exceeds threshold", () => {
 		const settings: CompactionSettings = {

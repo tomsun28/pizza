@@ -109,7 +109,7 @@ export function createHistoryTreeToolDefinition(): ToolDefinition<typeof history
 						const result = historyTree.fork(params.session_id);
 						return textResult(
 							`Forked session ${params.session_id} into new branch ${result.session_id}. ` +
-								"Your context now includes the source session's history — proceed with the alternative approach.",
+								"Your context starts fresh from the fork point — proceed with the alternative approach.",
 						);
 					}
 				}
