@@ -131,6 +131,27 @@ export interface RpcSessionState {
 	ptyPort?: number;
 	/** When true, risky tool calls require explicit user approval before running. */
 	safeMode?: boolean;
+	/** Estimated context window usage for the current session. */
+	contextUsage?: RpcContextUsage;
+	/** Cumulative token usage across all assistant messages in the session. */
+	tokenUsage?: RpcTokenUsage;
+}
+
+export interface RpcContextUsage {
+	/** Estimated context tokens, or null if unknown. */
+	tokens: number | null;
+	/** Model context window size in tokens. */
+	contextWindow: number;
+	/** Context usage as percentage of context window (0-100), or null if unknown. */
+	percent: number | null;
+}
+
+export interface RpcTokenUsage {
+	totalInput: number;
+	totalOutput: number;
+	totalCacheRead: number;
+	totalCacheWrite: number;
+	totalCost: number;
 }
 
 // ============================================================================

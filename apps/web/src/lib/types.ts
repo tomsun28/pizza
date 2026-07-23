@@ -7,6 +7,8 @@ export {
 	type RpcCommand,
 	type RpcResponse,
 	type RpcSessionState,
+	type RpcContextUsage,
+	type RpcTokenUsage,
 	type RpcExtensionUIRequest,
 	type RpcExtensionUIResponse,
 	type RpcCommandType,

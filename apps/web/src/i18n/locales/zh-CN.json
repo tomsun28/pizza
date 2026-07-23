@@ -8,7 +8,9 @@
 		"settings": "设置",
 		"error": "错误",
 		"starting": "启动中...",
-		"backToChat": "返回聊天"
+		"backToChat": "返回聊天",
+		"back": "后退",
+		"forward": "前进"
 	},
 	"layout": {
 		"brandTagline": "一起创造。",
@@ -53,9 +55,21 @@
 		"configureApiKey": "在设置中配置 API 密钥 →",
 		"stopDictation": "停止听写",
 		"voiceInput": "语音输入",
+		"transcribing": "正在转录...",
 		"stop": "停止",
 		"send": "发送",
-		"sendHint": "回车发送 · shift+回车换行"
+		"sendHint": "回车发送 · shift+回车换行",
+		"approvalPolicy": "当前会话的审批策略",
+		"approvalOff": "自动",
+		"approvalOffHint": "无需确认直接执行工具",
+		"approvalOn": "需审批",
+		"approvalOnHint": "有风险的工具调用会暂停等待你确认",
+		"contextUsed": "上下文",
+		"inputTokens": "输入",
+		"outputTokens": "输出",
+		"cacheRead": "缓存读取",
+		"cacheWrite": "缓存写入",
+		"cost": "费用"
 	},
 	"conversation": {
 		"showLess": "收起",
