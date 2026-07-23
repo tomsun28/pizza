@@ -6,6 +6,16 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 
+/// Read an API key for a provider from ~/.pizza/agent/auth.json.
+fn read_api_key(provider: &str) -> Option<String> {
+	let home = std::env::var("HOME").ok()?;
+	let auth_path = PathBuf::from(&home).join(".pizza").join("agent").join("auth.json");
+	let raw = std::fs::read_to_string(&auth_path).ok()?;
+	let parsed: Value = serde_json::from_str(&raw).ok()?;
+	let key = parsed.get(provider)?.get("key")?.as_str()?.to_string();
+	if key.is_empty() { None } else { Some(key) }
+}
+
 fn log_file(msg: &str) {
 	use std::io::Write;
 	if let Ok(mut f) = std::fs::OpenOptions::new()
@@ -276,7 +286,13 @@ pub async fn init_sidecar(
 	// Multi-sidecar: never kill the old sidecar on switch — it persists.
 	// Just update the active workspace mapping for this window (done below).
 
-	let (program, args) = resolve_pizza_command(window.app_handle());
+	let (program, mut args) = resolve_pizza_command(window.app_handle());
+	// When the workspace is the persistent Chat (~/.pizza/main), launch pizza
+	// in main-agent mode so it initializes the soul file + long-term memory
+	// scaffold and injects the main-agent guidelines into the system prompt.
+	if is_persistent_chat {
+		args.push("--main".to_string());
+	}
 	let mut cmd = Command::new(&program);
 	cmd.args(&args);
 	cmd.current_dir(&cwd);
@@ -874,4 +890,81 @@ pub async fn set_window_background(app: AppHandle, r: u8, g: u8, b: u8) -> Resul
 			.map_err(|e| format!("set_background_color: {e}"))?;
 	}
 	Ok(())
+}
+
+/// Transcribe audio data using OpenAI's Whisper API.
+///
+/// `audio_b64` is base64-encoded audio data (no data-URL prefix).
+/// `mime_type` is the audio MIME type (e.g. "audio/webm", "audio/mp4").
+/// The OpenAI API key is read from ~/.pizza/agent/auth.json under the "openai" key.
+#[tauri::command]
+pub async fn transcribe_audio(
+	audio_b64: String,
+	mime_type: String,
+) -> Result<String, String> {
+	let api_key = read_api_key("openai").ok_or_else(|| {
+		"OpenAI API key not found. Add it in Settings to use voice input.".to_string()
+	})?;
+
+	// Decode base64 audio.
+	let audio_bytes = base64::Engine::decode(
+		&base64::engine::general_purpose::STANDARD,
+		&audio_b64,
+	)
+	.map_err(|e| format!("base64 decode: {e}"))?;
+
+	// Determine file extension from MIME type.
+	let ext = match mime_type.as_str() {
+		"audio/webm" => "webm",
+		"audio/mp4" | "audio/m4a" => "mp4",
+		"audio/ogg" => "ogg",
+		"audio/wav" | "audio/wave" | "audio/x-wav" => "wav",
+		"audio/mpeg" | "audio/mp3" => "mp3",
+		_ => "webm",
+	};
+	let filename = format!("recording.{}", ext);
+
+	// Build multipart form and POST to OpenAI Whisper API.
+	let part = reqwest::multipart::Part::bytes(audio_bytes)
+		.file_name(filename)
+		.mime_str(&mime_type)
+		.map_err(|e| format!("mime_str: {e}"))?;
+	let form = reqwest::multipart::Form::new()
+		.text("model", "whisper-1")
+		.part("file", part);
+
+	let client = reqwest::Client::new();
+	let resp = client
+		.post("https://api.openai.com/v1/audio/transcriptions")
+		.bearer_auth(&api_key)
+		.multipart(form)
+		.send()
+		.await
+		.map_err(|e| format!("Whisper request: {e}"))?;
+
+	if !resp.status().is_success() {
+		let status = resp.status();
+		let body = resp.text().await.unwrap_or_default();
+		let msg = if body.len() > 500 {
+			format!("Whisper API error ({}): {}...", status, &body[..500])
+		} else {
+			format!("Whisper API error ({}): {}", status, body)
+		};
+		log_file(&msg);
+		return Err(msg);
+	}
+
+	let json: Value = resp
+		.json()
+		.await
+		.map_err(|e| format!("Whisper response parse: {e}"))?;
+
+	let text = json
+		.get("text")
+		.and_then(|t| t.as_str())
+		.unwrap_or("")
+		.trim()
+		.to_string();
+
+	Ok(text)
 }
