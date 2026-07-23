@@ -95,7 +95,9 @@ export type RpcCommand =
 	// Approval (safe mode)
 	| { id?: string; type: "approve"; intentEventId: string }
 	| { id?: string; type: "reject"; intentEventId: string }
-	| { id?: string; type: "set_safe_mode"; enabled: boolean };
+	| { id?: string; type: "set_safe_mode"; enabled: boolean }
+	| { id?: string; type: "new_session" }
+	| { id?: string; type: "get_skills" };
 
 // ============================================================================
 // RPC Slash Command (for get_commands response)
@@ -111,6 +113,15 @@ export interface RpcSlashCommand {
 	source: "extension" | "prompt" | "skill";
 	/** Source metadata for the owning resource */
 	sourceInfo: unknown;
+}
+
+/** A user-invocable skill (from ~/.pizza skills), as returned by get_skills. */
+export interface RpcSkillInfo {
+	/** Command name without leading slash (e.g. "skill:my-skill"). */
+	command: string;
+	/** Human-readable name. */
+	name: string;
+	description?: string;
 }
 
 // ============================================================================
@@ -216,6 +227,8 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "approve"; success: true }
 	| { id?: string; type: "response"; command: "reject"; success: true }
 	| { id?: string; type: "response"; command: "set_safe_mode"; success: true; data: { safeMode: boolean } }
+	| { id?: string; type: "response"; command: "new_session"; success: true; data: { sessionId: string } }
+	| { id?: string; type: "response"; command: "get_skills"; success: true; data: { skills: RpcSkillInfo[] } }
 
 	// Error response (any command can fail)
 	| { id?: string; type: "response"; command: string; success: false; error: string };

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowUp, Square, Mic, Plus, ChevronDown, Check, X, Loader2, Shield, ShieldCheck } from "lucide-react";
+import { ArrowUp, Square, Mic, Plus, ChevronDown, Check, X, Loader2, Shield, ShieldCheck, ImagePlus, Sparkles, MessageSquarePlus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
-import { sendCommandAwait, setSafeMode } from "@/lib/transport";
+import { sendCommandAwait, setSafeMode, newSession, getSkills, type SkillInfo } from "@/lib/transport";
 import type { RpcSessionState, RpcContextUsage, RpcTokenUsage, ModelInfo } from "@/lib/types";
 
 function isTauri(): boolean {
@@ -189,6 +189,9 @@ export function Composer({
 	const mediaStreamRef = useRef<MediaStream | null>(null);
 	const modelMenuRef = useRef<HTMLDivElement>(null);
 	const approvalMenuRef = useRef<HTMLDivElement>(null);
+	const plusMenuRef = useRef<HTMLDivElement>(null);
+	const [plusMenuOpen, setPlusMenuOpen] = useState(false);
+	const [skills, setSkills] = useState<SkillInfo[]>([]);
 
 	// Only show models whose provider has valid auth. Models without auth
 	// (hasAuth === false) are hidden from the selector entirely — they can't
@@ -260,6 +263,31 @@ export function Composer({
 		return () => document.removeEventListener("mousedown", onClick);
 	}, [approvalMenuOpen]);
 
+	// Load available skills (invocable as slash commands) for the + menu.
+	useEffect(() => {
+		if (!sidecarReady) return;
+		let cancelled = false;
+		(async () => {
+			const list = await getSkills();
+			if (!cancelled) setSkills(list);
+		})();
+		return () => {
+			cancelled = true;
+		};
+	}, [sidecarReady, state?.sessionId]);
+
+	// Close + menu on outside click.
+	useEffect(() => {
+		if (!plusMenuOpen) return;
+		const onClick = (e: MouseEvent) => {
+			if (plusMenuRef.current && !plusMenuRef.current.contains(e.target as Node)) {
+				setPlusMenuOpen(false);
+			}
+		};
+		document.addEventListener("mousedown", onClick);
+		return () => document.removeEventListener("mousedown", onClick);
+	}, [plusMenuOpen]);
+
 	// Optimistic local override — set immediately on user selection so the
 	// trigger label updates without waiting for the MODEL_CHANGED round-trip.
 	// Cleared whenever state.model catches up to it.
@@ -298,6 +326,29 @@ export function Composer({
 			console.error("[composer] set_safe_mode failed:", e);
 		}
 	}, [onRefreshState]);
+
+	// Start a fresh conversation session (new context scope).
+	const handleNewSession = useCallback(async () => {
+		setPlusMenuOpen(false);
+		const sessionId = await newSession();
+		if (sessionId) {
+			onRefreshState?.();
+		}
+	}, [onRefreshState]);
+
+	// Insert a skill invocation (slash command) into the input and focus it.
+	const handleInsertSkill = useCallback((command: string) => {
+		setPlusMenuOpen(false);
+		setInput((prev) => {
+			const insert = `/${command} `;
+			// Put the slash command on its own line so it parses correctly,
+			// then the user can type arguments / context below it.
+			if (!prev.trim()) return insert;
+			return `${prev.trimEnd()}\n${insert}`;
+		});
+		// Refocus the textarea so the user can continue typing arguments.
+		requestAnimationFrame(() => textareaRef.current?.focus());
+	}, []);
 
 	const startRecording = useCallback(() => {
 		if (isTauri()) {
@@ -534,6 +585,8 @@ export function Composer({
 					<div className="mt-1 flex items-center justify-between gap-2">
 						{/* Left cluster */}
 						<div className="flex items-center gap-1">
+
+						{/* + button: multi-action menu (new session, attach, skills) */}
 							<input
 								ref={fileInputRef}
 								type="file"
@@ -542,16 +595,73 @@ export function Composer({
 								className="hidden"
 								onChange={handleFileChange}
 							/>
-							<button
-								type="button"
-								disabled={!sidecarReady}
-								onClick={() => fileInputRef.current?.click()}
-								className="flex h-8 w-8 items-center justify-center rounded-full text-muted transition-colors hover:bg-surface hover:text-fg disabled:opacity-40"
-								title={t("composer.attachImage")}
-							>
-								<Plus className="h-4 w-4" />
-							</button>
-
+							<div className="relative" ref={plusMenuRef}>
+								<button
+									type="button"
+									disabled={!sidecarReady}
+									onClick={() => setPlusMenuOpen((o) => !o)}
+									className="flex h-8 w-8 items-center justify-center rounded-full text-muted transition-colors hover:bg-surface hover:text-fg disabled:opacity-40"
+									title={t("composer.add")}
+								>
+									<Plus className="h-4 w-4" />
+								</button>
+								{plusMenuOpen && (
+									<div className="absolute bottom-full left-0 z-50 mb-2 w-64 rounded-xl border border-border bg-surface p-1 shadow-xl">
+										<button
+											type="button"
+											onClick={() => void handleNewSession()}
+											className="flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors hover:bg-surface-2"
+										>
+											<MessageSquarePlus className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted" />
+											<span className="min-w-0 flex-1">
+												<span className="block text-fg">{t("composer.newSession")}</span>
+												<span className="block text-[10px] text-muted">{t("composer.newSessionHint")}</span>
+											</span>
+										</button>
+										<button
+											type="button"
+											onClick={() => {
+												setPlusMenuOpen(false);
+												fileInputRef.current?.click();
+											}}
+											className="flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors hover:bg-surface-2"
+										>
+											<ImagePlus className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted" />
+											<span className="min-w-0 flex-1">
+												<span className="block text-fg">{t("composer.attachImage")}</span>
+												<span className="block text-[10px] text-muted">{t("composer.attachImageHint")}</span>
+											</span>
+										</button>
+										{skills.length > 0 && (
+											<>
+												<div className="my-1 border-t border-border/60" />
+												<div className="px-2.5 py-1 text-[10px] uppercase tracking-wider text-muted">
+													{t("composer.skills")}
+												</div>
+												<div className="max-h-52 overflow-y-auto">
+													{skills.map((s) => (
+														<button
+															key={s.command}
+															type="button"
+															onClick={() => handleInsertSkill(s.command)}
+															title={s.description}
+															className="flex w-full items-start gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-surface-2"
+														>
+															<Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted" />
+															<span className="min-w-0 flex-1">
+																<span className="block truncate text-fg">{s.name}</span>
+																{s.description && (
+																	<span className="block truncate text-[10px] text-muted">{s.description}</span>
+																)}
+															</span>
+														</button>
+													))}
+												</div>
+											</>
+										)}
+									</div>
+								)}
+							</div>
 							{/* Approval policy selector — chooses safe mode for the current session */}
 							<div className="relative" ref={approvalMenuRef}>
 								<button

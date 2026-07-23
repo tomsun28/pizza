@@ -69,7 +69,12 @@
 		"outputTokens": "输出",
 		"cacheRead": "缓存读取",
 		"cacheWrite": "缓存写入",
-		"cost": "费用"
+		"cost": "费用",
+		"add": "添加",
+		"newSession": "新会话",
+		"newSessionHint": "开启全新的对话",
+		"attachImageHint": "在消息中附加图片",
+		"skills": "技能"
 	},
 	"conversation": {
 		"showLess": "收起",

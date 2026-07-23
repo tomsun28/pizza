@@ -617,6 +617,23 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 				facade.settingsManager.setSafeMode(enabled);
 				return success(id, "set_safe_mode", { safeMode: facade.runtime.isSafeMode });
 			}
+		case "new_session": {
+			const desc = facade.runtime.sessionManager?.createSession("user_explicit");
+			const sessionId = desc?.session_id ?? facade.runtime.sessionManager?.getActiveSessionId() ?? "";
+			return success(id, "new_session", { sessionId });
+		}
+
+		case "get_skills": {
+			const enableSkills = facade.settingsManager.getEnableSkillCommands();
+			const skills = enableSkills
+				? (facade.resourceLoader?.getSkills().skills ?? []).map((s) => ({
+						command: `skill:${s.name}`,
+						name: s.name,
+						description: s.description,
+					}))
+				: [];
+			return success(id, "get_skills", { skills });
+		}
 
 			default: {
 				const unknownCommand = command as { type: string };

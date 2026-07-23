@@ -69,7 +69,12 @@
 		"outputTokens": "Output",
 		"cacheRead": "Cache read",
 		"cacheWrite": "Cache write",
-		"cost": "Cost"
+		"cost": "Cost",
+		"add": "Add",
+		"newSession": "New session",
+		"newSessionHint": "Start a fresh conversation",
+		"attachImageHint": "Attach an image to your message",
+		"skills": "Skills"
 	},
 	"conversation": {
 		"showLess": "Show less",

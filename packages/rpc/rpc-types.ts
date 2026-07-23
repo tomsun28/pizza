@@ -17,6 +17,7 @@ export {
 	type RpcHistorySessionView,
 	type RpcHistoryTreeResult,
 	type RpcForensicEvent,
+	type RpcSkillInfo,
 	classifyLine,
 	PROTOCOL_VERSION,
 } from "@pizza/protocol";
@@ -25,6 +26,7 @@ import type {
 	RpcSessionState as ProtocolSessionState,
 	RpcHistoryTreeResult,
 	RpcForensicEvent,
+	RpcSkillInfo,
 } from "@pizza/protocol";
 
 import type { AgentMessage, ThinkingLevel } from "../../src/core/agent/types.js";
@@ -108,6 +110,8 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "approve"; success: true }
 	| { id?: string; type: "response"; command: "reject"; success: true }
 	| { id?: string; type: "response"; command: "set_safe_mode"; success: true; data: { safeMode: boolean } }
+	| { id?: string; type: "response"; command: "new_session"; success: true; data: { sessionId: string } }
+	| { id?: string; type: "response"; command: "get_skills"; success: true; data: { skills: RpcSkillInfo[] } }
 
 	// Error response (any command can fail)
 	| { id?: string; type: "response"; command: string; success: false; error: string };

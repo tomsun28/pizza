@@ -545,15 +545,17 @@ export default function ChatView({
 				});
 				break;
 			}
+			case "SESSION_CREATED":
 			case "SESSION_FORKED":
 			case "SESSION_JUMPED": {
-				// The active session changed (user jumped/forked from the
-				// BranchTreeExplorer, or replayed from the Timeline). Our
-				// current items belong to the OLD session — reload from
-				// get_messages for the NEW active session. Only react to
-				// events for the current workspace. Debounced so a fork
-				// (which emits SESSION_CREATED + SESSION_FORKED in quick
-				// succession) only triggers one reload.
+				// The active session changed (user started a new session,
+				// jumped/forked from the BranchTreeExplorer, or replayed
+				// from the Timeline). Our current items belong to the OLD
+				// session — reload from get_messages for the NEW active
+				// session. Only react to events for the current workspace.
+				// Debounced so a fork (which emits SESSION_CREATED +
+				// SESSION_FORKED in quick succession) only triggers one
+				// reload.
 				if (!isForCurrent) break;
 				if (sessionSwitchTimer.current) clearTimeout(sessionSwitchTimer.current);
 				sessionSwitchTimer.current = setTimeout(() => {

@@ -247,6 +247,32 @@ export async function setSafeMode(enabled: boolean): Promise<boolean> {
 	const r = await sendCommandAwait<{ safeMode: boolean }>({ type: "set_safe_mode", enabled }, 5000);
 	return r.data?.safeMode ?? enabled;
 }
+export interface SkillInfo {
+	command: string;
+	name: string;
+	description?: string;
+}
+
+/** Start a new conversation session (clears context for a fresh task). */
+export async function newSession(): Promise<string | null> {
+	try {
+		const r = await sendCommandAwait<{ sessionId: string }>({ type: "new_session" }, 5000);
+		return r.data?.sessionId ?? null;
+	} catch (e) {
+		console.error("[composer] new_session failed", e);
+		return null;
+	}
+}
+
+/** List available skills (invocable as slash commands). */
+export async function getSkills(): Promise<SkillInfo[]> {
+	try {
+		const r = await sendCommandAwait<{ skills: SkillInfo[] }>({ type: "get_skills" }, 10000);
+		return r.data?.skills ?? [];
+	} catch {
+		return [];
+	}
+}
 
 // --- Delete workspace (Tauri only) ---
 
