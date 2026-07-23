@@ -172,11 +172,13 @@ export default function ChatView({
 	sidecarReady,
 	sidecarExitCode,
 	workspace,
+	onRefreshState,
 }: {
 	state: RpcSessionState | null;
 	sidecarReady: boolean;
 	sidecarExitCode: number | null;
 	workspace?: string | null;
+	onRefreshState?: () => void;
 }) {
 	const { sidebarCollapsed } = useOutletContext<LayoutOutletContext>() ?? { sidebarCollapsed: false };
 	const { t } = useTranslation();
@@ -697,6 +699,7 @@ export default function ChatView({
 				isRunning={isRunning}
 				onSend={handleSend}
 				onAbort={handleAbort}
+				onRefreshState={onRefreshState}
 				/>
 			<ApprovalDialog
 				approval={pendingApproval}

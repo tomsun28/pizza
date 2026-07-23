@@ -1,12 +1,14 @@
-import { useState, useEffect, useCallback, type ReactNode } from "react";
+import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { useNavigate, useLocation, useOutletContext } from "react-router-dom";
 import { PageHeader, Card, Badge, Button } from "@/components/ui";
 import { cn } from "@/lib/utils";
-import { PixelSelect, PixelSwitch, PixelCombobox } from "@pxlkit/ui-kit";
-import { listProviders, setProviderApiKey, removeProviderApiKey, setSafeMode, type ProviderInfo } from "@/lib/transport";
+import { PixelSelect, PixelCombobox } from "@pxlkit/ui-kit";
+import { listProviders, setProviderApiKey, removeProviderApiKey, type ProviderInfo } from "@/lib/transport";
 import type { RpcSessionState } from "@/lib/types";
 import { sendCommandAwait } from "@/lib/transport";
-import { Key, Trash2, Eye, EyeOff, Plus } from "lucide-react";
+import { Key, Trash2, Eye, EyeOff, Plus, ArrowLeft, ArrowRight } from "lucide-react";
+import type { LayoutOutletContext } from "@/components/Layout";
 import {
 	SUPPORTED_LANGUAGES,
 	DEFAULT_LANGUAGE,
@@ -31,11 +33,9 @@ const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as 
 
 const THINKING_OPTIONS = THINKING_LEVELS.map((level) => ({ value: level, label: level }));
 
-function GeneralTab({ state, onRefreshState }: { state: RpcSessionState | null; onRefreshState?: () => void }) {
+function GeneralTab({ state }: { state: RpcSessionState | null }) {
 	const { t, i18n } = useTranslation();
 	const [thinkingLevel, setThinkingLevel] = useState<string>(state?.thinkingLevel ?? "off");
-	const [autoCompaction, setAutoCompaction] = useState<boolean>(state?.autoCompactionEnabled ?? true);
-	const [safeMode, setSafeModeState] = useState<boolean>(state?.safeMode ?? false);
 	const [language, setLanguage] = useState<AppLanguage>(
 		(SUPPORTED_LANGUAGES.includes(i18n.language as AppLanguage) ? i18n.language : DEFAULT_LANGUAGE) as AppLanguage,
 	);
@@ -48,27 +48,6 @@ function GeneralTab({ state, onRefreshState }: { state: RpcSessionState | null; 
 			console.error("[settings] set_thinking_level failed:", e);
 		}
 	}, []);
-
-	const handleCompactionChange = useCallback(async (enabled: boolean) => {
-		setAutoCompaction(enabled);
-		try {
-			await sendCommandAwait({ type: "set_auto_compaction", enabled });
-		} catch (e) {
-			console.error("[settings] set_auto_compaction failed:", e);
-		}
-	}, []);
-
-	const handleSafeModeChange = useCallback(async (enabled: boolean) => {
-		setSafeModeState(enabled);
-		try {
-			const actual = await setSafeMode(enabled);
-			setSafeModeState(actual);
-			onRefreshState?.();
-		} catch (e) {
-			console.error("[settings] set_safe_mode failed:", e);
-			setSafeModeState(!enabled);
-		}
-	}, [onRefreshState]);
 
 	const handleLanguageChange = useCallback((value: string) => {
 		const lang = (SUPPORTED_LANGUAGES.includes(value as AppLanguage) ? value : DEFAULT_LANGUAGE) as AppLanguage;
@@ -103,36 +82,6 @@ function GeneralTab({ state, onRefreshState }: { state: RpcSessionState | null; 
 						/>
 					</div>
 				</Row>
-			</Card>
-
-			<Card>
-				<div className="mb-2 text-sm font-medium text-fg">{t("settings.general.compaction")}</div>
-				<Row label={t("settings.general.autoCompaction")}>
-					<PixelSwitch
-						label={t("settings.general.autoCompaction")}
-						checked={autoCompaction}
-						onChange={handleCompactionChange}
-						tone="cyan"
-					/>
-				</Row>
-				{state?.isCompacting && (
-					<Row label={t("settings.general.status")}>
-						<Badge tone="warning">{t("settings.general.compacting")}</Badge>
-					</Row>
-				)}
-			</Card>
-
-			<Card>
-				<div className="mb-2 text-sm font-medium text-fg">{t("settings.general.safeMode")}</div>
-				<Row label={t("settings.general.safeModeLabel")}>
-					<PixelSwitch
-						label={t("settings.general.safeModeLabel")}
-						checked={safeMode}
-						onChange={handleSafeModeChange}
-						tone="cyan"
-					/>
-				</Row>
-				<p className="mt-1 text-xs text-muted">{t("settings.general.safeModeHint")}</p>
 			</Card>
 
 			<Card>
@@ -431,44 +380,98 @@ function ProviderTab() {
 
 export default function SettingsView({
 	state,
-	onRefreshState,
 }: {
 	state: RpcSessionState | null;
-	onRefreshState?: () => void;
 }) {
 	const { t } = useTranslation();
+	const navigate = useNavigate();
+	const location = useLocation();
+	const { sidebarCollapsed } = useOutletContext<LayoutOutletContext>() ?? { sidebarCollapsed: false };
 	const [tab, setTab] = useState<"general" | "provider">("general");
 
-	return (
-		<div className="mx-auto max-w-5xl px-10 pb-10 pt-10">
-			<PageHeader title={t("settings.title")} />
+	// Track browser history position so we can enable/disable back/forward.
+	// react-router v6 stores { idx, usr, key } on window.history.state.
+	const histIdx = (window.history.state as { idx?: number } | null)?.idx ?? 0;
+	const maxIdxRef = useRef(histIdx);
+	if (histIdx > maxIdxRef.current) maxIdxRef.current = histIdx;
+	// Reset the forward ceiling whenever location changes to a fresh entry.
+	useEffect(() => {
+		if (histIdx > maxIdxRef.current) maxIdxRef.current = histIdx;
+	}, [histIdx, location.key]);
+	const canBack = histIdx > 0;
+	const canForward = histIdx < maxIdxRef.current;
 
-			<div className="mb-6 flex gap-1 border-b border-border">
+	return (
+		<div className="flex h-full flex-col">
+			{/* Top bar — sits next to the sidebar collapse button; holds back/forward nav */}
+			<div
+				data-tauri-drag-region
+				className={cn(
+					"flex h-11 shrink-0 items-center gap-1 border-b border-border bg-surface/80 pr-6 backdrop-blur transition-[padding] duration-150",
+					sidebarCollapsed ? "pl-[120px]" : "pl-6",
+				)}
+			>
 				<button
-					onClick={() => setTab("general")}
+					data-no-drag
+					type="button"
+					onClick={() => navigate(-1)}
+					disabled={!canBack}
 					className={cn(
-						"px-4 py-2 text-sm font-medium transition-colors",
-						tab === "general"
-							? "border-b-2 border-accent text-accent"
-							: "text-muted hover:text-fg",
+						"flex h-8 w-8 items-center justify-center rounded-lg transition-colors",
+						canBack ? "text-muted hover:bg-surface-2 hover:text-fg" : "text-muted/30",
 					)}
+					title={t("common.back")}
 				>
-					{t("settings.tabs.general")}
+					<ArrowLeft className="h-4 w-4" />
 				</button>
 				<button
-					onClick={() => setTab("provider")}
+					data-no-drag
+					type="button"
+					onClick={() => navigate(1)}
+					disabled={!canForward}
 					className={cn(
-						"px-4 py-2 text-sm font-medium transition-colors",
-						tab === "provider"
-							? "border-b-2 border-accent text-accent"
-							: "text-muted hover:text-fg",
+						"flex h-8 w-8 items-center justify-center rounded-lg transition-colors",
+						canForward ? "text-muted hover:bg-surface-2 hover:text-fg" : "text-muted/30",
 					)}
+					title={t("common.forward")}
 				>
-					{t("settings.tabs.provider")}
+					<ArrowRight className="h-4 w-4" />
 				</button>
 			</div>
 
-			{tab === "general" ? <GeneralTab state={state} onRefreshState={onRefreshState} /> : <ProviderTab />}
+			{/* Scrollable content — scrollbar hidden, but still scrollable */}
+			<div className="scrollbar-hide flex-1 overflow-y-auto">
+				<div className="mx-auto max-w-5xl px-10 pb-10 pt-10">
+					<PageHeader title={t("settings.title")} />
+
+					<div className="mb-6 flex gap-1 border-b border-border">
+						<button
+							onClick={() => setTab("general")}
+							className={cn(
+								"px-4 py-2 text-sm font-medium transition-colors",
+								tab === "general"
+									? "border-b-2 border-accent text-accent"
+									: "text-muted hover:text-fg",
+							)}
+						>
+							{t("settings.tabs.general")}
+						</button>
+						<button
+							onClick={() => setTab("provider")}
+							className={cn(
+								"px-4 py-2 text-sm font-medium transition-colors",
+								tab === "provider"
+									? "border-b-2 border-accent text-accent"
+									: "text-muted hover:text-fg",
+							)}
+						>
+							{t("settings.tabs.provider")}
+						</button>
+					</div>
+
+					{tab === "general" ? <GeneralTab state={state} /> : <ProviderTab />}
+				</div>
+			</div>
 		</div>
 	);
 }

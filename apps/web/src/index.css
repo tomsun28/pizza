@@ -81,6 +81,15 @@
 	}
 }
 
+/* Hide scrollbar while keeping the element scrollable. */
+.scrollbar-hide {
+	scrollbar-width: none;
+	-ms-overflow-style: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+	display: none;
+}
+
 /* Scrollbar — kept outside @layer base so it isn't overridden by Tailwind utilities */
 * {
 	scrollbar-width: thin;
