@@ -40,6 +40,12 @@ export interface Args {
 	offline?: boolean;
 	verbose?: boolean;
 	continue?: boolean;
+	/** Start the persistent ("main") agent. */
+	main?: boolean;
+	/** Override the main agent working directory. */
+	mainDir?: string;
+	/** Override the main agent memory directory. */
+	memoryDir?: string;
 	messages: string[];
 	fileArgs: string[];
 	/** Unknown flags (potentially extension flags) - map of flag name to value */
@@ -155,6 +161,12 @@ export function parseArgs(args: string[]): Args {
 			result.offline = true;
 		} else if (arg === "--continue") {
 			result.continue = true;
+		} else if (arg === "--main") {
+			result.main = true;
+		} else if (arg === "--main-dir" && i + 1 < args.length) {
+			result.mainDir = args[++i];
+		} else if (arg === "--memory-dir" && i + 1 < args.length) {
+			result.memoryDir = args[++i];
 		} else if (arg.startsWith("@")) {
 			result.fileArgs.push(arg.slice(1)); // Remove @ prefix
 		} else if (arg.startsWith("--")) {
@@ -246,6 +258,9 @@ ${chalk.bold("Options:")}
   --verbose                      Force verbose startup (overrides quietStartup setting)
   --offline                      Disable startup network operations (same as PIZZA_OFFLINE=1)
   --continue                     Continue previous session (default if not --no-session)
+  --main                         Start the persistent ("main") agent with soul + long-term memory
+  --main-dir <path>              Override the main agent working directory (default: ~/.pizza/main)
+  --memory-dir <path>            Override the main agent memory directory (default: <main-dir>/memory)
   --help, -h                     Show this help
   --version, -v                  Show version number
 
@@ -296,6 +311,10 @@ ${chalk.bold("Examples:")}
 
   # Read-only mode (no file modifications possible)
   ${APP_NAME} --tools read,grep,find,ls -p "Review the code in src/"
+
+  # Persistent ("main") agent with soul + long-term memory
+  ${APP_NAME} --main
+  ${APP_NAME} --main --main-dir ~/my-main --memory-dir ~/my-main/mem
 
   # Export an event session to HTML
   ${APP_NAME} --export event-session:<workspace-id>:<session-id>

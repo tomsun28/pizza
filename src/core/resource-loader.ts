@@ -9,6 +9,7 @@ import type { ResourceDiagnostic } from "./diagnostics.js";
 export type { ResourceCollision, ResourceDiagnostic } from "./diagnostics.js";
 
 import { isLocalPath } from "../utils/paths.js";
+import { loadLongTermMemory, loadSoulFile, type MemoryEntry, type SoulFile } from "./main-agent.js";
 import { createEventBus, type EventBus } from "./event-bus.js";
 import { createExtensionRuntime, loadExtensionFromFactory, loadExtensions } from "./extensions/loader.js";
 import type { Extension, ExtensionFactory, ExtensionRuntime, LoadExtensionsResult } from "./extensions/types.js";
@@ -36,6 +37,16 @@ export interface ResourceLoader {
 	getAppendSystemPrompt(): string[];
 	extendResources(paths: ResourceExtensionPaths): void;
 	reload(): Promise<void>;
+	/** Soul file (main agent only). */
+	getSoulFile?(): SoulFile | undefined;
+	/** Long-term memory index entries (main agent only). */
+	getLongTermMemory?(): MemoryEntry[];
+	/**
+	 * Synchronously re-read main-agent soul + memory from disk without a full
+	 * resource reload. Called on session boundaries so freshly-written memory is
+	 * picked up in the rebuilt system prompt. No-op for normal workspaces.
+	 */
+	refreshMainAgentResources?(): void;
 }
 
 function resolvePromptInput(input: string | undefined, description: string): string | undefined {
@@ -130,6 +141,12 @@ export interface DefaultResourceLoaderOptions {
 	noContextFiles?: boolean;
 	systemPrompt?: string;
 	appendSystemPrompt?: string[];
+	/** When true, load the soul file and long-term memory index (main agent). */
+	isMainAgent?: boolean;
+	/** Main agent working directory (defaults to getMainDir()). */
+	mainDir?: string;
+	/** Main agent memory directory (defaults to <mainDir>/memory). */
+	memoryDir?: string;
 	extensionsOverride?: (base: LoadExtensionsResult) => LoadExtensionsResult;
 	skillsOverride?: (base: { skills: Skill[]; diagnostics: ResourceDiagnostic[] }) => {
 		skills: Skill[];
@@ -166,6 +183,11 @@ export class DefaultResourceLoader implements ResourceLoader {
 	private noPromptTemplates: boolean;
 	private noThemes: boolean;
 	private noContextFiles: boolean;
+	private isMainAgent: boolean;
+	private mainDir?: string;
+	private memoryDir?: string;
+	private soulFile?: SoulFile;
+	private longTermMemory: MemoryEntry[];
 	private systemPromptSource?: string;
 	private appendSystemPromptSource?: string[];
 	private extensionsOverride?: (base: LoadExtensionsResult) => LoadExtensionsResult;
@@ -224,6 +246,10 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.noPromptTemplates = options.noPromptTemplates ?? false;
 		this.noThemes = options.noThemes ?? false;
 		this.noContextFiles = options.noContextFiles ?? false;
+		this.isMainAgent = options.isMainAgent ?? false;
+		this.mainDir = options.mainDir;
+		this.memoryDir = options.memoryDir;
+		this.longTermMemory = [];
 		this.systemPromptSource = options.systemPrompt;
 		this.appendSystemPromptSource = options.appendSystemPrompt;
 		this.extensionsOverride = options.extensionsOverride;
@@ -277,6 +303,33 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 	getAppendSystemPrompt(): string[] {
 		return this.appendSystemPrompt;
+	}
+
+	getSoulFile(): SoulFile | undefined {
+		return this.soulFile;
+	}
+
+	getLongTermMemory(): MemoryEntry[] {
+		return this.longTermMemory;
+	}
+
+	refreshMainAgentResources(): void {
+		if (!this.isMainAgent) {
+			return;
+		}
+		this.loadMainAgentResources();
+	}
+
+	private loadMainAgentResources(): void {
+		if (!this.isMainAgent) {
+			this.soulFile = undefined;
+			this.longTermMemory = [];
+			return;
+		}
+		const mainDir = this.mainDir ?? this.cwd;
+		const memoryDir = this.memoryDir ?? join(mainDir, "memory");
+		this.soulFile = loadSoulFile(mainDir);
+		this.longTermMemory = loadLongTermMemory(memoryDir);
 	}
 
 	extendResources(paths: ResourceExtensionPaths): void {
@@ -473,6 +526,8 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.appendSystemPrompt = this.appendSystemPromptOverride
 			? this.appendSystemPromptOverride(baseAppend)
 			: baseAppend;
+
+		this.loadMainAgentResources();
 	}
 
 	private normalizeExtensionPaths(

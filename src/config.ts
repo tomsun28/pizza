@@ -263,3 +263,37 @@ export function getSessionsDir(): string {
 export function getDebugLogPath(): string {
 	return join(getAgentDir(), `${APP_NAME}-debug.log`);
 }
+
+// =============================================================================
+// Persistent (main) Agent Paths (~/.pizza/main/*)
+// =============================================================================
+
+function expandTilde(input: string): string {
+	if (input === "~") return homedir();
+	if (input.startsWith("~/")) return join(homedir(), input.slice(2));
+	return input;
+}
+
+/**
+ * Get the persistent ("main") agent working directory.
+ * Default: ~/.pizza/main. Overridable via --main-dir (passed as `override`).
+ */
+export function getMainDir(override?: string): string {
+	if (override) {
+		return resolve(expandTilde(override));
+	}
+	return join(homedir(), CONFIG_DIR_NAME, "main");
+}
+
+/** Get the main agent long-term memory directory (default: <mainDir>/memory). */
+export function getMainMemoryDir(mainDir?: string, override?: string): string {
+	if (override) {
+		return resolve(expandTilde(override));
+	}
+	return join(getMainDir(mainDir), "memory");
+}
+
+/** Get the main agent soul file path (<mainDir>/SOUL.md). */
+export function getMainSoulPath(mainDir?: string): string {
+	return join(getMainDir(mainDir), "SOUL.md");
+}

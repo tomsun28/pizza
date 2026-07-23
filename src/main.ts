@@ -17,7 +17,12 @@ import { type Args, type Mode, parseArgs, printHelp } from "../packages/cli/args
 import { processFileArguments } from "../packages/cli/file-processor.js";
 import { buildInitialMessage } from "../packages/cli/initial-message.js";
 import { listModels } from "../packages/cli/list-models.js";
-import { getAgentDir, getModelsPath, VERSION } from "./config.js";
+import { getAgentDir, getMainDir, getMainMemoryDir, getModelsPath, VERSION } from "./config.js";
+import {
+	acquireMainLock,
+	initializeMainAgent,
+	type MainAgentLock,
+} from "./core/main-agent.js";
 import {
 	type SessionServices,
 	type SessionDiagnostic,
@@ -277,6 +282,9 @@ async function createCliSessionSetup(options: {
 	resolvedPaths: ResolvedCliResourcePaths;
 	extensionFactories?: ExtensionFactory[];
 	hasExistingSession: boolean;
+	isMainAgent?: boolean;
+	mainDir?: string;
+	memoryDir?: string;
 }): Promise<CliSessionSetup> {
 	const { cwd, agentDir, authStorage, parsed, resolvedPaths, extensionFactories, hasExistingSession } = options;
 	const services = await createSessionServices({
@@ -284,6 +292,9 @@ async function createCliSessionSetup(options: {
 		agentDir,
 		authStorage,
 		extensionFlagValues: parsed.unknownFlags,
+		isMainAgent: options.isMainAgent,
+		mainDir: options.mainDir,
+		memoryDir: options.memoryDir,
 		resourceLoaderOptions: {
 			additionalExtensionPaths: resolvedPaths.extensions,
 			additionalSkillPaths: resolvedPaths.skills,
@@ -448,7 +459,33 @@ export async function main(args: string[], options?: MainOptions) {
 		process.exit(1);
 	}
 
-	const cwd = process.cwd();
+	// ── Persistent ("main") agent setup ───────────────────────────────────
+	let isMainAgent = false;
+	let mainDir: string | undefined;
+	let memoryDir: string | undefined;
+	let mainLock: MainAgentLock | null = null;
+
+	if (parsed.main) {
+		isMainAgent = true;
+		mainDir = getMainDir(parsed.mainDir);
+		memoryDir = getMainMemoryDir(mainDir, parsed.memoryDir);
+
+		const fresh = initializeMainAgent(mainDir, memoryDir);
+		if (fresh) {
+			console.log(chalk.green(`Main agent initialized. Edit ${join(mainDir, "SOUL.md")} to define your personality.`));
+		}
+
+		mainLock = acquireMainLock(mainDir);
+		if (!mainLock) {
+			console.error(chalk.red("Another main agent instance is already running. Use --main-dir to use a different directory, or stop the other instance."));
+			process.exit(1);
+		}
+		// Lock is auto-released on process exit via the handler inside acquireMainLock.
+		void mainLock;
+	}
+
+	// When running as main agent, cwd becomes the main working directory.
+	const cwd = isMainAgent && mainDir ? mainDir : process.cwd();
 	const agentDir = getAgentDir();
 	const startupSettingsManager = SettingsManager.create(cwd, agentDir);
 	reportDiagnostics(collectSettingsDiagnostics(startupSettingsManager, "startup session lookup"));
@@ -471,6 +508,9 @@ export async function main(args: string[], options?: MainOptions) {
 		resolvedPaths,
 		extensionFactories: options?.extensionFactories,
 		hasExistingSession: target.hasExistingSession,
+		isMainAgent,
+		mainDir,
+		memoryDir,
 	});
 	const { services, sessionOptions, cliThinkingFromModel } = setup;
 	const { settingsManager, modelRegistry, resourceLoader } = services;
@@ -520,6 +560,9 @@ export async function main(args: string[], options?: MainOptions) {
 						agentDir: sessionStorageAgentDir,
 					}
 				: undefined,
+			isMainAgent,
+			mainDir,
+			memoryDir,
 		});
 		applyCliThinkingClampToFacade(created, parsed.thinking !== undefined || cliThinkingFromModel);
 		time("createSessionFacade");
@@ -575,6 +618,9 @@ export async function main(args: string[], options?: MainOptions) {
 						agentDir: sessionStorageAgentDir,
 					}
 				: undefined,
+			isMainAgent,
+			mainDir,
+			memoryDir,
 		});
 		applyCliThinkingClampToFacade(created, parsed.thinking !== undefined || cliThinkingFromModel);
 		time("createSessionFacade");
@@ -656,6 +702,9 @@ export async function main(args: string[], options?: MainOptions) {
 						agentDir: sessionStorageAgentDir,
 					}
 				: undefined,
+			isMainAgent,
+			mainDir,
+			memoryDir,
 		});
 		applyCliThinkingClampToFacade(created, parsed.thinking !== undefined || cliThinkingFromModel);
 		time("createSessionFacade");
@@ -725,6 +774,9 @@ export async function main(args: string[], options?: MainOptions) {
 					agentDir: sessionStorageAgentDir,
 				}
 			: undefined,
+		isMainAgent,
+		mainDir,
+		memoryDir,
 	});
 	applyCliThinkingClampToFacade(created, parsed.thinking !== undefined || cliThinkingFromModel);
 	time("createSessionFacade");

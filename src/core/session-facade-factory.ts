@@ -10,7 +10,8 @@
 
 import { join } from "node:path";
 import { type Model, streamSimple } from "@earendil-works/pi-ai/compat";
-import { getAgentDir, getDocsPath } from "../config.js";
+import { getAgentDir, getDocsPath, getMainMemoryDir } from "../config.js";
+import { getMainAgentGuidelines } from "./main-agent.js";
 import type { AgentMessage, AgentTool, ThinkingLevel } from "./agent/index.js";
 import { AuthStorage } from "./auth-storage.js";
 import { estimateContextTokens } from "./compaction/index.js";
@@ -93,6 +94,13 @@ export interface CreateSessionFacadeOptions {
 	isContinuing?: boolean;
 	/** Context token budget. Default: model.contextWindow ?? 128000. */
 	contextBudget?: number;
+
+	/** Whether this session is the persistent (main) agent. */
+	isMainAgent?: boolean;
+	/** Main agent working directory (defaults to cwd when isMainAgent). */
+	mainDir?: string;
+	/** Main agent memory directory (defaults to <mainDir>/memory). */
+	memoryDir?: string;
 }
 
 export interface CreateSessionFacadeResult {
@@ -229,6 +237,9 @@ export async function createSessionFacade(
 ): Promise<CreateSessionFacadeResult> {
 	const cwd = options.cwd ?? process.cwd();
 	const agentDir = options.agentDir ?? getAgentDir();
+	const isMainAgent = options.isMainAgent ?? false;
+	const mainDir = options.mainDir ?? cwd;
+	const memoryDir = options.memoryDir ?? (isMainAgent ? getMainMemoryDir(mainDir) : undefined);
 
 	const authPath = options.agentDir ? join(agentDir, "auth.json") : undefined;
 	const modelsPath = options.agentDir ? join(agentDir, "models.json") : undefined;
@@ -238,7 +249,14 @@ export async function createSessionFacade(
 
 	let resourceLoader = options.resourceLoader;
 	if (!resourceLoader) {
-		resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
+		resourceLoader = new DefaultResourceLoader({
+			cwd,
+			agentDir,
+			settingsManager,
+			isMainAgent,
+			mainDir: isMainAgent ? mainDir : undefined,
+			memoryDir,
+		});
 		await resourceLoader.reload();
 	}
 
@@ -390,6 +408,15 @@ export async function createSessionFacade(
 			}
 		}
 
+		// Main-agent identity + long-term memory index + guidelines.
+		const soulFile = isMainAgent ? resourceLoader.getSoulFile?.() : undefined;
+		const longTermMemory = isMainAgent ? resourceLoader.getLongTermMemory?.() : undefined;
+		if (isMainAgent && memoryDir) {
+			for (const guideline of getMainAgentGuidelines(memoryDir)) {
+				promptGuidelines.push(guideline);
+			}
+		}
+
 		let prompt = buildSystemPrompt({
 			cwd,
 			skills: resourceLoader.getSkills().skills,
@@ -399,6 +426,9 @@ export async function createSessionFacade(
 			selectedTools: definitions.map((definition) => definition.name),
 			toolSnippets,
 			promptGuidelines,
+			soulFile,
+			longTermMemory,
+			isMainAgent,
 		});
 
 		// Append session-position breadcrumb (~15-40 tokens) so the model
@@ -435,6 +465,9 @@ export async function createSessionFacade(
 	 * the breadcrumb stays in sync without a full tool rebuild.
 	 */
 	const refreshSystemPromptWithBreadcrumb = (): string => {
+		if (isMainAgent) {
+			resourceLoader.refreshMainAgentResources?.();
+		}
 		systemPrompt = buildPromptForTools(activeToolDefinitions);
 		if (runtime) {
 			runtime.setSystemPrompt(systemPrompt);
