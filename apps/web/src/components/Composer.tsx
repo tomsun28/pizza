@@ -162,6 +162,7 @@ export function Composer({
 	sidecarReady,
 	isRunning,
 	state,
+	workspace,
 	onSend,
 	onAbort,
 	onRefreshState,
@@ -169,12 +170,36 @@ export function Composer({
 	sidecarReady: boolean;
 	isRunning: boolean;
 	state: RpcSessionState | null;
+	workspace?: string | null;
 	onSend: (message: string, images?: ComposerImage[]) => void;
 	onAbort: () => void;
 	onRefreshState?: () => void;
 }) {
 	const [input, setInput] = useState("");
 	const [images, setImages] = useState<ComposerImage[]>([]);
+	// Per-workspace draft isolation. The Composer is a single component
+	// instance that does NOT remount when the user switches workspaces, so
+	// without this its input/images would bleed across workspaces. We save
+	// the current draft under the old workspace on switch and restore it
+	// (if any) for the newly selected one.
+	const inputByWs = useRef<Map<string, string>>(new Map());
+	const imagesByWs = useRef<Map<string, ComposerImage[]>>(new Map());
+	const prevWsRef = useRef<string | null>(null);
+	useEffect(() => {
+		const prevWs = prevWsRef.current;
+		const newWs = workspace ?? "";
+		if (prevWs === newWs) return;
+		// Save the current draft under the workspace we're leaving.
+		if (prevWs) {
+			inputByWs.current.set(prevWs, input);
+			imagesByWs.current.set(prevWs, images);
+		}
+		// Restore (or clear) the draft for the workspace we're entering.
+		setInput(inputByWs.current.get(newWs) ?? "");
+		setImages(imagesByWs.current.get(newWs) ?? []);
+		prevWsRef.current = newWs;
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [workspace]);
 	const [models, setModels] = useState<ModelInfo[]>([]);
 	const [recording, setRecording] = useState(false);
 	const [transcribing, setTranscribing] = useState(false);

@@ -751,6 +751,7 @@ export default function ChatView({
 			)}
 			<Composer
 				state={state}
+				workspace={workspace}
 				sidecarReady={sidecarReady}
 				isRunning={isRunning}
 				onSend={handleSend}
