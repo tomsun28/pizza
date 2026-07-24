@@ -76,6 +76,19 @@ export type ParsedBuiltinToolInput =
 	  };
 
 /**
+ * Map a built-in command token (what the user/LLM types, e.g. "_read") to its
+ * stable internal id (e.g. "read"). Returns null when the token is not a
+ * recognized built-in. The token is always the leading-underscore form so it
+ * never collides with a real shell command/builtin.
+ */
+function builtinTokenToId(token: string): string | null {
+	const lower = token.toLowerCase();
+	if ((BUILTIN_COMMANDS as readonly string[]).includes(lower)) {
+		return lower.slice(1);
+	}
+	return null;
+}
+/**
  * Parse builtin command with optional heredoc.
  * Supports:
  *   write <path> <<EOF       (also <<'EOF' / <<"EOF")
@@ -122,8 +135,9 @@ export function parseBuiltinToolInput(
 	args: string[],
 	heredoc?: string,
 ): ParsedBuiltinToolInput | null {
-	const normalized = command.toLowerCase();
-	switch (normalized) {
+	const id = builtinTokenToId(command);
+	if (!id) return null;
+	switch (id) {
 		case "read":
 			return { command: "read", input: parseReadInput(args) };
 		case "write":
@@ -519,10 +533,12 @@ function isHelpRequest(args: string[]): boolean {
 }
 
 export function getBuiltinCommandHelp(command: string): string | undefined {
-	switch (command.toLowerCase()) {
+	const id = builtinTokenToId(command);
+	if (!id) return undefined;
+	switch (id) {
 		case "read":
 			return [
-				"read - Read a file",
+				"_read - Read a file",
 				"",
 				"Description:",
 				"  Reads a text file or supported image file from the current working directory.",
@@ -542,16 +558,16 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"  -h, --help        Show this help.",
 				"",
 				"Examples:",
-				"  read src/main.ts",
-				"  read src/main.ts 20",
-				"  read src/main.ts 20 50",
-				"  read --path src/main.ts --offset 20 --limit 50",
-				"  read -p src/main.ts -o 20 -l 50",
-				"  read --path src/main.ts --anchors none",
+				"  _read src/main.ts",
+				"  _read src/main.ts 20",
+				"  _read src/main.ts 20 50",
+				"  _read --path src/main.ts --offset 20 --limit 50",
+				"  _read -p src/main.ts -o 20 -l 50",
+				"  _read --path src/main.ts --anchors none",
 			].join("\n");
 		case "write":
 			return [
-				"write - Create or overwrite a file",
+				"_write - Create or overwrite a file",
 				"",
 				"Description:",
 				"  Writes complete content to a file. Creates parent directories when needed.",
@@ -566,16 +582,16 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"  -h, --help        Show this help.",
 				"",
 				"Examples:",
-				"  write notes.txt hello",
-				"  write --path notes.txt --content \"hello world\"",
-				"  write -p notes.txt -c \"hello world\"",
-				"  write src/generated.ts <<EOF",
+				"  _write notes.txt hello",
+				"  _write --path notes.txt --content \"hello world\"",
+				"  _write -p notes.txt -c \"hello world\"",
+				"  _write src/generated.ts <<EOF",
 				"  export const value = 1;",
 				"  EOF",
 			].join("\n");
 		case "edit":
 			return [
-				"edit - Edit a file with read range anchors or search-and-replace",
+				"_edit - Edit a file with read range anchors or search-and-replace",
 				"",
 				"Description:",
 				"  Edits one existing file. Two modes are supported:",
@@ -600,18 +616,18 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"  -h, --help        Show this help.",
 				"",
 				"Examples:",
-				"  read src/app.ts",
-				"  edit src/app.ts replace 12#ab \"const a = 2\"",
-				"  edit --path src/app.ts --op insert_after --range 12#ab --new \"const b = 3\"",
-				"  edit --path src/app.ts --op delete --range 12#ab..14#de",
-				"  edit --path src/app.ts --op search --old \"const a = 1\" --new \"const a = 2\"",
-				"  edit src/app.ts search \"const a = 1\" \"const a = 2\"",
-				"  edit --path src/app.ts --edits '[{\"op\":\"replace\",\"range\":\"12#ab\",\"new\":\"const a = 2\"}]'",
-				"  edit --path src/app.ts --edits '[{\"op\":\"search\",\"old\":\"const a = 1\",\"new\":\"const a = 2\"}]'",
+				"  _read src/app.ts",
+				"  _edit src/app.ts replace 12#ab \"const a = 2\"",
+				"  _edit --path src/app.ts --op insert_after --range 12#ab --new \"const b = 3\"",
+				"  _edit --path src/app.ts --op delete --range 12#ab..14#de",
+				"  _edit --path src/app.ts --op search --old \"const a = 1\" --new \"const a = 2\"",
+				"  _edit src/app.ts search \"const a = 1\" \"const a = 2\"",
+				"  _edit --path src/app.ts --edits '[{\"op\":\"replace\",\"range\":\"12#ab\",\"new\":\"const a = 2\"}]'",
+				"  _edit --path src/app.ts --edits '[{\"op\":\"search\",\"old\":\"const a = 1\",\"new\":\"const a = 2\"}]'",
 			].join("\n");
 		case "session_split":
 			return [
-				"session_split - Split the current conversation session",
+				"_session_split - Split the current conversation session",
 				"",
 				"Description:",
 				"  Start a new session from the current point. Previous messages are no longer",
@@ -626,13 +642,13 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"  -h, --help        Show this help.",
 				"",
 				"Examples:",
-				"  session_split topic_change",
-				"  session_split topic_change \"Fix auth\"",
-				"  session_split --reason topic_change --name \"Fix auth\"",
+				"  _session_split topic_change",
+				"  _session_split topic_change \"Fix auth\"",
+				"  _session_split --reason topic_change --name \"Fix auth\"",
 			].join("\n");
 		case "history_tree":
 			return [
-				"history_tree - Browse and navigate the session history tree",
+				"_history_tree - Browse and navigate the session history tree",
 				"",
 				"Description:",
 				"  Every past session is a node in the history tree. Use list to see the tree,",
@@ -653,15 +669,15 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"  -h, --help         Show this help.",
 				"",
 				"Examples:",
-				"  history_tree list",
-				"  history_tree list --query \"auth bug\"",
-				"  history_tree view sess_0042",
-				"  history_tree jump sess_0042 --reason \"return to auth work\"",
-				"  history_tree fork sess_0042",
+				"  _history_tree list",
+				"  _history_tree list --query \"auth bug\"",
+				"  _history_tree view sess_0042",
+				"  _history_tree jump sess_0042 --reason \"return to auth work\"",
+				"  _history_tree fork sess_0042",
 			].join("\n");
 		case "delegate_agent":
 			return [
-				"delegate_agent - Delegate a task to a sub-agent in another project directory",
+				"_delegate_agent - Delegate a task to a sub-agent in another project directory",
 				"",
 				"Description:",
 				"  Hand a bounded task to a sub-agent running in another project directory. The",
@@ -683,10 +699,10 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"  -h, --help        Show this help.",
 				"",
 				"Examples:",
-				"  delegate_agent list",
-				"  delegate_agent run ../other-project \"fix the auth bug and summarize the change\"",
-				"  delegate_agent run --cwd ../other-project --task \"fix the auth bug\" --timeout 60000",
-				"  delegate_agent run ../other-project <<EOF",
+				"  _delegate_agent list",
+				"  _delegate_agent run ../other-project \"fix the auth bug and summarize the change\"",
+				"  _delegate_agent run --cwd ../other-project --task \"fix the auth bug\" --timeout 60000",
+				"  _delegate_agent run ../other-project <<EOF",
 				"  Refactor the auth module and write a short summary of what changed.",
 				"  EOF",
 			].join("\n");
@@ -920,7 +936,7 @@ export async function executeBuiltinCommand(
 	}
 }
 
-export const BUILTIN_COMMANDS = ["read", "write", "edit", "session_split", "history_tree", "delegate_agent"] as const;
+export const BUILTIN_COMMANDS = ["_read", "_write", "_edit", "_session_split", "_history_tree", "_delegate_agent"] as const;
 export type BuiltinCommand = (typeof BUILTIN_COMMANDS)[number];
 
 // ============================================================================

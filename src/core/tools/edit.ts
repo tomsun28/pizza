@@ -332,11 +332,11 @@ export function createEditToolDefinition(
 			"Edit a single file using range anchors from read output, or search-and-replace for exact text matching. Anchor mode supports replace, insert_before, insert_after, and delete for one line or a continuous whole-line range. Ranges fail safely if the referenced lines changed or became ambiguous. Search mode (op=search) finds and replaces exact text without needing line anchors — use it as a fallback when you don't have fresh anchors. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits.",
 		promptSnippet: "Make precise file edits with read range anchors or search-and-replace, including multiple disjoint edits in one call",
 		promptGuidelines: [
-			"Use edits[].range from read output for every anchor-mode edit.",
+			"Use edits[].range from _read output for every anchor-mode edit.",
 			"Use op=insert_after or op=insert_before instead of repeating the anchored line.",
 			"For partial-line changes, use op=replace and replace the whole line with the updated line.",
 			"Use op=search with old/new for search-and-replace when you don't have fresh line anchors (e.g. after using sed/cat to view the file, or after a previous edit shifted line numbers). The old text must match exactly one location in the file.",
-			"When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls",
+			"When changing multiple separate locations in one file, use one _edit call with multiple entries in edits[] instead of multiple _edit calls",
 			"Each edit is resolved against the original file, not after earlier edits are applied. Do not emit overlapping or nested ranges. Merge nearby changes into one edit.",
 		],
 		parameters: editSchema,

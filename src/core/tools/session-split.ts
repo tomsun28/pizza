@@ -35,9 +35,9 @@ export function createSessionSplitToolDefinition(): ToolDefinition<typeof sessio
 			"to the new session — proceed directly with the user's requested task.",
 		promptSnippet: "Split the conversation session when the user shifts to a new topic",
 		promptGuidelines: [
-			"Prefer to session_split promptly when the user starts a new task or a clearly different topic — err on the side of splitting when the previous context is no longer useful.",
+			"Prefer to _session_split promptly when the user starts a new task or a clearly different topic — err on the side of splitting when the previous context is no longer useful.",
 			"Only skip the split when the new message is a follow-up, clarification, or refinement of the SAME task in progress.",
-			"Call session_split at most once per turn. After the split, your context is refreshed — proceed with the task.",
+			"Call _session_split at most once per turn. After the split, your context is refreshed — proceed with the task.",
 		],
 		parameters: sessionSplitSchema,
 		renderShell: "self",
@@ -63,7 +63,7 @@ export function createSessionSplitToolDefinition(): ToolDefinition<typeof sessio
 					content: [
 						{
 							type: "text" as const,
-							text: "The session was already split for this turn. Do NOT call session_split again — " +
+							text: "The session was already split for this turn. Do NOT call _session_split again — " +
 								"proceed directly with the user's requested task.",
 						},
 					],
@@ -76,7 +76,7 @@ export function createSessionSplitToolDefinition(): ToolDefinition<typeof sessio
 						type: "text" as const,
 						text: `Session split successfully. New session: ${result.session_id}. ` +
 							"Your context has been refreshed to the new session. " +
-							"Proceed with the user's task now — do NOT call session_split again.",
+							"Proceed with the user's task now — do NOT call _session_split again.",
 					},
 				],
 			};

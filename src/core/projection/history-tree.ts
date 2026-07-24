@@ -161,7 +161,7 @@ export function buildSessionBreadcrumb(
 	const depth = chain.length - 1;
 	const branch = chain.join(" → ");
 	const depthLabel = depth === 0 ? "root" : `depth ${depth}`;
-	return `Session position: you are in ${activeSessionId} (${depthLabel}, branch: ${branch}). Use \`history_tree list\` to see all branches.`;
+	return `Session position: you are in ${activeSessionId} (${depthLabel}, branch: ${branch}). Use \`_history_tree list\` to see all branches.`;
 }
 
 // ============================================================================

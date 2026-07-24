@@ -433,8 +433,8 @@ export function createBashToolDefinition(
 	return {
 		name: "cli",
 		label: "cli",
-		description: `Execute a CLI command in the current working directory. Built-in commands are handled internally and ALWAYS run as built-ins (they never fall back to the shell): read, write, edit, session_split, history_tree, and (for the main agent) delegate_agent. IMPORTANT: built-in commands do NOT support shell operators — no pipes (|), redirects (> <), chaining (; & &&), command substitution, or newlines; issue each as a single pure command. To use a pipeline or redirection, run a plain shell command instead (grep, find, ls, cat, sed, git, npm, etc.). Output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB.`,
-		promptSnippet: "Execute CLI commands: built-ins (read/write/edit/session_split/history_tree/delegate_agent) are pure single commands with NO shell operators; use shell commands (grep, find, ls, cat, git, npm) for pipes/redirections",
+		description: `Execute a CLI command in the current working directory. Built-in commands are prefixed with an underscore and handled internally (they never fall back to the shell): _read, _write, _edit, _session_split, _history_tree, and (for the main agent) _delegate_agent. The underscore prefix avoids collisions with real shell commands (e.g. bash's own read/write builtins). IMPORTANT: built-in commands do NOT support shell operators — no pipes (|), redirects (> <), chaining (; & &&), command substitution, or newlines; issue each as a single pure command. To use a pipeline or redirection, run a plain shell command instead (grep, find, ls, cat, sed, git, npm, etc.). Output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB.`,
+		promptSnippet: "Execute CLI commands: built-ins are prefixed with _ (_read/_write/_edit/_session_split/_history_tree/_delegate_agent) and are pure single commands with NO shell operators; use shell commands (grep, find, ls, cat, git, npm) for pipes/redirections",
 		parameters: bashSchema,
 		async execute(
 			toolCallId,

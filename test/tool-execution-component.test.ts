@@ -130,7 +130,7 @@ describe("ToolExecutionComponent parity", () => {
 		try {
 			await writeFile(join(testDir, "sample.txt"), "hello\nworld\n", "utf-8");
 			const tool = createBashToolDefinition(testDir);
-			const result = await tool.execute("tool-cli-read", { command: "read sample.txt --offset 2 --limit 1" });
+			const result = await tool.execute("tool-cli-read", { command: "_read sample.txt --offset 2 --limit 1" });
 
 			expect(result.content[0]?.type).toBe("text");
 			expect(result.content[0]?.text).toContain("world");
@@ -173,7 +173,7 @@ describe("ToolExecutionComponent parity", () => {
 		const component = new ToolExecutionComponent(
 			"cli",
 			"tool-cli-read-render",
-			{ command: "read README.md --offset 2 --limit 3" },
+			{ command: "_read README.md --offset 2 --limit 3" },
 			{},
 			createBashToolDefinition(process.cwd()),
 			createFakeTui(),
@@ -182,7 +182,7 @@ describe("ToolExecutionComponent parity", () => {
 		const rendered = stripAnsi(component.render(120).join("\n"));
 		expect(rendered).toContain("read");
 		expect(rendered).toContain("README.md:2-4");
-		expect(rendered).not.toContain("$ read README.md");
+		expect(rendered).not.toContain("$ _read README.md");
 	});
 
 	test("cli built-in edit result uses the edit diff renderer", () => {

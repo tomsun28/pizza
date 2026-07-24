@@ -291,11 +291,11 @@ describe("history_tree", () => {
 
 	describe("parseBuiltinToolInput", () => {
 		it("parses positional action and session id", () => {
-			expect(parseBuiltinToolInput("history_tree", ["list"])).toEqual({
+			expect(parseBuiltinToolInput("_history_tree", ["list"])).toEqual({
 				command: "history_tree",
 				input: { action: "list", session_id: undefined, query: undefined, max_messages: undefined, reason: undefined },
 			});
-			expect(parseBuiltinToolInput("history_tree", ["jump", "sess_0042"])).toMatchObject({
+			expect(parseBuiltinToolInput("_history_tree", ["jump", "sess_0042"])).toMatchObject({
 				command: "history_tree",
 				input: { action: "jump", session_id: "sess_0042" },
 			});
@@ -303,19 +303,19 @@ describe("history_tree", () => {
 
 		it("parses flags", () => {
 			expect(
-				parseBuiltinToolInput("history_tree", ["list", "--query", "auth bug"]),
+				parseBuiltinToolInput("_history_tree", ["list", "--query", "auth bug"]),
 			).toMatchObject({ input: { action: "list", query: "auth bug" } });
 			expect(
-				parseBuiltinToolInput("history_tree", ["view", "-s", "sess_1", "--max-messages", "5"]),
+				parseBuiltinToolInput("_history_tree", ["view", "-s", "sess_1", "--max-messages", "5"]),
 			).toMatchObject({ input: { action: "view", session_id: "sess_1", max_messages: 5 } });
 			expect(
-				parseBuiltinToolInput("history_tree", ["jump", "sess_1", "--reason", "back to work"]),
+				parseBuiltinToolInput("_history_tree", ["jump", "sess_1", "--reason", "back to work"]),
 			).toMatchObject({ input: { action: "jump", session_id: "sess_1", reason: "back to work" } });
 		});
 
 		it("throws on unknown or missing action", () => {
-			expect(() => parseBuiltinToolInput("history_tree", ["destroy"])).toThrow("unknown action");
-			expect(() => parseBuiltinToolInput("history_tree", [])).toThrow("action required");
+			expect(() => parseBuiltinToolInput("_history_tree", ["destroy"])).toThrow("unknown action");
+			expect(() => parseBuiltinToolInput("_history_tree", [])).toThrow("action required");
 		});
 	});
 
@@ -343,7 +343,7 @@ describe("history_tree", () => {
 			const crumb = buildSessionBreadcrumb(sessions, "s1");
 			expect(crumb).toContain("s1");
 			expect(crumb).toContain("root");
-			expect(crumb).toContain("history_tree list");
+			expect(crumb).toContain("_history_tree list");
 		});
 
 		it("returns breadcrumb with branch chain for nested session", () => {

@@ -3,12 +3,12 @@ import { parseBuiltinToolInput } from "../src/core/tools/builtin-commands.js";
 
 describe("parseBuiltinToolInput — delegate_agent", () => {
 	it("parses `delegate_agent list`", () => {
-		const result = parseBuiltinToolInput("delegate_agent", ["list"]);
+		const result = parseBuiltinToolInput("_delegate_agent", ["list"]);
 		expect(result).toEqual({ command: "delegate_agent", input: { action: "list" } });
 	});
 
 	it("parses `delegate_agent run <cwd> <task>` positionally", () => {
-		const result = parseBuiltinToolInput("delegate_agent", ["run", "/proj", "fix", "the", "bug"]);
+		const result = parseBuiltinToolInput("_delegate_agent", ["run", "/proj", "fix", "the", "bug"]);
 		expect(result).toEqual({
 			command: "delegate_agent",
 			input: { action: "run", cwd: "/proj", task: "fix the bug" },
@@ -16,7 +16,7 @@ describe("parseBuiltinToolInput — delegate_agent", () => {
 	});
 
 	it("parses `delegate_agent run --cwd <path> --task <text>` flags", () => {
-		const result = parseBuiltinToolInput("delegate_agent", ["run", "--cwd", "/proj", "--task", "do something"]);
+		const result = parseBuiltinToolInput("_delegate_agent", ["run", "--cwd", "/proj", "--task", "do something"]);
 		expect(result).toEqual({
 			command: "delegate_agent",
 			input: { action: "run", cwd: "/proj", task: "do something" },
@@ -24,7 +24,7 @@ describe("parseBuiltinToolInput — delegate_agent", () => {
 	});
 
 	it("parses `delegate_agent run` with --timeout", () => {
-		const result = parseBuiltinToolInput("delegate_agent", [
+		const result = parseBuiltinToolInput("_delegate_agent", [
 			"run",
 			"--cwd",
 			"/proj",
@@ -40,7 +40,7 @@ describe("parseBuiltinToolInput — delegate_agent", () => {
 	});
 
 	it("uses short flags -d / -t", () => {
-		const result = parseBuiltinToolInput("delegate_agent", ["run", "-d", "/proj", "-t", "quick"]);
+		const result = parseBuiltinToolInput("_delegate_agent", ["run", "-d", "/proj", "-t", "quick"]);
 		expect(result).toEqual({
 			command: "delegate_agent",
 			input: { action: "run", cwd: "/proj", task: "quick" },
@@ -48,7 +48,7 @@ describe("parseBuiltinToolInput — delegate_agent", () => {
 	});
 
 	it("flags override positionals for cwd, positional remainder fills task", () => {
-		const result = parseBuiltinToolInput("delegate_agent", ["run", "/ignored", "leftover", "--cwd", "/real"]);
+		const result = parseBuiltinToolInput("_delegate_agent", ["run", "/ignored", "leftover", "--cwd", "/real"]);
 		expect(result).toEqual({
 			command: "delegate_agent",
 			input: { action: "run", cwd: "/real", task: "leftover" },
@@ -56,7 +56,7 @@ describe("parseBuiltinToolInput — delegate_agent", () => {
 	});
 
 	it("treats heredoc as the task for run", () => {
-		const result = parseBuiltinToolInput("delegate_agent", ["run", "/proj"], "long\ntask\nbody");
+		const result = parseBuiltinToolInput("_delegate_agent", ["run", "/proj"], "long\ntask\nbody");
 		expect(result).toEqual({
 			command: "delegate_agent",
 			input: { action: "run", cwd: "/proj", task: "long\ntask\nbody" },
@@ -64,15 +64,15 @@ describe("parseBuiltinToolInput — delegate_agent", () => {
 	});
 
 	it("rejects an unknown action", () => {
-		expect(() => parseBuiltinToolInput("delegate_agent", ["explode"])).toThrow(/unknown action/);
+		expect(() => parseBuiltinToolInput("_delegate_agent", ["explode"])).toThrow(/unknown action/);
 	});
 
 	it("requires an action", () => {
-		expect(() => parseBuiltinToolInput("delegate_agent", [])).toThrow(/action required/);
+		expect(() => parseBuiltinToolInput("_delegate_agent", [])).toThrow(/action required/);
 	});
 
 	it("run with no cwd/task yields an action with undefined cwd/task", () => {
-		const result = parseBuiltinToolInput("delegate_agent", ["run"]);
+		const result = parseBuiltinToolInput("_delegate_agent", ["run"]);
 		expect(result).toEqual({ command: "delegate_agent", input: { action: "run" } });
 	});
 });

@@ -137,12 +137,12 @@ export function createDelegateAgentToolDefinition(
 			"only its final reply is returned — intermediate output does not enter this context. " +
 			"Use the `list` action to discover which project directories are available as delegation targets, " +
 			"then `run` with a target cwd and task. Only available to the main (persistent) agent.",
-		promptSnippet: "delegate_agent: run a sub-agent in another project directory and return only its final reply",
+		promptSnippet: "_delegate_agent: run a sub-agent in another project directory and return only its final reply",
 		promptGuidelines: [
-			"Use delegate_agent to hand cross-project tasks to a sub-agent instead of handling another project's code in this context.",
-			"Before delegating to an unfamiliar project, call `delegate_agent list` to see which project directories are known.",
-			"delegate_agent returns only the sub-agent's final reply — intermediate steps stay out of this context. If you need progress, ask the sub-agent to summarize in its final message.",
-			"delegate_agent is synchronous and blocks until the sub-agent finishes; prefer it for bounded tasks. Avoid delegating very long-running work.",
+			"Use _delegate_agent to hand cross-project tasks to a sub-agent instead of handling another project's code in this context.",
+			"Before delegating to an unfamiliar project, call `_delegate_agent list` to see which project directories are known.",
+			"_delegate_agent returns only the sub-agent's final reply — intermediate steps stay out of this context. If you need progress, ask the sub-agent to summarize in its final message.",
+			"_delegate_agent is synchronous and blocks until the sub-agent finishes; prefer it for bounded tasks. Avoid delegating very long-running work.",
 		],
 		parameters: delegateAgentSchema,
 		renderShell: "self",
@@ -155,8 +155,8 @@ export function createDelegateAgentToolDefinition(
 			// action === "run"
 			if (!params.cwd || !params.task) {
 				return textResult(
-					"delegate_agent run requires both `cwd` and `task`. " +
-						"Use `delegate_agent list` to see known project directories, or provide an explicit cwd.",
+				"_delegate_agent run requires both `cwd` and `task`. " +
+					"Use `_delegate_agent list` to see known project directories, or provide an explicit cwd.",
 				);
 			}
 
