@@ -199,11 +199,8 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	// File exploration guidelines
 	if (hasCli) {
 		addGuideline("Use Pizza built-in file commands only for _read, _write, _edit, _session_split, _history_tree, and _delegate_agent");
-		addGuideline("Built-in commands are NOT a shell: never use pipes (|), redirects (> <), chaining (; & &&), command substitution, or newlines with them — issue each as a single pure command. They always run as built-ins and never fall back to the shell.");
-		addGuideline("Never chain a built-in command AFTER a shell operator (e.g. sed ... && _read, foo | _write, cd x && _edit). A built-in only works as the FIRST word of its own single cli() call; buried after &&/||/;/| it is passed to the shell, which has no such command. Issue each built-in as its own separate call, and do not prefix it with cd && since the working directory is already set.");
-		addGuideline("For pipelines, redirections, or globs, use a plain shell command instead (grep, find, ls, cat, sed, git, npm, etc.); the shell handles pipes, redirects, globs, &&, and ;");
-		addGuideline("Use _read line anchors as _edit range values; _edit accepts op/range/new edits");
-		addGuideline("Use _edit op=search with old/new for search-and-replace when you don't have fresh line anchors (e.g. after using sed/cat, or after a previous edit shifted line numbers)");
+		addGuideline("Built-in commands are NOT a shell: never use pipes (|), redirects (> <), chaining (; & &&), command substitution, or newlines with them. A built-in only works as the FIRST word of its own single cli() call — buried after &&/||/;/| it is passed to the shell, which has no such command. Issue each built-in as its own separate call; do not prefix it with cd && since the working directory is already set. For pipelines, redirections, or globs, use a plain shell command instead (grep, find, ls, cat, sed, git, npm, etc.).");
+		addGuideline("Use _read line anchors as _edit range values; _edit accepts op/range/new edits. Use _edit op=search with old/new for search-and-replace when you don't have fresh line anchors (e.g. after using sed/cat, or after a previous edit shifted line numbers).");
 	}
 
 	for (const guideline of promptGuidelines ?? []) {
