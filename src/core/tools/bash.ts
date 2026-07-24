@@ -378,6 +378,73 @@ function hasShellControlSyntax(command: string): boolean {
 	return false;
 }
 
+/**
+ * Detect a Pizza built-in command name that appears as the FIRST word of a
+ * shell segment AFTER a chaining operator (&&, ||, ;, |). e.g.
+ *   sed -i ... file && _read file 88   →  returns "_read"
+ *
+ * This is a *failure heuristic*: such a command is routed to the shell (the
+ * first word is not a built-in), and the buried built-in is interpreted by the
+ * shell as an unknown command ("_read: command not found"). We only use the
+ * result to append advisory text after a non-zero exit — never to block — so
+ * legitimate content that merely contains the word (e.g. grep _read file) is
+ * unaffected as long as the command succeeds.
+ *
+ * Quote/escape-aware: tokens inside quotes or after a backslash are treated as
+ * data, not commands.
+ */
+export function detectChainedBuiltin(command: string): string | null {
+	const builtins = BUILTIN_COMMANDS as readonly string[];
+	// First whitespace-delimited token of a segment, ignoring quotes/escapes.
+	const firstWord = (text: string): string => {
+		const raw = text.trimStart();
+		let out = "";
+		let q: "'" | '"' | undefined;
+		let esc = false;
+		for (let i = 0; i < raw.length && out.length < 64; i++) {
+			const ch = raw[i];
+			if (esc) { esc = false; out += ch; continue; }
+			if (ch === "\\") { esc = true; continue; }
+			if (q) { if (ch === q) q = undefined; else out += ch; continue; }
+			if (ch === "'" || ch === '"') { q = ch; continue; }
+			if (ch === " " || ch === "\t" || ch === "\n") break;
+			out += ch;
+		}
+		return out.toLowerCase();
+	};
+
+	let quote: "'" | '"' | undefined;
+	let escaped = false;
+	let segmentStart = 0;
+	// Only built-ins chained AFTER an operator are the misuses we care about;
+	// the leading segment routes through normal cli parsing.
+	let skipFirst = true;
+
+	const checkSegment = (start: number, end: number): string | null => {
+		if (skipFirst) return null;
+		const word = firstWord(command.slice(start, end));
+		return word && builtins.includes(word) ? word : null;
+	};
+
+	for (let i = 0; i < command.length; i++) {
+		const char = command[i];
+		if (escaped) { escaped = false; continue; }
+		if (char === "\\") { escaped = true; continue; }
+		if (quote) { if (char === quote) quote = undefined; continue; }
+		if (char === "'" || char === '"') { quote = char; continue; }
+		const next = command[i + 1];
+		const two = (char === "&" && next === "&") || (char === "|" && next === "|");
+		if (two || char === ";" || char === "|") {
+			const hit = checkSegment(segmentStart, i);
+			if (hit) return hit;
+			skipFirst = false;
+			segmentStart = i + (two ? 2 : 1);
+			if (two) i += 1;
+		}
+	}
+	return checkSegment(segmentStart, command.length);
+}
+
 function builtinKey(builtin: ParsedBuiltinToolInput | BashBuiltinDetails): string {
 	if ("command" in builtin) {
 		return JSON.stringify({ name: builtin.command, args: builtin.input });
@@ -632,6 +699,21 @@ export function createBashToolDefinition(
 						}
 						if (exitCode !== 0 && exitCode !== null) {
 							outputText += `\n\nCommand exited with code ${exitCode}`;
+						// Failure heuristic: if a built-in command name (e.g. _read) was
+						// chained after a shell operator (sed ... && _read ...), the shell
+						// ran it as an unknown command. Surface an advisory hint so the model
+						// reissues the built-in as its own pure command. Advisory only — a
+						// command that merely *contains* the word (grep _read file) is ignored
+						// unless it also failed.
+						const chainedBuiltin = detectChainedBuiltin(command);
+						if (chainedBuiltin) {
+							outputText +=
+								"\n\n" +
+								`(${chainedBuiltin} is a Pizza built-in cli command. It cannot be ` +
+								`chained after shell operators like &&, ||, ;, or | — the shell ran it ` +
+								`as an unknown command. Reissue it as a single pure command, e.g. ` +
+								`cli("${chainedBuiltin} <args>").)`;
+						}
 							reject(new Error(outputText));
 						} else {
 							resolve({ content: [{ type: "text", text: outputText }], details });
