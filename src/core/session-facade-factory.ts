@@ -380,8 +380,6 @@ export async function createSessionFacade(
 			definitions.set(definition.name, definition);
 			sources.set(definition.name, createSyntheticSourceInfo(`<sdk:${definition.name}>`, { source: "sdk" }));
 		}
-
-
 		availableToolDefinitions = Array.from(definitions.values());
 		availableToolSources = sources;
 	};

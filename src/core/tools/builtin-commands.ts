@@ -88,6 +88,7 @@ function builtinTokenToId(token: string): string | null {
 	}
 	return null;
 }
+
 /**
  * Parse builtin command with optional heredoc.
  * Supports:
