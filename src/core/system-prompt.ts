@@ -198,10 +198,9 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 
 	// File exploration guidelines
 	if (hasCli) {
-		addGuideline("Use Pizza built-in file commands only for read, write, edit, session_split, and history_tree");
-		addGuideline("Use shell commands such as grep, find, and ls normally; shell handles pipes, redirects, globs, &&, and ;");
-		addGuideline("Use read line anchors as edit range values; edit accepts op/range/new edits");
-		addGuideline("Use edit op=search with old/new for search-and-replace when you don't have fresh line anchors (e.g. after using sed/cat, or after a previous edit shifted line numbers)");
+		addGuideline("Use Pizza built-in file commands only for _read, _write, _edit, _session_split, _history_tree, and _delegate_agent");
+		addGuideline("Built-in commands are NOT a shell: never use pipes (|), redirects (> <), chaining (; & &&), command substitution, or newlines with them. A built-in only works as the FIRST word of its own single cli() call — buried after &&/||/;/| it is passed to the shell, which has no such command. Issue each built-in as its own separate call; do not prefix it with cd && since the working directory is already set. For pipelines, redirections, or globs, use a plain shell command instead (grep, find, ls, cat, sed, git, npm, etc.).");
+		addGuideline("Use _read line anchors as _edit range values; _edit accepts op/range/new edits. Use _edit op=search with old/new for search-and-replace when you don't have fresh line anchors (e.g. after using sed/cat, or after a previous edit shifted line numbers).");
 	}
 
 	for (const guideline of promptGuidelines ?? []) {
@@ -224,28 +223,33 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		"",
 		"The cli tool recognizes only the following Pizza built-in commands and executes them internally (no shell fork):",
 		"",
-		"  read <path> [offset] [limit]                Read file content with 2-hex line anchors",
-		"  write <path> <content>                       Write content to file",
-		"  write <path> <<EOF\ncontent\nEOF             Write multi-line content (heredoc)",
-		"  edit <path> <op> <range> [new]               Edit anchored whole line(s)",
-		"  session_split [reason] [name]                Split promptly when the user starts a new task or topic",
-		"  history_tree <action> [session_id]           Browse past sessions: list, view, jump, fork",
+		"  _read <path> [offset] [limit]                Read file content with 2-hex line anchors",
+		"  _write <path> <content>                       Write content to file",
+		"  _write <path> <<EOF\ncontent\nEOF             Write multi-line content (heredoc)",
+		"  _edit <path> <op> <range> [new]               Edit anchored whole line(s)",
+		"  _session_split [reason] [name]                Split promptly when the user starts a new task or topic",
+		"  _history_tree <action> [session_id]           Browse past sessions: list, view, jump, fork",
+		"  _delegate_agent <action> [cwd] [task]         Main agent only: list known workspaces, run a sub-agent",
 		"",
-		"grep, find, ls, git, npm, and all other commands are passed to the system shell as-is.",
-		"The shell handles native pipes, redirects, globs, command grouping, &&, and ;. If grep/find/ls are missing from PATH, Pizza injects temporary per-process shims for only those missing commands.",
+		"IMPORTANT: built-in commands are pure single commands. They do NOT support shell operators",
+		"(no pipes |, redirects > <, chaining ; & &&, command substitution, or newlines). A built-in",
+		"command is ALWAYS handled internally and never falls back to the shell — do not pipe or",
+		"redirect it. grep, find, ls, git, npm, and all other commands are passed to the system shell,",
+		"which handles native pipes, redirects, globs, command grouping, &&, and ;. If grep/find/ls",
+		"are missing from PATH, Pizza injects temporary per-process shims for only those missing commands.",
 		"",
 		"Examples:",
-		'- cli("read src/main.ts") - Read a file; text lines include <line>#<2-hex-hash> anchors',
-		'- cli("read src/main.ts 10 50") - Read lines 10-60',
-		'- cli("write output.txt Hello World") - Write to a file',
-		'- cli("edit src/main.ts replace 12#ab \"const value = 2\"") - Replace an anchored line',
-		'- cli("edit src/main.ts insert_after 12#ab \"const next = 3\"") - Insert after an anchored line',
-		'- cli("edit src/main.ts delete 12#ab..14#de") - Delete an anchored range',
-		'- cli("edit src/main.ts search \"const a = 1\" \"const a = 2\"") - Search-and-replace without line anchors (fallback when anchors are stale or unavailable)',
-		'- cli("session_split topic_change") - Split when the conversation topic changes',
-		'- cli("session_split --reason topic_change --name \"Fix auth\"") - Split and name the new session',
-		'- cli("history_tree list") - Show the session history tree',
-		'- cli("history_tree jump sess_0042") - Return to a previous session and continue there',
+		'- cli("_read src/main.ts") - Read a file; text lines include <line>#<2-hex-hash> anchors',
+		'- cli("_read src/main.ts 10 50") - Read lines 10-60',
+		'- cli("_write output.txt Hello World") - Write to a file',
+		'- cli("_edit src/main.ts replace 12#ab \"const value = 2\"") - Replace an anchored line',
+		'- cli("_edit src/main.ts insert_after 12#ab \"const next = 3\"") - Insert after an anchored line',
+		'- cli("_edit src/main.ts delete 12#ab..14#de") - Delete an anchored range',
+		'- cli("_edit src/main.ts search \"const a = 1\" \"const a = 2\"") - Search-and-replace without line anchors (fallback when anchors are stale or unavailable)',
+		'- cli("_session_split topic_change") - Split when the conversation topic changes',
+		'- cli("_session_split --reason topic_change --name \"Fix auth\"") - Split and name the new session',
+		'- cli("_history_tree list") - Show the session history tree',
+		'- cli("_history_tree jump sess_0042") - Return to a previous session and continue there',
 		'- cli("grep -rn \"foo\" . | head") - Search with native shell pipeline',
 		'- cli("find . -name \"*.py\" -maxdepth 2 | wc -l") - Find with native shell pipeline',
 		'- cli("ls -lah *.py") - List files with shell glob expansion',

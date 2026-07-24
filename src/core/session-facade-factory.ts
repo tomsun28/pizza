@@ -43,10 +43,11 @@ import { SettingsManager } from "./settings-manager.js";
 import { createSyntheticSourceInfo } from "./source-info.js";
 import { buildSystemPrompt } from "./system-prompt.js";
 import { allToolNames, createToolDefinition, DEFAULT_LLM_TOOLS, type ToolName } from "./tools/index.js";
+import type { BashToolOptions } from "./tools/bash.js";
 import { createHistoryTreeToolDefinition } from "./tools/history-tree.js";
 import { buildSessionBreadcrumb } from "./projection/history-tree.js";
 import { createSessionSplitToolDefinition } from "./tools/session-split.js";
-import { createDelegateToolDefinition } from "./tools/delegate.js";
+import { createDelegateAgentToolDefinition } from "./tools/delegate-agent.js";
 import { wrapToolDefinitions } from "./tools/tool-definition-wrapper.js";
 
 export interface CreateSessionFacadeOptions {
@@ -327,9 +328,15 @@ export async function createSessionFacade(
 	const shellCommandPrefix = settingsManager.getShellCommandPrefix();
 	const shellPath = settingsManager.getShellPath();
 	const autoResizeImages = settingsManager.getImageAutoResize();
+	const cliToolOptions: BashToolOptions = { commandPrefix: shellCommandPrefix, shellPath, read: { autoResizeImages } };
+	// The `delegate_agent` built-in command is wired into the cli tool only for the
+	// main agent (it needs the agent dir to spawn sub-agents / list workspaces).
+	if (isMainAgent) {
+		cliToolOptions.delegateAgent = { agentDir, mainDir };
+	}
 	const toolOptions = {
 		read: { autoResizeImages },
-		cli: { commandPrefix: shellCommandPrefix, shellPath, read: { autoResizeImages } },
+		cli: cliToolOptions,
 	};
 
 	let runtime: EventSourcedRuntime | undefined;
@@ -373,21 +380,6 @@ export async function createSessionFacade(
 			definitions.set(definition.name, definition);
 			sources.set(definition.name, createSyntheticSourceInfo(`<sdk:${definition.name}>`, { source: "sdk" }));
 		}
-
-		// Main-agent-only: register the `delegate` tool for cross-workspace
-		// orchestration. Not exposed to normal per-project workspaces. The tool
-		// is always available to the main agent regardless of the `tools`
-		// allowlist (it is a core capability of the persistent agent, not an
-		// opt-in built-in).
-		if (isMainAgent && includeTool("delegate")) {
-			const delegateDefinition = createDelegateToolDefinition({ agentDir, mainDir }) as ExtensionToolDefinition;
-			definitions.set(delegateDefinition.name, delegateDefinition);
-			sources.set(
-				delegateDefinition.name,
-				createSyntheticSourceInfo(`<builtin:${delegateDefinition.name}>`, { source: "builtin" }),
-			);
-		}
-
 		availableToolDefinitions = Array.from(definitions.values());
 		availableToolSources = sources;
 	};
@@ -409,11 +401,20 @@ export async function createSessionFacade(
 			}
 		}
 
-		// session_split and history_tree are built-in cli commands, not separate
-		// tools; ensure their prompt guidelines are included whenever the cli
-		// tool is active.
+		// session_split, history_tree, and (for the main agent) delegate_agent are
+		// built-in cli commands, not separate tools; ensure their prompt guidelines
+		// are included whenever the cli tool is active.
 		if (definitions.some((definition) => definition.name === "cli" || definition.name === "bash")) {
-			for (const builtinDef of [createSessionSplitToolDefinition(), createHistoryTreeToolDefinition()]) {
+			// Only promptGuidelines is consumed below; type loosely to avoid
+			// renderCall contravariance between the concrete tool definitions.
+			const builtinDefs: Array<{ promptGuidelines?: string[] }> = [
+				createSessionSplitToolDefinition(),
+				createHistoryTreeToolDefinition(),
+			];
+			if (isMainAgent && agentDir) {
+				builtinDefs.push(createDelegateAgentToolDefinition({ agentDir, mainDir }));
+			}
+			for (const builtinDef of builtinDefs) {
 				for (const guideline of builtinDef.promptGuidelines ?? []) {
 					const normalized = guideline.trim();
 					if (normalized) {

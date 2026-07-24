@@ -64,7 +64,30 @@ export type ParsedBuiltinToolInput =
 				max_messages?: number;
 				reason?: string;
 			};
+	  }
+	| {
+			command: "delegate_agent";
+			input: {
+				action: "list" | "run";
+				cwd?: string;
+				task?: string;
+				timeout?: number;
+			};
 	  };
+
+/**
+ * Map a built-in command token (what the user/LLM types, e.g. "_read") to its
+ * stable internal id (e.g. "read"). Returns null when the token is not a
+ * recognized built-in. The token is always the leading-underscore form so it
+ * never collides with a real shell command/builtin.
+ */
+function builtinTokenToId(token: string): string | null {
+	const lower = token.toLowerCase();
+	if ((BUILTIN_COMMANDS as readonly string[]).includes(lower)) {
+		return lower.slice(1);
+	}
+	return null;
+}
 
 /**
  * Parse builtin command with optional heredoc.
@@ -113,8 +136,9 @@ export function parseBuiltinToolInput(
 	args: string[],
 	heredoc?: string,
 ): ParsedBuiltinToolInput | null {
-	const normalized = command.toLowerCase();
-	switch (normalized) {
+	const id = builtinTokenToId(command);
+	if (!id) return null;
+	switch (id) {
 		case "read":
 			return { command: "read", input: parseReadInput(args) };
 		case "write":
@@ -125,6 +149,8 @@ export function parseBuiltinToolInput(
 			return { command: "session_split", input: parseSessionSplitInput(args) };
 		case "history_tree":
 			return { command: "history_tree", input: parseHistoryTreeInput(args) };
+		case "delegate_agent":
+			return { command: "delegate_agent", input: parseDelegateAgentInput(args, heredoc) };
 		default:
 			return null;
 	}
@@ -263,6 +289,75 @@ function parseHistoryTreeInput(args: string[]): {
 	}
 
 	return { action, session_id: sessionId, query, max_messages: maxMessages, reason };
+}
+const DELEGATE_AGENT_ACTIONS = ["list", "run"] as const;
+type DelegateAgentAction = (typeof DELEGATE_AGENT_ACTIONS)[number];
+
+/**
+ * Parse the `delegate_agent` command's args:
+ *   delegate_agent list
+ *   delegate_agent run <cwd> <task>
+ *   delegate_agent run --cwd <path> --task "..." [--timeout N]
+ *
+ * For `run`, the first positional after the action is the cwd and the rest is
+ * joined into the task; `--cwd` / `--task` flags override the positionals. A
+ * heredoc (when present) supplies the task for `run`.
+ */
+function parseDelegateAgentInput(args: string[], heredoc?: string): {
+	action: DelegateAgentAction;
+	cwd?: string;
+	task?: string;
+	timeout?: number;
+} {
+	let action: DelegateAgentAction | undefined;
+	let cwd: string | undefined;
+	let task: string | undefined;
+	let timeout: number | undefined;
+	const positional: string[] = [];
+
+	for (let i = 0; i < args.length; i++) {
+		const arg = args[i];
+		if (arg === "--cwd" || arg === "-d") {
+			cwd = args[++i];
+		} else if (arg === "--task" || arg === "-t") {
+			task = args[++i];
+		} else if (arg === "--timeout") {
+			timeout = parseOptionalInt(args[++i]);
+		} else {
+			positional.push(arg);
+		}
+	}
+
+	if (positional.length > 0 && action === undefined) {
+		const candidate = positional[0].toLowerCase();
+		if (!DELEGATE_AGENT_ACTIONS.includes(candidate as DelegateAgentAction)) {
+			throw new Error(
+				`delegate_agent: unknown action "${positional[0]}". Valid actions: ${DELEGATE_AGENT_ACTIONS.join(", ")}`,
+			);
+		}
+		action = candidate as DelegateAgentAction;
+	}
+
+	if (!action) {
+		throw new Error(`delegate_agent: action required. Valid actions: ${DELEGATE_AGENT_ACTIONS.join(", ")}`);
+	}
+
+	// For `run`, the remaining positionals are <cwd> <task...>.
+	if (action === "run") {
+		const rest = positional.slice(1);
+		if (cwd === undefined && rest.length > 0) {
+			cwd = rest[0];
+		}
+		if (task === undefined) {
+			if (rest.length > 1) {
+				task = rest.slice(1).join(" ");
+			} else if (heredoc !== undefined) {
+				task = heredoc;
+			}
+		}
+	}
+
+	return { action, cwd, task, timeout };
 }
 
 function parseEditInput(args: string[]): { path: string; edits: Edit[] } {
@@ -439,10 +534,12 @@ function isHelpRequest(args: string[]): boolean {
 }
 
 export function getBuiltinCommandHelp(command: string): string | undefined {
-	switch (command.toLowerCase()) {
+	const id = builtinTokenToId(command);
+	if (!id) return undefined;
+	switch (id) {
 		case "read":
 			return [
-				"read - Read a file",
+				"_read - Read a file",
 				"",
 				"Description:",
 				"  Reads a text file or supported image file from the current working directory.",
@@ -462,16 +559,16 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"  -h, --help        Show this help.",
 				"",
 				"Examples:",
-				"  read src/main.ts",
-				"  read src/main.ts 20",
-				"  read src/main.ts 20 50",
-				"  read --path src/main.ts --offset 20 --limit 50",
-				"  read -p src/main.ts -o 20 -l 50",
-				"  read --path src/main.ts --anchors none",
+				"  _read src/main.ts",
+				"  _read src/main.ts 20",
+				"  _read src/main.ts 20 50",
+				"  _read --path src/main.ts --offset 20 --limit 50",
+				"  _read -p src/main.ts -o 20 -l 50",
+				"  _read --path src/main.ts --anchors none",
 			].join("\n");
 		case "write":
 			return [
-				"write - Create or overwrite a file",
+				"_write - Create or overwrite a file",
 				"",
 				"Description:",
 				"  Writes complete content to a file. Creates parent directories when needed.",
@@ -486,16 +583,16 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"  -h, --help        Show this help.",
 				"",
 				"Examples:",
-				"  write notes.txt hello",
-				"  write --path notes.txt --content \"hello world\"",
-				"  write -p notes.txt -c \"hello world\"",
-				"  write src/generated.ts <<EOF",
+				"  _write notes.txt hello",
+				"  _write --path notes.txt --content \"hello world\"",
+				"  _write -p notes.txt -c \"hello world\"",
+				"  _write src/generated.ts <<EOF",
 				"  export const value = 1;",
 				"  EOF",
 			].join("\n");
 		case "edit":
 			return [
-				"edit - Edit a file with read range anchors or search-and-replace",
+				"_edit - Edit a file with read range anchors or search-and-replace",
 				"",
 				"Description:",
 				"  Edits one existing file. Two modes are supported:",
@@ -520,18 +617,18 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"  -h, --help        Show this help.",
 				"",
 				"Examples:",
-				"  read src/app.ts",
-				"  edit src/app.ts replace 12#ab \"const a = 2\"",
-				"  edit --path src/app.ts --op insert_after --range 12#ab --new \"const b = 3\"",
-				"  edit --path src/app.ts --op delete --range 12#ab..14#de",
-				"  edit --path src/app.ts --op search --old \"const a = 1\" --new \"const a = 2\"",
-				"  edit src/app.ts search \"const a = 1\" \"const a = 2\"",
-				"  edit --path src/app.ts --edits '[{\"op\":\"replace\",\"range\":\"12#ab\",\"new\":\"const a = 2\"}]'",
-				"  edit --path src/app.ts --edits '[{\"op\":\"search\",\"old\":\"const a = 1\",\"new\":\"const a = 2\"}]'",
+				"  _read src/app.ts",
+				"  _edit src/app.ts replace 12#ab \"const a = 2\"",
+				"  _edit --path src/app.ts --op insert_after --range 12#ab --new \"const b = 3\"",
+				"  _edit --path src/app.ts --op delete --range 12#ab..14#de",
+				"  _edit --path src/app.ts --op search --old \"const a = 1\" --new \"const a = 2\"",
+				"  _edit src/app.ts search \"const a = 1\" \"const a = 2\"",
+				"  _edit --path src/app.ts --edits '[{\"op\":\"replace\",\"range\":\"12#ab\",\"new\":\"const a = 2\"}]'",
+				"  _edit --path src/app.ts --edits '[{\"op\":\"search\",\"old\":\"const a = 1\",\"new\":\"const a = 2\"}]'",
 			].join("\n");
 		case "session_split":
 			return [
-				"session_split - Split the current conversation session",
+				"_session_split - Split the current conversation session",
 				"",
 				"Description:",
 				"  Start a new session from the current point. Previous messages are no longer",
@@ -546,13 +643,13 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"  -h, --help        Show this help.",
 				"",
 				"Examples:",
-				"  session_split topic_change",
-				"  session_split topic_change \"Fix auth\"",
-				"  session_split --reason topic_change --name \"Fix auth\"",
+				"  _session_split topic_change",
+				"  _session_split topic_change \"Fix auth\"",
+				"  _session_split --reason topic_change --name \"Fix auth\"",
 			].join("\n");
 		case "history_tree":
 			return [
-				"history_tree - Browse and navigate the session history tree",
+				"_history_tree - Browse and navigate the session history tree",
 				"",
 				"Description:",
 				"  Every past session is a node in the history tree. Use list to see the tree,",
@@ -573,11 +670,42 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"  -h, --help         Show this help.",
 				"",
 				"Examples:",
-				"  history_tree list",
-				"  history_tree list --query \"auth bug\"",
-				"  history_tree view sess_0042",
-				"  history_tree jump sess_0042 --reason \"return to auth work\"",
-				"  history_tree fork sess_0042",
+				"  _history_tree list",
+				"  _history_tree list --query \"auth bug\"",
+				"  _history_tree view sess_0042",
+				"  _history_tree jump sess_0042 --reason \"return to auth work\"",
+				"  _history_tree fork sess_0042",
+			].join("\n");
+		case "delegate_agent":
+			return [
+				"_delegate_agent - Delegate a task to a sub-agent in another project directory",
+				"",
+				"Description:",
+				"  Hand a bounded task to a sub-agent running in another project directory. The",
+				"  sub-agent runs in its own workspace (independent event store / compaction) and",
+				"  only its final reply is returned — intermediate output stays out of this context.",
+				"  Only available to the main (persistent) agent.",
+				"",
+				"Actions:",
+				"  list              Show known workspace agents (project directories previously visited).",
+				"  run <cwd> <task>  Delegate a task to a sub-agent in <cwd>; blocks until it finishes.",
+				"",
+				"Parameters:",
+				"  cwd               Target project directory (required for run). Resolved from the working directory.",
+				"  task              Task description to hand to the sub-agent (required for run).",
+				"  --cwd, -d         Target project directory (alternative to positional).",
+				"  --task, -t        Task description (alternative to positional).",
+				"  --timeout         Timeout in milliseconds (default 120000).",
+				"  <<EOF             Heredoc form for the task (multi-line).",
+				"  -h, --help        Show this help.",
+				"",
+				"Examples:",
+				"  _delegate_agent list",
+				"  _delegate_agent run ../other-project \"fix the auth bug and summarize the change\"",
+				"  _delegate_agent run --cwd ../other-project --task \"fix the auth bug\" --timeout 60000",
+				"  _delegate_agent run ../other-project <<EOF",
+				"  Refactor the auth module and write a short summary of what changed.",
+				"  EOF",
 			].join("\n");
 		default:
 			return undefined;
@@ -792,6 +920,13 @@ export async function executeBuiltinCommand(
 				exitCode: 1,
 			};
 		}
+		case "delegate_agent": {
+			return {
+				stdout: "",
+				stderr: "delegate_agent requires the main (persistent) agent context and is executed through the cli tool.",
+				exitCode: 1,
+			};
+		}
 
 		default:
 			return {
@@ -802,7 +937,7 @@ export async function executeBuiltinCommand(
 	}
 }
 
-export const BUILTIN_COMMANDS = ["read", "write", "edit", "session_split", "history_tree"] as const;
+export const BUILTIN_COMMANDS = ["_read", "_write", "_edit", "_session_split", "_history_tree", "_delegate_agent"] as const;
 export type BuiltinCommand = (typeof BUILTIN_COMMANDS)[number];
 
 // ============================================================================

@@ -20,7 +20,7 @@
 |---|---|---|
 | 身份 | 无（通用 coding assistant） | 灵魂文件定义人格 |
 | 记忆 | 仅当次会话 + AGENTS.md | 长期记忆库|
-| 工作范围 | 绑定单个 cwd | 固定为 main dir（默认 `~/.pizza/main`，可配置），通过 delegate 操作其它项目 |
+| 工作范围 | 绑定单个 cwd | 固定为 main dir（默认 `~/.pizza/main`，可配置），通过 delegate_agent 操作其它项目 |
 | 压缩 | 标准 Goal/Progress 摘要 | 同左，灵魂/记忆靠每次重建 prompt 自我恢复 |
 
 ## 3. 文件布局
@@ -109,7 +109,7 @@ export interface BuildSystemPromptOptions {
 - "开始新话题前先回顾相关长期记忆"
 - `"当学到关于用户的稳定事实时，写入 ${memoryDir} 下对应文件"`
 - `"发现记忆中过时或不准确的信息时，主动更新或删除对应文件"`
-- "你可以通过 `delegate` 工具将任务委派到其它项目目录的子 agent（见第 8 节）"
+- "你可以通过 `delegate_agent` 工具将任务委派到其它项目目录的子 agent（见第 8 节）"
 
 ## 5. 资源加载器特化
 
@@ -236,9 +236,9 @@ pizza --cwd /path/to/project "fix the auth bug in login.ts"
 - **优点**：零代码改动，立即可用
 - **缺点**：同步阻塞，输出是纯文本，无法中途 steer/abort，main agent context 被子 agent 输出撑大
 
-#### Phase 2：`delegate` 工具 + `RpcClient`（同步模式）
+#### Phase 2：`delegate_agent` 工具 + `RpcClient`（同步模式）
 
-在 `createSessionFacade` 的 `isMainAgent` 分支中注册 `delegate` 工具，内部使用 `RpcClient`：
+在 `createSessionFacade` 的 `isMainAgent` 分支中注册 `delegate_agent` 工具，内部使用 `RpcClient`：
 
 ```ts
 // delegate 工具核心逻辑（伪代码）
@@ -282,9 +282,9 @@ async function delegate(args: {
 - **Auth 共享**：`RpcClient` spawn 的子进程继承 `process.env`，默认读取 `~/.pizza/agent/auth.json`，与 main agent 共享同一套凭证。
   > **⚠️ agentDir 对齐**：如果 main agent 使用了非默认 `agentDir`（如 `--agent-dir /custom/path`），子进程仍走默认 `getAgentDir()`，会读错 auth 文件。此时需在 `RpcClientOptions.env` 中显式传递 `PIZZA_AGENT_DIR` 或在子进程 args 中加 `--agent-dir`。
 
-#### Phase 3：异步 delegate + 事件流
+#### Phase 3：异步 delegate_agent + 事件流
 
-扩展 `delegate` 工具支持 `mode: "async"`，引入 `AgentOrchestrator` 管理常驻子 agent：
+扩展 `delegate_agent` 工具支持 `mode: "async"`，引入 `AgentOrchestrator` 管理常驻子 agent：
 
 ```ts
 // 异步模式：返回 agent_id，事件通过 SUB_AGENT_EVENT 转发到 main EventStore
@@ -333,12 +333,12 @@ class AgentOrchestrator {
 - **优点**：子 agent 常驻，可连续下达多个任务；支持 steer/abort；事件流可观测
 - **缺点**：复杂度最高；多 LLM 连接并发管理；需要并发数限制（semaphore）
 
-### 8.3 `delegate` 工具定义
+### 8.3 `delegate_agent` 工具定义
 
 ```ts
 // 仅在 isMainAgent 时注册，普通 workspace 不暴露
 {
-  name: "delegate",
+  name: "delegate_agent",
   description: "将任务委派到另一个项目目录的子 agent 执行",
   parameters: {
     type: "object",
@@ -349,7 +349,7 @@ class AgentOrchestrator {
     },
     required: ["cwd", "task"],
   },
-  promptSnippet: "delegate: 在另一个项目目录中启动子 agent 执行任务，返回最终结果",
+  promptSnippet: "delegate_agent: 在另一个项目目录中启动子 agent 执行任务，返回最终结果",
   promptGuidelines: [
     "使用 delegate 工具将跨项目的任务委派给子 agent，避免在当前 context 中处理其它项目的代码",
     "delegate 返回的是子 agent 的最终回复摘要，中间过程不会进入当前 context",
@@ -385,7 +385,7 @@ main agent 在 `delegate` 完成后自动更新 `projects.md`（通过 guideline
 5. `createSessionFacade` 加 `isMainAgent` 分支 + 透传灵魂/记忆
 6. **memory 刷新**：`refreshSystemPromptWithBreadcrumb` 在 `isMainAgent` 时先 `reload()` 再重建 prompt
 7. Phase 1：在 `isMainAgent` guidelines 中加入 shell 委派提示（零代码改动，注意二进制分发下的执行路径）
-8. Phase 2：在 `createSessionFacade` 的 `isMainAgent` 分支注册 `delegate` 工具（基于 `RpcClient`，**必须处理 `cliPath` 绝对路径 + 二进制适配 + agentDir 对齐**）
+8. Phase 2：在 `createSessionFacade` 的 `isMainAgent` 分支注册 `delegate_agent` 工具（基于 `RpcClient`，**必须处理 `cliPath` 绝对路径 + 二进制适配 + agentDir 对齐**）
 9. Phase 3：引入 `AgentOrchestrator` + 异步 `delegate` + `SUB_AGENT_EVENT` 事件类型
    - **同步修改 `event-store/types.ts` 的 `EventType` union**
    - **在 `projection/session-projection.ts` 和 `timeline-projection.ts` 的 switch 中加 fallback 处理**

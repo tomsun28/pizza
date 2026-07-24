@@ -58,8 +58,8 @@ export interface WorkspaceMeta {
  * A discoverable workspace agent known to the local agent directory.
  *
  * Returned by {@link listKnownWorkspaces} so the main agent can enumerate the
- * project directories it has previously worked in (e.g. for the `delegate`
- * tool's `list_workspaces` action).
+ * project directories it has previously worked in (e.g. for the built-in
+ * `delegate_agent list` cli command).
  */
 export interface KnownWorkspace {
 	workspace_id: string;

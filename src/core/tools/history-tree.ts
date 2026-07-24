@@ -39,9 +39,9 @@ export function createHistoryTreeToolDefinition(): ToolDefinition<typeof history
 			"Use this when the user wants to go back to an earlier conversation point or try a different approach.",
 		promptSnippet: "Browse past sessions as a tree; view, jump back to, or fork from any previous session",
 		promptGuidelines: [
-			"Use history_tree list to find previous sessions when the user refers to earlier work; use view to confirm before jumping.",
-			"Use history_tree jump to return to a previous session, and history_tree fork to try an alternative approach from a past point.",
-			"After history_tree jump or fork, your context switches to the target session — continue the task there.",
+			"Use _history_tree list to find previous sessions when the user refers to earlier work; use view to confirm before jumping.",
+			"Use _history_tree jump to return to a previous session, and _history_tree fork to try an alternative approach from a past point.",
+			"After _history_tree jump or fork, your context switches to the target session — continue the task there.",
 		],
 		parameters: historyTreeSchema,
 		renderShell: "self",

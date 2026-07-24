@@ -9,11 +9,18 @@ use tauri::{AppHandle, Emitter, Manager};
 /// Read an API key for a provider from ~/.pizza/agent/auth.json.
 fn read_api_key(provider: &str) -> Option<String> {
 	let home = std::env::var("HOME").ok()?;
-	let auth_path = PathBuf::from(&home).join(".pizza").join("agent").join("auth.json");
+	let auth_path = PathBuf::from(&home)
+		.join(".pizza")
+		.join("agent")
+		.join("auth.json");
 	let raw = std::fs::read_to_string(&auth_path).ok()?;
 	let parsed: Value = serde_json::from_str(&raw).ok()?;
 	let key = parsed.get(provider)?.get("key")?.as_str()?.to_string();
-	if key.is_empty() { None } else { Some(key) }
+	if key.is_empty() {
+		None
+	} else {
+		Some(key)
+	}
 }
 
 fn log_file(msg: &str) {
@@ -776,7 +783,10 @@ pub async fn list_providers(app: AppHandle) -> Result<Vec<ProviderInfo>, String>
 			.map(|s| s.to_string());
 		providers.push(ProviderInfo {
 			id: (*id).clone(),
-			name: builtin_names.get(*id).cloned().unwrap_or_else(|| (*id).clone()),
+			name: builtin_names
+				.get(*id)
+				.cloned()
+				.unwrap_or_else(|| (*id).clone()),
 			has_api_key,
 			auth_type,
 		});
@@ -898,20 +908,15 @@ pub async fn set_window_background(app: AppHandle, r: u8, g: u8, b: u8) -> Resul
 /// `mime_type` is the audio MIME type (e.g. "audio/webm", "audio/mp4").
 /// The OpenAI API key is read from ~/.pizza/agent/auth.json under the "openai" key.
 #[tauri::command]
-pub async fn transcribe_audio(
-	audio_b64: String,
-	mime_type: String,
-) -> Result<String, String> {
+pub async fn transcribe_audio(audio_b64: String, mime_type: String) -> Result<String, String> {
 	let api_key = read_api_key("openai").ok_or_else(|| {
 		"OpenAI API key not found. Add it in Settings to use voice input.".to_string()
 	})?;
 
 	// Decode base64 audio.
-	let audio_bytes = base64::Engine::decode(
-		&base64::engine::general_purpose::STANDARD,
-		&audio_b64,
-	)
-	.map_err(|e| format!("base64 decode: {e}"))?;
+	let audio_bytes =
+		base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &audio_b64)
+			.map_err(|e| format!("base64 decode: {e}"))?;
 
 	// Determine file extension from MIME type.
 	let ext = match mime_type.as_str() {

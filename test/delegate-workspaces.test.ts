@@ -8,7 +8,7 @@ import {
 	getWorkspaceDir,
 	listKnownWorkspaces,
 } from "../src/core/event-store/workspace.js";
-import { createDelegateToolDefinition } from "../src/core/tools/delegate.js";
+import { createDelegateAgentToolDefinition } from "../src/core/tools/delegate-agent.js";
 
 describe("listKnownWorkspaces", () => {
 	let agentDir: string;
@@ -111,7 +111,7 @@ describe("listKnownWorkspaces", () => {
 	});
 });
 
-describe("createDelegateToolDefinition", () => {
+describe("createDelegateAgentToolDefinition", () => {
 	let agentDir: string;
 
 	beforeEach(() => {
@@ -124,27 +124,26 @@ describe("createDelegateToolDefinition", () => {
 			rmSync(agentDir, { recursive: true, force: true });
 		}
 	});
-
 	test("exposes the expected name, description, and prompt guidelines", () => {
-		const def = createDelegateToolDefinition({ agentDir });
+		const def = createDelegateAgentToolDefinition({ agentDir });
 
-		expect(def.name).toBe("delegate");
+		expect(def.name).toBe("delegate_agent");
 		expect(def.description).toContain("sub-agent");
-		expect(def.promptSnippet).toContain("delegate");
+		expect(def.promptSnippet).toContain("delegate_agent");
 		expect(def.promptGuidelines).toBeDefined();
 		expect(def.promptGuidelines!.length).toBeGreaterThan(0);
 	});
 
-	test("list_workspaces action returns the known workspace list without spawning", async () => {
+	test("list action returns the known workspace list without spawning", async () => {
 		// Register one workspace so the list is non-empty.
 		const cwd = join(tmpdir(), `project-list-${Date.now()}`);
 		const id = deriveWorkspaceId(cwd);
 		ensureWorkspaceMeta(id, cwd, agentDir);
 
-		const def = createDelegateToolDefinition({ agentDir });
+		const def = createDelegateAgentToolDefinition({ agentDir });
 		const result = await def.execute(
 			"call-1",
-			{ list_workspaces: true },
+			{ action: "list" },
 			undefined,
 			undefined,
 			{} as any,
@@ -156,38 +155,33 @@ describe("createDelegateToolDefinition", () => {
 		expect(text).toContain(cwd);
 	});
 
-	test("list_workspaces reports an empty state when no workspaces are known", async () => {
-		const def = createDelegateToolDefinition({ agentDir });
-		const result = await def.execute("call-2", {}, undefined, undefined, {} as any);
+	test("list reports an empty state when no workspaces are known", async () => {
+		const def = createDelegateAgentToolDefinition({ agentDir });
+		const result = await def.execute("call-2", { action: "list" }, undefined, undefined, {} as any);
 
 		expect(result.content).toHaveLength(1);
 		const text = (result.content[0] as { type: string; text: string }).text;
 		expect(text).toContain("No known workspace agents found");
 	});
 
-	test("delegating without cwd or task returns a helpful error (no spawn)", async () => {
-		const def = createDelegateToolDefinition({ agentDir });
-		const result = await def.execute(
-			"call-3",
-			{ list_workspaces: false },
-			undefined,
-			undefined,
-			{} as any,
-		);
+	test("run without cwd or task returns a helpful error (no spawn)", async () => {
+		const def = createDelegateAgentToolDefinition({ agentDir });
+		const result = await def.execute("call-3", { action: "run" }, undefined, undefined, {} as any);
 
 		expect(result.content).toHaveLength(1);
 		const text = (result.content[0] as { type: string; text: string }).text;
 		expect(text).toContain("requires both");
 	});
 
-	test("delegating with cwd+task but a non-existent target returns an error result (no throw)", async () => {
-		const def = createDelegateToolDefinition({ agentDir });
+	test("run with cwd+task but a non-existent target returns an error result (no throw)", async () => {
+		const def = createDelegateAgentToolDefinition({ agentDir });
 		// Use a cwd that does not exist and a cliPath that does not exist so
 		// the spawn fails fast — the tool must catch and return a text error
 		// rather than throwing out of the tool executor.
 		const result = await def.execute(
 			"call-4",
 			{
+				action: "run",
 				cwd: join(tmpdir(), `no-such-${Date.now()}`),
 				task: "do something",
 				timeout: 1000,
@@ -199,7 +193,8 @@ describe("createDelegateToolDefinition", () => {
 
 		expect(result.content).toHaveLength(1);
 		const text = (result.content[0] as { type: string; text: string }).text;
-		expect(text).toContain("delegate to");
+		expect(text).toContain("delegate_agent to");
 		expect(text).toContain("failed");
 	});
 });
+
