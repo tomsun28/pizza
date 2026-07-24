@@ -33,6 +33,7 @@ import { createEditToolDefinition, type EditToolDetails, type EditToolInput, typ
 import { createReadToolDefinition, type ReadToolDetails, type ReadToolInput, type ReadToolOptions } from "./read.js";
 import { createHistoryTreeToolDefinition, type HistoryTreeToolInput } from "./history-tree.js";
 import { createSessionSplitToolDefinition, type SessionSplitToolInput } from "./session-split.js";
+import { createDelegateAgentToolDefinition, type DelegateAgentToolInput, type DelegateAgentToolOptions } from "./delegate-agent.js";
 import { createWriteToolDefinition, type WriteToolInput, type WriteToolOptions } from "./write.js";
 
 /**
@@ -80,6 +81,11 @@ export type BashBuiltinDetails =
 	| {
 			name: "history_tree";
 			args: HistoryTreeToolInput;
+			details?: undefined;
+	  }
+	| {
+			name: "delegate_agent";
+			args: DelegateAgentToolInput;
 			details?: undefined;
 	  };
 
@@ -200,6 +206,8 @@ export interface BashToolOptions {
 	write?: WriteToolOptions;
 	/** Options used when routing the built-in edit command through the edit tool. */
 	edit?: EditToolOptions;
+	/** Options for the built-in delegate_agent command (main agent only). When set, the cli tool routes `delegate_agent` to the delegate_agent definition. */
+	delegateAgent?: DelegateAgentToolOptions;
 	/** Command prefix prepended to every command (for example shell setup commands) */
 	commandPrefix?: string;
 	/** Optional explicit shell path from settings */
@@ -325,23 +333,20 @@ function rebuildBashResultRenderComponent(
 function parseBashBuiltinCommand(command: string): ParsedBuiltinToolInput | null {
 	const parsed = parseBuiltinCommand(command);
 	const builtinName = parsed.command.toLowerCase();
-	if (!BUILTIN_COMMANDS.includes(builtinName as any)) {
+	if (!(BUILTIN_COMMANDS as readonly string[]).includes(builtinName)) {
 		return null;
 	}
-	if (!canRouteAsBuiltin(command, parsed)) {
+	// Built-ins are never a shell: a bare (non-heredoc) command carrying shell
+	// operators (|, >, <, ;, &, newlines — outside quotes) is not a routable
+	// built-in. (Execution returns a guidance error for these; rendering falls
+	// back to the generic bash call renderer.)
+	if (parsed.heredoc === undefined && hasShellControlSyntax(command)) {
 		return null;
 	}
 	if (getBuiltinCommandHelpForArgs(builtinName, parsed.args)) {
 		return null;
 	}
 	return parseBuiltinToolInput(builtinName, parsed.args, parsed.heredoc);
-}
-
-function canRouteAsBuiltin(command: string, parsed: { command: string; heredoc?: string }): boolean {
-	if (parsed.heredoc !== undefined) {
-		return parsed.command.toLowerCase() === "write";
-	}
-	return !hasShellControlSyntax(command);
 }
 
 function hasShellControlSyntax(command: string): boolean {
@@ -415,11 +420,21 @@ export function createBashToolDefinition(
 	const editDefinition = createEditToolDefinition(cwd, options?.edit);
 	const sessionSplitDefinition = createSessionSplitToolDefinition();
 	const historyTreeDefinition = createHistoryTreeToolDefinition();
+	const delegateAgentDefinition = options?.delegateAgent ? createDelegateAgentToolDefinition(options.delegateAgent) : undefined;
+	/** Map of built-in command name → definition. delegate_agent is only present for the main agent. */
+	const builtinDefinitions: Record<string, ToolDefinition<any, any, any> | undefined> = {
+		read: readDefinition,
+		write: writeDefinition,
+		edit: editDefinition,
+		session_split: sessionSplitDefinition,
+		history_tree: historyTreeDefinition,
+		delegate_agent: delegateAgentDefinition,
+	};
 	return {
 		name: "cli",
 		label: "cli",
-		description: `Execute a CLI command in the current working directory. Built-in commands are routed internally: read, write, edit, session_split, and history_tree. Other commands execute through the system shell (grep, find, ls, git, npm, etc.). Truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB.`,
-		promptSnippet: "Execute CLI commands: read/write/edit/session_split/history_tree built-ins, or shell commands (grep, find, ls, git, npm, etc.)",
+		description: `Execute a CLI command in the current working directory. Built-in commands are handled internally and ALWAYS run as built-ins (they never fall back to the shell): read, write, edit, session_split, history_tree, and (for the main agent) delegate_agent. IMPORTANT: built-in commands do NOT support shell operators — no pipes (|), redirects (> <), chaining (; & &&), command substitution, or newlines; issue each as a single pure command. To use a pipeline or redirection, run a plain shell command instead (grep, find, ls, cat, sed, git, npm, etc.). Output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB.`,
+		promptSnippet: "Execute CLI commands: built-ins (read/write/edit/session_split/history_tree/delegate_agent) are pure single commands with NO shell operators; use shell commands (grep, find, ls, cat, git, npm) for pipes/redirections",
 		parameters: bashSchema,
 		async execute(
 			toolCallId,
@@ -428,58 +443,105 @@ export function createBashToolDefinition(
 			onUpdate?,
 			ctx?,
 		) {
-			// Direct command routing: if command starts with a built-in command name,
-			// execute it internally. Otherwise fall through to bash.
+			// Routing policy: a command whose first word is a built-in command name
+			// (read/write/edit/session_split/history_tree/delegate_agent) is ALWAYS handled
+			// by the internal implementation — it never degrades to the shell. Built-ins are
+			// not a shell, so they cannot support shell operators (|, >, <, ;, &, &&,
+			// command substitution, newlines). If such an operator appears (outside quotes /
+			// heredoc), return a clear error guiding toward the plain shell command instead,
+			// rather than silently misbehaving or running unintended shell commands.
 			const trimmedCommand = command.trim();
 			const parsedCommand = parseBuiltinCommand(trimmedCommand);
-			const help = getBuiltinCommandHelpForArgs(parsedCommand.command, parsedCommand.args);
-			if (help) {
-				return { content: [{ type: "text", text: help }], details: undefined };
-			}
-			const builtin = parseBashBuiltinCommand(trimmedCommand);
-			if (builtin) {
-				switch (builtin.command) {
-					case "read": {
-						const result = await readDefinition.execute(toolCallId, builtin.input, signal, undefined, ctx as never);
-						return {
-							content: result.content,
-							details: { builtin: { name: "read", args: builtin.input, details: result.details } },
-						};
-					}
-					case "write": {
-						const result = await writeDefinition.execute(toolCallId, builtin.input, signal, undefined, ctx as never);
-						return {
-							content: result.content,
-							details: { builtin: { name: "write", args: builtin.input, details: result.details } },
-						};
-					}
-					case "edit": {
-						const prepared = editDefinition.prepareArguments
-							? editDefinition.prepareArguments(builtin.input)
-							: builtin.input;
-						const result = await editDefinition.execute(toolCallId, prepared, signal, undefined, ctx as never);
-						return {
-							content: result.content,
-							details: { builtin: { name: "edit", args: prepared, details: result.details } },
-						};
-					}
-					case "session_split": {
-						const result = await sessionSplitDefinition.execute(toolCallId, builtin.input, signal, undefined, ctx as never);
-						return {
-							content: result.content,
-							details: { builtin: { name: "session_split", args: builtin.input, details: result.details } },
-						};
-					}
-					case "history_tree": {
-						const result = await historyTreeDefinition.execute(toolCallId, builtin.input, signal, undefined, ctx as never);
-						return {
-							content: result.content,
-							details: { builtin: { name: "history_tree", args: builtin.input, details: result.details } },
-						};
+			const firstWord = parsedCommand.command.toLowerCase();
+			if ((BUILTIN_COMMANDS as readonly string[]).includes(firstWord)) {
+				// Built-in commands are ALWAYS handled internally and never degrade to the
+				// shell. They are not a shell, so they cannot support shell operators.
+				const help = getBuiltinCommandHelpForArgs(firstWord, parsedCommand.args);
+				if (help) {
+					return { content: [{ type: "text", text: help }], details: undefined };
+				}
+				// A bare (non-heredoc) command with shell operators (|, >, <, ;, &, newlines,
+				// outside quotes) is rejected with guidance rather than misbehaving or running
+				// unintended shell commands.
+				if (parsedCommand.heredoc === undefined && hasShellControlSyntax(trimmedCommand)) {
+					return {
+						content: [
+							{
+								type: "text",
+								text:
+									firstWord +
+									" is a built-in cli command and does not support shell operators " +
+									"(|, >, <, ;, &, &&, command substitution, or newlines). " +
+									"Issue it as a single pure command. For pipelines or redirections, use a plain " +
+									"shell command instead — e.g. grep PATTERN FILE, cat FILE | ..., or sed ....",
+							},
+						],
+						details: undefined,
+					};
+				}
+				const builtin = parseBuiltinToolInput(firstWord, parsedCommand.args, parsedCommand.heredoc);
+				if (builtin) {
+					switch (builtin.command) {
+						case "read": {
+							const result = await readDefinition.execute(toolCallId, builtin.input, signal, undefined, ctx as never);
+							return {
+								content: result.content,
+								details: { builtin: { name: "read", args: builtin.input, details: result.details } },
+							};
+						}
+						case "write": {
+							const result = await writeDefinition.execute(toolCallId, builtin.input, signal, undefined, ctx as never);
+							return {
+								content: result.content,
+								details: { builtin: { name: "write", args: builtin.input, details: result.details } },
+							};
+						}
+						case "edit": {
+							const prepared = editDefinition.prepareArguments
+								? editDefinition.prepareArguments(builtin.input)
+								: builtin.input;
+							const result = await editDefinition.execute(toolCallId, prepared, signal, undefined, ctx as never);
+							return {
+								content: result.content,
+								details: { builtin: { name: "edit", args: prepared, details: result.details } },
+							};
+						}
+						case "session_split": {
+							const result = await sessionSplitDefinition.execute(toolCallId, builtin.input, signal, undefined, ctx as never);
+							return {
+								content: result.content,
+								details: { builtin: { name: "session_split", args: builtin.input, details: result.details } },
+							};
+						}
+						case "history_tree": {
+							const result = await historyTreeDefinition.execute(toolCallId, builtin.input, signal, undefined, ctx as never);
+							return {
+								content: result.content,
+								details: { builtin: { name: "history_tree", args: builtin.input, details: result.details } },
+							};
+						}
+						case "delegate_agent": {
+							if (!delegateAgentDefinition) {
+								return {
+									content: [
+										{
+											type: "text",
+											text: "delegate_agent is only available to the main (persistent) agent. " +
+												"It cannot be used in this workspace.",
+										},
+									],
+									details: undefined,
+								};
+							}
+							const result = await delegateAgentDefinition.execute(toolCallId, builtin.input, signal, undefined, ctx as never);
+							return {
+								content: result.content,
+								details: { builtin: { name: "delegate_agent", args: builtin.input, details: result.details } },
+							};
+						}
 					}
 				}
 			}
-
 			const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
 			const spawnContext = resolveSpawnContext(resolvedCommand, cwd, spawnHook);
 			if (onUpdate) {
@@ -608,26 +670,22 @@ export function createBashToolDefinition(
 					if (builtin) {
 						const key = builtinKey(builtin);
 						resetBuiltinRendererStateIfNeeded(state, key);
-						const definition =
-							builtin.command === "read"
-								? readDefinition
-								: builtin.command === "write"
-									? writeDefinition
-									: builtin.command === "edit"
-										? editDefinition
-										: builtin.command === "history_tree"
-											? historyTreeDefinition
-											: sessionSplitDefinition;
-						const renderContext = makeBuiltinRenderContext(
-							context,
-							builtin.input,
-							state.builtinCallComponent,
-							state,
-						);
-						const component = definition.renderCall?.(builtin.input as never, renderTheme, renderContext as never);
-						if (component) {
-							state.builtinCallComponent = component;
-							return component;
+						const definition = builtinDefinitions[builtin.command];
+						if (!definition) {
+							// Unknown or unavailable built-in (e.g. delegate_agent on a non-main workspace).
+							// Fall through to the default bash call renderer below.
+						} else {
+							const renderContext = makeBuiltinRenderContext(
+								context,
+								builtin.input,
+								state.builtinCallComponent,
+								state,
+							);
+							const component = definition.renderCall?.(builtin.input as never, renderTheme, renderContext as never);
+							if (component) {
+								state.builtinCallComponent = component;
+								return component;
+							}
 						}
 					}
 				} catch {
@@ -660,41 +718,13 @@ export function createBashToolDefinition(
 					state.builtinResultComponent,
 					state,
 				);
-				const component =
-					builtin.name === "read"
-						? readDefinition.renderResult?.(
-								{ content: result.content as never, details: builtin.details },
-								options,
-								renderTheme,
-								renderContext as never,
-							)
-						: builtin.name === "write"
-							? writeDefinition.renderResult?.(
-									{ content: result.content as never, details: builtin.details },
-									options,
-									renderTheme,
-									renderContext as never,
-								)
-							: builtin.name === "edit"
-								? editDefinition.renderResult?.(
-										{ content: result.content as never, details: builtin.details },
-										options,
-										renderTheme,
-										renderContext as never,
-									)
-								: builtin.name === "history_tree"
-									? historyTreeDefinition.renderResult?.(
-											{ content: result.content as never, details: builtin.details },
-											options,
-											renderTheme,
-											renderContext as never,
-										)
-									: sessionSplitDefinition.renderResult?.(
-											{ content: result.content as never, details: builtin.details },
-											options,
-											renderTheme,
-											renderContext as never,
-										);
+				const definition = builtinDefinitions[builtin.name];
+				const component = definition?.renderResult?.(
+					{ content: result.content as never, details: builtin.details },
+					options,
+					renderTheme,
+					renderContext as never,
+				);
 				if (component) {
 					state.builtinResultComponent = component;
 					return component;

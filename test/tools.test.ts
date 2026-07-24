@@ -435,7 +435,7 @@ describe("Coding Agent Tools", () => {
 		});
 
 		it("should show help for built-in commands", async () => {
-			for (const command of ["read", "write", "edit", "session_split"]) {
+			for (const command of ["read", "write", "edit", "session_split", "history_tree", "delegate_agent"]) {
 				const result = await bashTool.execute(`test-help-${command}`, { command: `${command} -h` });
 				const output = getTextOutput(result);
 
@@ -456,6 +456,58 @@ describe("Coding Agent Tools", () => {
 			expect(result.stdout).toContain("--edits, -e");
 			expect(result.stdout).toContain("--range, -r");
 			expect(result.stdout).toContain("Examples:");
+		});
+
+		it("should report delegate_agent is unavailable when the cli tool has no delegate option", async () => {
+			// Non-main-agent cli tool: delegate_agent is recognized but not wired up.
+			const tool = createBashTool(process.cwd());
+			const result = await tool.execute("test-no-delegate", { command: "delegate_agent run /tmp/x do it" });
+			const output = getTextOutput(result);
+			expect(output).toContain("only available to the main");
+		});
+
+		it("should route delegate_agent list through the cli tool when the delegate option is set", async () => {
+			// Main-agent-style cli tool: delegate_agent routes to the delegate_agent definition.
+			const tool = createBashTool(process.cwd(), { delegateAgent: { agentDir: "/tmp/no-such-agent-dir" } });
+			const result = await tool.execute("test-delegate-list", { command: "delegate_agent list" });
+			const output = getTextOutput(result);
+			expect(output).toContain("No known workspace agents found");
+			expect(result.details?.builtin?.name).toBe("delegate_agent");
+		});
+
+		it("should route delegate_agent run --help to the help text through the cli tool", async () => {
+			const tool = createBashTool(process.cwd());
+			const result = await tool.execute("test-delegate-help", { command: "delegate_agent -h" });
+			const output = getTextOutput(result);
+			expect(output).toContain("delegate_agent -");
+			expect(output).toContain("Actions:");
+			expect(output).toContain("run <cwd> <task>");
+		});
+
+		it("should reject shell operators on built-in commands instead of falling back to the shell", async () => {
+			const tool = createBashTool(process.cwd());
+			// Pipe: read must NOT degrade to the shell (where `read` is the bash builtin).
+			const piped = await tool.execute("test-read-pipe", { command: "read src/main.ts | grep foo" });
+			const pipedOut = getTextOutput(piped);
+			expect(pipedOut).toContain("does not support shell operators");
+			expect(pipedOut).toContain("read");
+
+			// Redirect on write: must NOT fall through to the shell (which would run chained cmds).
+			const redirected = await tool.execute("test-write-redir", { command: "write a.txt hi > out.txt" });
+			expect(getTextOutput(redirected)).toContain("does not support shell operators");
+
+			// Chaining: a `;` after a built-in must not execute the trailing shell command.
+			const chained = await tool.execute("test-edit-chain", { command: "edit x.ts search a b ; echo pwned" });
+			const chainedOut = getTextOutput(chained);
+			expect(chainedOut).toContain("does not support shell operators");
+			expect(chainedOut).not.toContain("pwned");
+		});
+
+		it("should still route a pure built-in command (operators inside quoted args are fine)", async () => {
+			const tool = createBashTool(process.cwd());
+			// `;` is inside the quoted search text — not a shell operator, so it routes normally.
+			const result = await tool.execute("test-help-quoted", { command: "read -h" });
+			expect(getTextOutput(result)).toContain("read -");
 		});
 
 		it("should reject non-file commands from the direct builtin command entry point", async () => {

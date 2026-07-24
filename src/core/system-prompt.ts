@@ -198,8 +198,9 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 
 	// File exploration guidelines
 	if (hasCli) {
-		addGuideline("Use Pizza built-in file commands only for read, write, edit, session_split, and history_tree");
-		addGuideline("Use shell commands such as grep, find, and ls normally; shell handles pipes, redirects, globs, &&, and ;");
+		addGuideline("Use Pizza built-in file commands only for read, write, edit, session_split, history_tree, and delegate_agent");
+		addGuideline("Built-in commands are NOT a shell: never use pipes (|), redirects (> <), chaining (; & &&), command substitution, or newlines with them — issue each as a single pure command. They always run as built-ins and never fall back to the shell.");
+		addGuideline("For pipelines, redirections, or globs, use a plain shell command instead (grep, find, ls, cat, sed, git, npm, etc.); the shell handles pipes, redirects, globs, &&, and ;");
 		addGuideline("Use read line anchors as edit range values; edit accepts op/range/new edits");
 		addGuideline("Use edit op=search with old/new for search-and-replace when you don't have fresh line anchors (e.g. after using sed/cat, or after a previous edit shifted line numbers)");
 	}
@@ -230,9 +231,14 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		"  edit <path> <op> <range> [new]               Edit anchored whole line(s)",
 		"  session_split [reason] [name]                Split promptly when the user starts a new task or topic",
 		"  history_tree <action> [session_id]           Browse past sessions: list, view, jump, fork",
+		"  delegate_agent <action> [cwd] [task]         Main agent only: list known workspaces, run a sub-agent",
 		"",
-		"grep, find, ls, git, npm, and all other commands are passed to the system shell as-is.",
-		"The shell handles native pipes, redirects, globs, command grouping, &&, and ;. If grep/find/ls are missing from PATH, Pizza injects temporary per-process shims for only those missing commands.",
+		"IMPORTANT: built-in commands are pure single commands. They do NOT support shell operators",
+		"(no pipes |, redirects > <, chaining ; & &&, command substitution, or newlines). A built-in",
+		"command is ALWAYS handled internally and never falls back to the shell — do not pipe or",
+		"redirect it. grep, find, ls, git, npm, and all other commands are passed to the system shell,",
+		"which handles native pipes, redirects, globs, command grouping, &&, and ;. If grep/find/ls",
+		"are missing from PATH, Pizza injects temporary per-process shims for only those missing commands.",
 		"",
 		"Examples:",
 		'- cli("read src/main.ts") - Read a file; text lines include <line>#<2-hex-hash> anchors',
