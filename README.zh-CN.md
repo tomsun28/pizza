@@ -33,7 +33,7 @@ Pizza 的表壳来源于 Pi -> Pizza, 感谢 Pi 的开源。
 
 从 [GitHub Releases](https://github.com/tomsun28/pizza/releases) 下载对应平台的安装包（macOS / Linux / Windows），安装后打开即可使用。
 
-> **macOS 用户**：由于应用未经签名，首次打开会被 Gatekeeper 拦截。请在 Finder 中右键点击 Pizza.app → 选择"打开" → 在弹窗中再次点击"打开"；或在终端执行 `xattr -cr /Applications/Pizza.app`。
+> **macOS 用户**：由于应用未经签名，打开时可能会提示"Pizza.app 已损坏，无法打开。"请在终端执行 `xattr -cr /Applications/Pizza.app` 即可解决。
 
 ### CLI
 

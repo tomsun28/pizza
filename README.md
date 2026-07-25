@@ -32,7 +32,7 @@ Pizza’s shell comes from Pi -> Pizza. Thanks to Pi for open sourcing.
 
 Download the installer for your platform (macOS / Linux / Windows) from [GitHub Releases](https://github.com/tomsun28/pizza/releases), install and launch.
 
-> **macOS users**: Since the app is unsigned, Gatekeeper will block it on first launch. Right-click Pizza.app in Finder → select "Open" → click "Open" again in the dialog; or run `xattr -cr /Applications/Pizza.app` in Terminal.
+> **macOS users**: Since the app is unsigned, you may see "Pizza.app is damaged and can't be opened. Run `xattr -cr /Applications/Pizza.app` in Terminal to fix this.
 
 ### CLI
 
