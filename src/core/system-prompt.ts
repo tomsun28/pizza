@@ -198,9 +198,8 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 
 	// File exploration guidelines
 	if (hasCli) {
-		addGuideline("Use Pizza built-in file commands only for _read, _write, _edit, _session_split, _history_tree, and _delegate_agent");
+		addGuideline("The cli tool has exactly these built-in commands (underscore-prefixed, handled internally, never sent to the shell): _read, _write, _edit, _session_split, _history_tree, and (main agent only) _delegate_agent. Everything else — including grep, find, ls, cat, sed, git, npm — is a native shell command run through the same cli tool.");
 		addGuideline("Built-in commands are NOT a shell: never use pipes (|), redirects (> <), chaining (; & &&), command substitution, or newlines with them. A built-in only works as the FIRST word of its own single cli() call — buried after &&/||/;/| it is passed to the shell, which has no such command. Issue each built-in as its own separate call; do not prefix it with cd && since the working directory is already set. For pipelines, redirections, or globs, use a plain shell command instead (grep, find, ls, cat, sed, git, npm, etc.).");
-		addGuideline("Use _read line anchors as _edit range values; _edit accepts op/range/new edits. Use _edit op=search with old/new for search-and-replace when you don't have fresh line anchors (e.g. after using sed/cat, or after a previous edit shifted line numbers).");
 	}
 
 	for (const guideline of promptGuidelines ?? []) {
@@ -217,7 +216,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 
 	const guidelines = guidelinesList.map((g) => `- ${g}`).join("\n");
 
-	// Native CLI commands documentation
+	// Built-in Commands section for the default system prompt
 	const builtinCommandsSection = [
 		"## Built-in Commands (executed internally by the cli tool)",
 		"",
@@ -240,7 +239,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		"",
 		"Examples:",
 		'- cli("_read src/main.ts") - Read a file; text lines include <line>#<2-hex-hash> anchors',
-		'- cli("_read src/main.ts 10 50") - Read lines 10-60',
+		'- cli("_read src/main.ts 10 50") - Read lines 10-59 (offset=10, limit=50)',
 		'- cli("_write output.txt Hello World") - Write to a file',
 		'- cli("_edit src/main.ts replace 12#ab \"const value = 2\"") - Replace an anchored line',
 		'- cli("_edit src/main.ts insert_after 12#ab \"const next = 3\"") - Insert after an anchored line',
