@@ -82,6 +82,7 @@
 		"thinking": "思考中…",
 		"thoughtProcess": "思考过程",
 		"running": "运行中…",
+		"queued": "排队中…",
 		"goodResponse": "回答不错",
 		"badResponse": "回答不佳",
 		"attachment": "附件"

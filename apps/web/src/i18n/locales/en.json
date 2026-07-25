@@ -82,6 +82,7 @@
 		"thinking": "Thinking…",
 		"thoughtProcess": "Thought process",
 		"running": "running…",
+		"queued": "queued…",
 		"goodResponse": "Good response",
 		"badResponse": "Bad response",
 		"attachment": "attachment"
