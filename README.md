@@ -1,6 +1,6 @@
 # Pizza
 
-Pizza is an event-driven agent. Every conversation, tool call, and file edit is an event in an immutable log. Your UI, the LLM context, and the session tree are all projections of that log.
+Pizza is my personal, event-driven agent. Every conversation, tool call, and file edit is an event in an immutable log. Your UI, the LLM context, and the session tree are all projections of that log.
 
 [简体中文](./README.zh-CN.md)
 
@@ -15,7 +15,7 @@ Pizza’s shell comes from Pi -> Pizza. Thanks to Pi for open sourcing.
   Every message, model call, tool result, and file change is written to an immutable `EventStore` (SQLite). The UI, the LLM context, and the session tree are all live projections of that log. State is no longer hidden in mutable objects — it can be rebuilt, audited, and replayed, because the log is the single source of truth.
 
 - **Only one execution tool — the CLI**
-  JSON is program-friendly at the API level but not model-friendly. Pizza aggressively gives the model only one tool: the `CLI Tool`. The model uses it to call `_read`, `_write`, `_edit`, and other command-line commands (built-ins are underscore-prefixed so they never collide with real shell commands like bash's own `read`/`write`). Surprisingly, it performs better and is more stable.
+  JSON is program-friendly at the API level but not model-friendly. Pizza aggressively gives the model only one tool: the `CLI Tool`. The model uses it to call `_read`, `_write`, `_edit`, and other command-line commands. Surprisingly, it performs better and is more stable.
 
 - **Why New Session**
   In Pizza, you do not need to manually create a new session. Think of it as a long-term task for a friend you can chat with for ten years. A friend will manage their own context.
@@ -28,8 +28,20 @@ Pizza’s shell comes from Pi -> Pizza. Thanks to Pi for open sourcing.
 
 ## Quick Start
 
+### Desktop
+
+Download the installer for your platform (macOS / Linux / Windows) from [GitHub Releases](https://github.com/tomsun28/pizza/releases), install and launch.
+
+> **macOS users**: Since the app is unsigned, you may see "Pizza.app is damaged and can't be opened. Run `xattr -cr /Applications/Pizza.app` in Terminal to fix this.
+
+### CLI
+
 ```bash
 npm install -g @tomsun28/pizza
 export ZAI_API_KEY=your_zai_api_key
 pizza
 ```
+
+---
+
+![desktop](./resources/pizza-desktop.png)

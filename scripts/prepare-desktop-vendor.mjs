@@ -7,6 +7,7 @@
  * Runtime lookup is `vendor/bin/${process.platform}-${process.arch}/<tool>`
  * (see src/utils/tools-manager.ts), so only that subdirectory is needed.
  */
+import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,13 +39,38 @@ cpSync(srcDir, path.join(stagingRoot, key), { recursive: true });
 // and tauri.conf.json maps "prebuilds-bin/": "prebuilds/".
 const ptySrc = path.join(repoRoot, "node_modules", "node-pty", "prebuilds", key);
 const ptyStage = path.join(repoRoot, "apps", "desktop", "prebuilds-bin", key);
-rmSync(path.join(repoRoot, "apps", "desktop", "prebuilds-bin"), { recursive: true, force: true });
+const ptyBuildSrc = path.join(repoRoot, "node_modules", "node-pty", "build", "Release");
+const prebuildsRoot = path.join(repoRoot, "apps", "desktop", "prebuilds-bin");
+rmSync(prebuildsRoot, { recursive: true, force: true });
+mkdirSync(prebuildsRoot, { recursive: true });
 if (existsSync(ptySrc)) {
-	mkdirSync(path.join(repoRoot, "apps", "desktop", "prebuilds-bin"), { recursive: true });
 	cpSync(ptySrc, ptyStage, { recursive: true });
 	// spawn-helper must be executable.
 	try { chmodSync(path.join(ptyStage, "spawn-helper"), 0o755); } catch { /* ignore */ }
 	console.log(`prepare-desktop-vendor: staged node-pty prebuilds ${key} -> apps/desktop/prebuilds-bin/${key}`);
+} else if (existsSync(path.join(ptyBuildSrc, "pty.node"))) {
+	// node-pty doesn't ship prebuilds for Linux; fall back to the node-gyp
+	// build output in build/Release/pty.node.
+	mkdirSync(ptyStage, { recursive: true });
+	cpSync(path.join(ptyBuildSrc, "pty.node"), path.join(ptyStage, "pty.node"));
+	// node-pty's binding.gyp only builds spawn-helper on macOS, so compile
+	// it here for Linux from the bundled source.
+	const spawnHelperSrc = path.join(repoRoot, "node_modules", "node-pty", "src", "unix", "spawn-helper.cc");
+	const spawnHelperOut = path.join(ptyStage, "spawn-helper");
+	if (existsSync(spawnHelperSrc)) {
+		try {
+			const result = spawnSync("c++", ["-o", spawnHelperOut, spawnHelperSrc], { stdio: "pipe" });
+			if (result.status === 0) {
+				chmodSync(spawnHelperOut, 0o755);
+				console.log(`prepare-desktop-vendor: compiled spawn-helper for ${key}`);
+			} else {
+				console.warn(`prepare-desktop-vendor: WARNING failed to compile spawn-helper (c++ exited ${result.status})`);
+			}
+		} catch {
+			console.warn(`prepare-desktop-vendor: WARNING c++ not available, spawn-helper not compiled for ${key}`);
+		}
+	}
+	console.log(`prepare-desktop-vendor: staged node-pty (from source build) ${key} -> apps/desktop/prebuilds-bin/${key}`);
 } else {
 	console.warn(`prepare-desktop-vendor: WARNING node-pty prebuilds not found at ${ptySrc}`);
 }

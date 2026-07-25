@@ -1,7 +1,6 @@
 # Pizza
 
-Pizza 是一个事件驱动的 agent。你的每一次对话、工具调用和文件修改，都是不可变日志里的一条事件。UI、LLM 上下文和会话树，都只是这条日志的投影。
-
+Pizza 是我自用的，基于事件驱动架构的 agent。你的每一次对话、工具调用和文件修改，都是不可变日志里的一条事件。UI、LLM 上下文和会话树，都只是这条日志的投影。
 
 [English](./README.md)
 
@@ -22,15 +21,27 @@ Pizza 的表壳来源于 Pi -> Pizza, 感谢 Pi 的开源。
   在 Pizza 中你不需要手工去新建会话，把它看作你可以持续聊十年的朋友的长程任务，朋友自己会去管理好自己的上下文。
 
 - **所有界面共享同一个运行时**
-  交互式 TUI、JSON-RPC 服务、单次打印模式都消费同一个 `SessionFacade` 的事件流。你可以脚本化它、嵌入它，或者直接在终端聊天 —— 它是同一个 agent。
+  桌面 GUI、交互式 TUI、JSON-RPC 服务、单次打印模式都消费同一个 `SessionFacade` 的事件流。你可以脚本化它、嵌入它，或者直接在终端聊天 —— 它是同一个 agent。
 
 - **Git Log 一样的分支树记忆**
   会话可以从任意一条历史消息分叉。回退、分支、对比。随时随地重开人生。  
 
 ## 快速开始
 
+### 桌面应用
+
+从 [GitHub Releases](https://github.com/tomsun28/pizza/releases) 下载对应平台的安装包（macOS / Linux / Windows），安装后打开即可使用。
+
+> **macOS 用户**：由于应用未经签名，打开时可能会提示"Pizza.app 已损坏，无法打开。"请在终端执行 `xattr -cr /Applications/Pizza.app` 即可解决。
+
+### CLI
+
 ```bash
 npm install -g @tomsun28/pizza
 export ZAI_API_KEY=your_zai_api_key
 pizza
 ```
+
+---
+
+![desktop](./resources/pizza-desktop.png)
