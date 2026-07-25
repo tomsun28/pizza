@@ -31,6 +31,8 @@ export interface TimelineItem {
 	isError?: boolean;
 	/** Attached images as data URLs (for user messages). */
 	images?: string[];
+	/** True for a follow-up message queued while the agent is still running. */
+	queued?: boolean;
 	/** Pending approval for a risky tool call (safe mode on). */
 	pendingApproval?: {
 		intentEventId: string;
@@ -318,7 +320,12 @@ function UserBubble({ item }: { item: TimelineItem }) {
 			onMouseEnter={() => setHover(true)}
 			onMouseLeave={() => setHover(false)}
 		>
-			<div className="max-w-[85%] rounded-2xl rounded-br-md bg-surface-2 px-4 py-2.5">
+			<div
+				className={cn(
+					"max-w-[85%] rounded-2xl rounded-br-md bg-surface-2 px-4 py-2.5",
+					item.queued && "opacity-60",
+				)}
+			>
 				{item.images && item.images.length > 0 && (
 					<div className="mb-2 flex flex-wrap gap-2">
 						{item.images.map((src, i) => (
@@ -337,18 +344,25 @@ function UserBubble({ item }: { item: TimelineItem }) {
 					</div>
 				)}
 			</div>
-			{item.text && (
-				<button
-					type="button"
-					onClick={() => copy(item.text)}
-					className={cn(
-						"mt-1 flex h-7 w-7 items-center justify-center rounded-md text-muted transition-opacity hover:bg-surface-2 hover:text-fg",
-						hover ? "opacity-100" : "pointer-events-none opacity-0",
-					)}
-					title={t("common.copy")}
-				>
-					{copied ? <Check className="h-3.5 w-3.5 text-success" /> : <Copy className="h-3.5 w-3.5" />}
-				</button>
+			{item.queued ? (
+				<span className="mt-1 inline-flex items-center gap-1 font-mono text-[10px] uppercase tracking-widest text-muted">
+					<Loader2 className="h-3 w-3 animate-spin" />
+					{t("conversation.queued")}
+				</span>
+			) : (
+				item.text && (
+					<button
+						type="button"
+						onClick={() => copy(item.text)}
+						className={cn(
+							"mt-1 flex h-7 w-7 items-center justify-center rounded-md text-muted transition-opacity hover:bg-surface-2 hover:text-fg",
+							hover ? "opacity-100" : "pointer-events-none opacity-0",
+						)}
+						title={t("common.copy")}
+					>
+						{copied ? <Check className="h-3.5 w-3.5 text-success" /> : <Copy className="h-3.5 w-3.5" />}
+					</button>
+				)
 			)}
 		</div>
 	);

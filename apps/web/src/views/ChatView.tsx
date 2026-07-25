@@ -360,9 +360,39 @@ export default function ChatView({
 			case "USER_MESSAGE": {
 				const text = messageText(event.payload);
 				const images = messageImages(event.payload);
+				// When a queued follow-up is drained, the reactor emits a real
+				// USER_MESSAGE whose caused_by points at the USER_FOLLOWUP_QUEUED
+				// event we already rendered as a (queued) user bubble. Promote
+				// that bubble in place (swap its id + clear the queued flag)
+				// instead of appending a duplicate.
+				const causedBy = typeof event.caused_by === "string" ? event.caused_by : undefined;
+				updateItems((prev) => {
+					if (causedBy) {
+						const idx = prev.findIndex((it) => it.id === causedBy && it.queued);
+						if (idx >= 0) {
+							const next = [...prev];
+							next[idx] = { ...next[idx]!, id: event.event_id, queued: false, status: "" };
+							return next;
+						}
+					}
+					return [
+						...prev,
+						{ id: event.event_id, role: "user", title: tRef.current("common.you"), text, status: "", images: images.length > 0 ? images : undefined },
+					];
+				});
+				break;
+			}
+			case "USER_FOLLOWUP_QUEUED": {
+				// A follow-up sent while the agent is running is queued and only
+				// delivered (as a real USER_MESSAGE) after the current turn ends.
+				// Render it immediately as a "queued" user bubble so the user gets
+				// feedback; it is promoted in place when the drained USER_MESSAGE
+				// arrives (matched via caused_by).
+				const text = messageText(event.payload);
+				const images = messageImages(event.payload);
 				updateItems((prev) => [
 					...prev,
-					{ id: event.event_id, role: "user", title: tRef.current("common.you"), text, status: "", images: images.length > 0 ? images : undefined },
+					{ id: event.event_id, role: "user", title: tRef.current("common.you"), text, status: "", images: images.length > 0 ? images : undefined, queued: true },
 				]);
 				break;
 			}

@@ -5,6 +5,13 @@ import { Copy, Check } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 
+function isTauri(): boolean {
+	return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+/** Schemes the shell plugin's default open-scope permits (http(s)://, mailto:, tel:). */
+const OPENABLE_SCHEME = /^(https?:|mailto:|tel:)/i;
+
 function CodeBlock({ code, lang }: { code: string; lang?: string }) {
 	const { t } = useTranslation();
 	const [copied, setCopied] = useState(false);
@@ -56,11 +63,23 @@ function MarkdownImpl({ children, className }: { children: string; className?: s
 						}
 						return <CodeBlock code={raw.replace(/\n$/, "")} lang={match?.[1]} />;
 					},
-					a: ({ children: c, href }) => (
-						<a href={href} target="_blank" rel="noreferrer" className="text-accent underline underline-offset-2 hover:opacity-80">
-							{c as ReactNode}
-						</a>
-					),
+					a: ({ children: c, href }) => {
+						const openExternal = (e: React.MouseEvent) => {
+							// Tauri's webview can't navigate to external origins; route the click
+							// through the shell plugin so the URL opens in the system browser.
+							if (isTauri() && href && OPENABLE_SCHEME.test(href)) {
+								e.preventDefault();
+								void import("@tauri-apps/plugin-shell").then(({ open }) => open(href));
+							}
+							// Otherwise fall through to the default <a target="_blank"> behavior
+							// (used when running as a plain web app).
+						};
+						return (
+							<a href={href} target="_blank" rel="noreferrer" onClick={openExternal} className="text-accent underline underline-offset-2 hover:opacity-80">
+								{c as ReactNode}
+							</a>
+						);
+					},
 				}}
 			>
 				{children}
