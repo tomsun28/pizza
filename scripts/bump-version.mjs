@@ -33,6 +33,12 @@ const files = {
 		}
 		return { result: JSON.stringify(json, null, "\t") + "\n", old };
 	},
+	"dist/package.json": (content, version) => {
+		const json = JSON.parse(content);
+		const old = json.version;
+		json.version = version;
+		return { result: JSON.stringify(json, null, "\t") + "\n", old };
+	},
 	"apps/desktop/tauri.conf.json": (content, version) => {
 		const json = JSON.parse(content);
 		const old = json.version;
