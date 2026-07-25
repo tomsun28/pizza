@@ -191,21 +191,23 @@ fn resolve_pizza_command(app: &AppHandle) -> (String, Vec<String>) {
 	}
 
 	// 3. Dev fallback: run `node dist/src/cli.js` from the source tree.
-	let cli_js = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+	let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 		.join("..")
-		.join("..")
-		.join("dist")
-		.join("src")
-		.join("cli.js");
+		.join("..");
+	let cli_js = project_root.join("dist").join("src").join("cli.js");
+	let loader = project_root.join("scripts").join("module-resolver.mjs");
 	let node = find_node().unwrap_or_else(|| "node".to_string());
 	log_file(&format!(
-		"resolve_pizza_command: dev fallback, node={}, cli_js={}",
+		"resolve_pizza_command: dev fallback, node={}, cli_js={}, loader={}",
 		node,
-		cli_js.display()
+		cli_js.display(),
+		loader.display()
 	));
 	(
 		node,
 		vec![
+			"--loader".to_string(),
+			loader.to_string_lossy().to_string(),
 			cli_js.to_string_lossy().to_string(),
 			"--mode".to_string(),
 			"rpc".to_string(),
@@ -1264,6 +1266,34 @@ pub async fn read_file(cwd: String, file_path: String) -> Result<String, String>
 		));
 	}
 	std::fs::read_to_string(&full).map_err(|e| format!("read_to_string: {e}"))
+}
+
+/// Fetch the skills.sh leaderboard HTML page via Rust (bypasses CORS).
+/// Returns the raw HTML so the frontend can parse skill links.
+#[tauri::command]
+pub async fn fetch_skills_sh() -> Result<String, String> {
+	let client = reqwest::Client::builder()
+		.user_agent("pizza-desktop/0.1")
+		.timeout(Duration::from_secs(15))
+		.build()
+		.map_err(|e| format!("HTTP client error: {e}"))?;
+
+	let res = client
+		.get("https://www.skills.sh/")
+		.send()
+		.await
+		.map_err(|e| format!("Fetch error: {e}"))?;
+
+	if !res.status().is_success() {
+		return Err(format!("skills.sh returned status {}", res.status()));
+	}
+
+	let html = res
+		.text()
+		.await
+		.map_err(|e| format!("Read body error: {e}"))?;
+
+	Ok(html)
 }
 
 #[cfg(test)]

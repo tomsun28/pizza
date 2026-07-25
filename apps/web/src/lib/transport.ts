@@ -274,6 +274,62 @@ export async function getSkills(): Promise<SkillInfo[]> {
 	}
 }
 
+// --- Skills.sh directory ---
+
+export interface SkillsShSkill {
+	id: string;
+	source: string;
+	slug: string;
+	name: string;
+	url: string;
+	installUrl?: string;
+	installs?: number;
+}
+
+/**
+ * Fetch skill directory from skills.sh by scraping the HTML leaderboard.
+ * The official API requires Vercel OIDC auth, but the HTML page contains
+ * all skill links rendered server-side.
+ */
+export async function fetchSkillsSh(): Promise<SkillsShSkill[]> {
+	try {
+		let html: string;
+		if (isTauri()) {
+			const core = await import("@tauri-apps/api/core");
+			html = await core.invoke<string>("fetch_skills_sh");
+		} else {
+			const res = await fetch("https://www.skills.sh/", {
+				headers: { Accept: "text/html" },
+			});
+			if (!res.ok) return [];
+			html = await res.text();
+		}
+		const seen = new Set<string>();
+		const skills: SkillsShSkill[] = [];
+		const linkRegex = /href="\/([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+)"/g;
+		let match: RegExpExecArray | null;
+		while ((match = linkRegex.exec(html)) !== null) {
+			const link = "/" + match[1];
+			if (link.startsWith("/_next") || seen.has(link)) continue;
+			seen.add(link);
+			const parts = link.slice(1).split("/");
+			const source = parts.slice(0, -1).join("/");
+			const slug = parts[parts.length - 1];
+			skills.push({
+				id: `${source}/${slug}`,
+				source,
+				slug,
+				name: slug,
+				url: `https://www.skills.sh${link}`,
+				installUrl: `https://github.com/${source}`,
+			});
+		}
+		return skills;
+	} catch {
+		return [];
+	}
+}
+
 // --- Delete workspace (Tauri only) ---
 
 export async function deleteWorkspace(workspaceId: string): Promise<void> {

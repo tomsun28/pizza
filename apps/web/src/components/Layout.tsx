@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { Settings as SettingsIcon, Plus, Folder, MessageSquare, MoreHorizontal, Pin, FolderOpen, Trash2, PanelLeft } from "lucide-react";
+import { Settings as SettingsIcon, Plus, Folder, MessageSquare, MoreHorizontal, Pin, FolderOpen, Trash2, PanelLeft, Puzzle } from "lucide-react";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -389,6 +389,30 @@ export default function Layout({
 						<Button tone="neutral" size="sm" iconLeft={<Plus className="h-3.5 w-3.5" />} onClick={() => onNewWorkspace?.()} className="w-full">{t("layout.newWorkspace")}</Button>
 					</div>
 				)}
+
+				{/* Plugins nav */}
+				<div className="border-t border-border px-3 pt-2 pb-1">
+					<NavLink
+						to="/plugins"
+						className={({ isActive }) => cn(
+							"flex w-full items-center gap-2 rounded-md border px-2 py-2 text-left transition-colors",
+							isActive
+								? "border-accent bg-accent/10"
+								: "border-transparent hover:bg-surface-2",
+						)}
+						title={t("plugins.title")}
+					>
+						<Puzzle className={cn("h-4 w-4 shrink-0 text-muted")} />
+						<div className="min-w-0 flex-1">
+							<div className="truncate font-mono text-xs font-bold uppercase tracking-wide text-fg">
+								{t("layout.plugins")}
+							</div>
+							<div className="truncate font-mono text-[10px] text-muted">
+								{t("layout.pluginsSubtitle")}
+							</div>
+						</div>
+					</NavLink>
+				</div>
 
 				<div className="border-t border-border px-3 py-3">
 

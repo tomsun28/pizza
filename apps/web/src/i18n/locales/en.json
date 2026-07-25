@@ -36,7 +36,9 @@
 		"timeJustNow": "just now",
 		"timeMinutesAgo": "{{count}}m ago",
 		"timeHoursAgo": "{{count}}h ago",
-		"timeDaysAgo": "{{count}}d ago"
+		"timeDaysAgo": "{{count}}d ago",
+		"plugins": "Plugins",
+		"pluginsSubtitle": "Skills · Extensions · MCP"
 	},
 	"chat": {
 		"newChat": "New Chat",
@@ -171,6 +173,43 @@
 	"theme": {
 		"switchToLight": "Switch to light",
 		"switchToDark": "Switch to dark"
+	},
+	"plugins": {
+		"title": "Plugins",
+		"description": "Manage skills, extensions, MCP tools, and integrations",
+		"loading": "Loading...",
+		"error": "Error: {{error}}",
+		"refresh": "Refresh",
+		"tabs": {
+			"skills": "Skills",
+			"extensions": "Extensions",
+			"mcp": "MCP",
+			"tools": "Tools"
+		},
+		"skills": {
+			"type": "Skill",
+			"search": "Search skills...",
+			"count": "{{count}} skill(s)",
+			"empty": "No skills found",
+			"emptyHint": "Skills will appear here when available.",
+			"view": "View",
+			"install": "Install",
+			"installed": "Installed",
+			"installedSection": "Installed Skills",
+			"directorySection": "Skill Directory"
+		},
+		"extensions": {
+			"comingSoon": "Extensions coming soon",
+			"comingSoonHint": "Extension management will be available here."
+		},
+		"mcp": {
+			"comingSoon": "MCP tools coming soon",
+			"comingSoonHint": "MCP server configuration will be available here."
+		},
+		"tools": {
+			"comingSoon": "Tools coming soon",
+			"comingSoonHint": "Custom tool management will be available here."
+		}
 	},
 	"settings": {
 		"title": "Settings",

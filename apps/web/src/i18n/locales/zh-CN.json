@@ -36,7 +36,9 @@
 		"timeJustNow": "刚刚",
 		"timeMinutesAgo": "{{count}}分钟前",
 		"timeHoursAgo": "{{count}}小时前",
-		"timeDaysAgo": "{{count}}天前"
+		"timeDaysAgo": "{{count}}天前",
+		"plugins": "插件",
+		"pluginsSubtitle": "技能 · 扩展 · MCP"
 	},
 	"chat": {
 		"newChat": "新对话",
@@ -171,6 +173,43 @@
 	"theme": {
 		"switchToLight": "切换到浅色",
 		"switchToDark": "切换到深色"
+	},
+	"plugins": {
+		"title": "插件",
+		"description": "管理技能、扩展、MCP 工具和集成",
+		"loading": "加载中...",
+		"error": "错误:{{error}}",
+		"refresh": "刷新",
+		"tabs": {
+			"skills": "技能",
+			"extensions": "扩展",
+			"mcp": "MCP",
+			"tools": "工具"
+		},
+		"skills": {
+			"type": "技能",
+			"search": "搜索技能...",
+			"count": "{{count}} 个技能",
+			"empty": "未找到技能",
+			"emptyHint": "可用技能将显示在这里。",
+			"view": "查看",
+			"install": "安装",
+			"installed": "已安装",
+			"installedSection": "已安装技能",
+			"directorySection": "技能目录"
+		},
+		"extensions": {
+			"comingSoon": "扩展即将推出",
+			"comingSoonHint": "扩展管理功能将在这里提供。"
+		},
+		"mcp": {
+			"comingSoon": "MCP 工具即将推出",
+			"comingSoonHint": "MCP 服务器配置将在这里提供。"
+		},
+		"tools": {
+			"comingSoon": "工具即将推出",
+			"comingSoonHint": "自定义工具管理将在这里提供。"
+		}
 	},
 	"settings": {
 		"title": "设置",
