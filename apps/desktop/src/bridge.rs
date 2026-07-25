@@ -3,7 +3,9 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
+use std::thread;
+use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 
 /// Read an API key for a provider from ~/.pizza/agent/auth.json.
@@ -68,6 +70,79 @@ fn find_node() -> Option<String> {
 	}
 	// Fallback to "node" and hope PATH works.
 	Some("node".to_string())
+}
+/// Run the user's login shell once and capture the PATH it would set in an
+/// interactive terminal, so the GUI-launched sidecar (which inherits launchd's
+/// minimal PATH and never sources ~/.zprofile / ~/.bash_profile) still finds
+/// tools the user installed via homebrew/cargo/nvm/etc.
+///
+/// Runs `<shell> -lic 'printf %s "$PATH"'` with stdin wired to /dev/null and a
+/// hard timeout, so a misbehaving rc file can't hang the app. The result is
+/// cached per process via OnceLock.
+fn capture_login_shell_path() -> Option<String> {
+	// Prefer the user's configured login shell, then common fallbacks.
+	let shell = std::env::var("SHELL").ok().filter(|s| !s.is_empty());
+	let candidates: Vec<String> = match shell {
+		Some(s) => vec![s, "/bin/zsh".to_string(), "/bin/bash".to_string()],
+		None => vec!["/bin/zsh".to_string(), "/bin/bash".to_string()],
+	};
+
+	for shell in candidates {
+		if !PathBuf::from(&shell).exists() {
+			continue;
+		}
+		match run_shell_capture_path(&shell) {
+			Some(path) if !path.trim().is_empty() => return Some(path),
+			_ => continue,
+		}
+	}
+	None
+}
+
+/// Spawn `<shell> -lic 'printf %s "$PATH"'` with a timeout and return its
+/// trimmed stdout. Returns None on timeout, non-zero exit, or empty output.
+fn run_shell_capture_path(shell: &str) -> Option<String> {
+	const TIMEOUT: Duration = Duration::from_secs(3);
+
+	let (tx, rx) = std::sync::mpsc::channel();
+	let shell = shell.to_string();
+	thread::spawn(move || {
+		let result = (|| {
+			let output = Command::new(&shell)
+				.args(["-lic", "printf %s \"$PATH\""])
+				.stdin(Stdio::null())
+				.stdout(Stdio::piped())
+				.stderr(Stdio::piped())
+				.output()
+				.ok()?;
+			if !output.status.success() {
+				return None;
+			}
+			let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+			if path.is_empty() {
+				None
+			} else {
+				Some(path)
+			}
+		})();
+		let _ = tx.send(result);
+	});
+
+	match rx.recv_timeout(TIMEOUT) {
+		Ok(value) => value,
+		Err(_) => None, // timed out — give up on this shell
+	}
+}
+
+/// Resolve the PATH to pass to sidecars: the login-shell PATH if we could
+/// capture one, otherwise the process's inherited PATH. Cached per process.
+fn resolve_shell_path() -> String {
+	static CACHED: OnceLock<Option<String>> = OnceLock::new();
+	let cached = CACHED.get_or_init(capture_login_shell_path);
+	match cached {
+		Some(path) => path.clone(),
+		None => std::env::var("PATH").unwrap_or_default(),
+	}
 }
 
 fn resolve_pizza_command(app: &AppHandle) -> (String, Vec<String>) {
@@ -306,6 +381,14 @@ pub async fn init_sidecar(
 	cmd.stdin(Stdio::piped());
 	cmd.stdout(Stdio::piped());
 	cmd.stderr(Stdio::inherit());
+	// GUI-launched processes inherit launchd's minimal PATH and never source the
+	// user's shell rc files, so homebrew/cargo/nvm etc. would be missing. Capture
+	// the login-shell PATH once and pass it to the sidecar explicitly.
+	cmd.env("PATH", resolve_shell_path());
+	log_file(&format!(
+		"init_sidecar: sidecar PATH = {}",
+		resolve_shell_path()
+	));
 
 	log_file(&format!("init_sidecar: spawning {} {:?}", program, args));
 	let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn: {e}"))?;
@@ -972,4 +1055,32 @@ pub async fn transcribe_audio(audio_b64: String, mime_type: String) -> Result<St
 		.to_string();
 
 	Ok(text)
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn resolve_shell_path_never_empty() {
+		// Always returns something (login-shell PATH or a fallback to env PATH).
+		let path = resolve_shell_path();
+		assert!(
+			!path.is_empty(),
+			"resolve_shell_path must return a non-empty PATH"
+		);
+	}
+
+	#[test]
+	fn run_shell_capture_path_is_clean() {
+		// When captured, the PATH must be a single line with no surrounding
+		// whitespace (the printf %s form guarantees no trailing newline).
+		if let Some(path) = run_shell_capture_path("/bin/zsh") {
+			assert!(
+				!path.contains('\n'),
+				"captured PATH must not contain newlines: {path:?}"
+			);
+			assert_eq!(path, path.trim(), "captured PATH must be trimmed: {path:?}");
+		}
+	}
 }

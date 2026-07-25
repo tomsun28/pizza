@@ -145,7 +145,6 @@ export function createReadToolDefinition(
 		description: `Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Text output includes 2-hex hashline anchors by default (<line>#<hash> | content); pass anchors="none" only when raw text is required. Use offset/limit for large files. When you need the full file, continue with offset until complete.`,
 		promptSnippet: "Read file contents",
 		promptGuidelines: [
-			"Use _read to examine files instead of cat or sed.",
 			"Use _read line anchors as _edit edits[].range for whole-line edits.",
 		],
 		parameters: readSchema,

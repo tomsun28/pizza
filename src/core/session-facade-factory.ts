@@ -401,13 +401,17 @@ export async function createSessionFacade(
 			}
 		}
 
-		// session_split, history_tree, and (for the main agent) delegate_agent are
-		// built-in cli commands, not separate tools; ensure their prompt guidelines
-		// are included whenever the cli tool is active.
+		// read/write/edit/session_split/history_tree/(delegate_agent) are built-in
+		// cli commands routed internally by the cli tool, not separate tools; ensure
+		// their prompt guidelines are included whenever the cli tool is active, so the
+		// model sees how to use each built-in under the single cli tool.
 		if (definitions.some((definition) => definition.name === "cli" || definition.name === "bash")) {
 			// Only promptGuidelines is consumed below; type loosely to avoid
 			// renderCall contravariance between the concrete tool definitions.
 			const builtinDefs: Array<{ promptGuidelines?: string[] }> = [
+				createToolDefinition("read", cwd, toolOptions),
+				createToolDefinition("write", cwd, toolOptions),
+				createToolDefinition("edit", cwd, toolOptions),
 				createSessionSplitToolDefinition(),
 				createHistoryTreeToolDefinition(),
 			];
