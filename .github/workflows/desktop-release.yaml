@@ -4,6 +4,10 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag name for the release (required for manual runs)'
+        required: true
 
 permissions:
   contents: write
@@ -115,12 +119,12 @@ jobs:
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.tag_name || github.ref_name }}
           files: |
             artifacts/**/*.dmg
             artifacts/**/*.deb
             artifacts/**/*.rpm
-            artifacts/**/*.AppImage
             artifacts/**/*.msi
             artifacts/**/*.exe
           generate_release_notes: true
-          draft: true
+          draft: ${{ github.event_name == 'workflow_dispatch' }}
