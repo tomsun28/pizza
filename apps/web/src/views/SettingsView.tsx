@@ -138,7 +138,7 @@ function ProviderRow({ provider, onRefresh }: { provider: ProviderInfo; onRefres
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		}
-	}, [provider.id, onRefresh, t]);
+	}, [provider, onRefresh, t]);
 
 	const label = providerLabel(provider);
 
