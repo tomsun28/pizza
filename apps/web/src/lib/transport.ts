@@ -311,6 +311,12 @@ export async function readFileContent(cwd: string, filePath: string): Promise<st
 	return core.invoke<string>("read_file", { cwd, filePath });
 }
 
+export async function openInEditor(cwd: string, filePath: string): Promise<void> {
+	if (!isTauri()) return;
+	const core = await import("@tauri-apps/api/core");
+	await core.invoke("open_in_editor", { cwd, filePath });
+}
+
 // --- Provider management (Tauri only) ---
 
 export interface ProviderInfo {

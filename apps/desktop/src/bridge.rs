@@ -1057,6 +1057,86 @@ pub async fn transcribe_audio(audio_b64: String, mime_type: String) -> Result<St
 	Ok(text)
 }
 
+/// Check if a command exists in PATH.
+/// Uses `/usr/bin/which` on macOS (since `which` is a shell built-in)
+/// and `which` on other platforms.
+fn which(cmd: &str) -> bool {
+	#[cfg(target_os = "macos")]
+	let which_bin = "/usr/bin/which";
+	#[cfg(not(target_os = "macos"))]
+	let which_bin = "which";
+
+	std::process::Command::new(which_bin)
+		.arg(cmd)
+		.stdout(std::process::Stdio::null())
+		.stderr(std::process::Stdio::null())
+		.status()
+		.map(|s| s.success())
+		.unwrap_or(false)
+}
+
+/// Open a file in the user's preferred IDE/editor.
+/// Tries common CLI editors (code, cursor, windsurf, zed, etc.) in order,
+/// falls back to the system default (`open` on macOS, `xdg-open` on Linux,
+/// `start` on Windows).
+#[tauri::command]
+pub async fn open_in_editor(cwd: String, file_path: String) -> Result<(), String> {
+	let full = resolve_workspace_path(&cwd, Some(&file_path))?;
+	if !full.exists() {
+		return Err(format!("File does not exist: {}", full.display()));
+	}
+
+	let path_str = full.to_string_lossy().to_string();
+
+	// On macOS, try `open -a <App>` for known GUI editors.
+	// We use `status()` (not `spawn()`) to detect if the app actually exists.
+	#[cfg(target_os = "macos")]
+	{
+		let apps: &[&str] = &["Cursor", "Windsurf", "Visual Studio Code", "Zed", "Sublime Text"];
+		for app in apps {
+			let result = std::process::Command::new("open")
+				.arg("-a")
+				.arg(app)
+				.arg(&path_str)
+				.status();
+			if let Ok(status) = result {
+				if status.success() {
+					log::info!("open_in_editor: launched via open -a {} {}", app, path_str);
+					return Ok(());
+				}
+			}
+		}
+	}
+
+	// Try common CLI editor launchers in priority order.
+	let editors: &[&str] = &["cursor", "windsurf", "code", "zed", "subl"];
+	for editor in editors {
+		if which(editor) {
+			log::info!("open_in_editor: launching {} {}", editor, path_str);
+			std::process::Command::new(editor)
+				.arg(&path_str)
+				.spawn()
+				.map_err(|e| format!("Failed to launch {editor}: {e}"))?;
+			return Ok(());
+		}
+	}
+
+	// Fallback: use the system default application handler.
+	#[cfg(target_os = "macos")]
+	let (opener, args) = ("open", vec![path_str]);
+	#[cfg(target_os = "linux")]
+	let (opener, args) = ("xdg-open", vec![path_str]);
+	#[cfg(target_os = "windows")]
+	let (opener, args) = ("cmd", vec!["/C".to_string(), "start".to_string(), "".to_string(), path_str]);
+
+	std::process::Command::new(opener)
+		.args(&args)
+		.status()
+		.map_err(|e| format!("Failed to open file: {e}"))?;
+
+	Ok(())
+}
+
 // --- File explorer (list_dir / read_file) ---
 
 /// Directories to skip when listing (to avoid huge / irrelevant trees).

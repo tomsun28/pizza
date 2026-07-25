@@ -109,7 +109,8 @@
 		"emptyTitle": "暂无文件",
 		"emptyDescription": "当前工作区的文件树将显示在这里。",
 		"noMatch": "没有匹配的文件。",
-		"closeFile": "关闭文件"
+		"closeFile": "关闭文件",
+		"openInEditor": "在编辑器中打开"
 	},
 	"history": {
 		"title": "历史",

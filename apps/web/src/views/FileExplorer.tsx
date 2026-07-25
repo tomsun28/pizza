@@ -10,8 +10,9 @@ import {
 	RefreshCw,
 	ArrowLeft,
 	Copy,
+	ExternalLink,
 } from "lucide-react";
-import { listDir, readFileContent, type DirEntry } from "@/lib/transport";
+import { listDir, readFileContent, openInEditor, type DirEntry } from "@/lib/transport";
 import { EmptyState, ErrorBanner, Spinner } from "@/components/ui";
 import { cn } from "@/lib/utils";
 
@@ -267,6 +268,13 @@ export default function FileExplorer({ workspace }: { workspace?: string | null 
 							title={t("common.copy")}
 						>
 							<Copy className="h-3.5 w-3.5" />
+						</button>
+						<button
+							onClick={() => { if (selectedFile) { openInEditor(cwd, selectedFile).catch((e) => console.error("openInEditor failed:", e)); } }}
+							className="flex h-6 w-6 items-center justify-center rounded text-muted transition-colors hover:bg-surface-2 hover:text-fg"
+							title={t("files.openInEditor")}
+						>
+							<ExternalLink className="h-3.5 w-3.5" />
 						</button>
 					</div>
 					{/* Content */}
