@@ -27,6 +27,7 @@ fn main() {
 			bridge::list_dir,
 			bridge::read_file,
 			bridge::open_in_editor,
+			bridge::fetch_skills_sh,
 		])
 		.setup(|_app| {
 			#[cfg(debug_assertions)]

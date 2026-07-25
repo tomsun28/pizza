@@ -5,6 +5,7 @@ import { PxlKitSurfaceProvider } from "@pxlkit/ui-kit";
 import Layout from "@/components/Layout";
 import ChatView from "@/views/ChatView";
 import SettingsView from "@/views/SettingsView";
+import PluginsView from "@/views/PluginsView";
 import { subscribeSidecarExit, subscribeEvents, initSidecar, sendCommandAwait, listWorkspaces } from "@/lib/transport";
 import { BrandIcon } from "@/components/BrandIcon";
 import type { RpcSessionState, WorkspaceMeta } from "@/lib/types";
@@ -309,6 +310,7 @@ function AppInner() {
 							}
 						/>
 						<Route path="/settings" element={<SettingsView state={state} />} />
+						<Route path="/plugins" element={<PluginsView />} />
 						<Route path="*" element={<Navigate to="/" replace />} />
 					</Route>
 			</Routes>
