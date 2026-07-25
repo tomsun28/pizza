@@ -8,6 +8,7 @@
 		"core:event:default",
 		"core:window:allow-start-dragging",
 		"shell:allow-execute",
+		"shell:allow-open",
 		"dialog:default"
 	]
 }
