@@ -1057,6 +1057,121 @@ pub async fn transcribe_audio(audio_b64: String, mime_type: String) -> Result<St
 	Ok(text)
 }
 
+// --- File explorer (list_dir / read_file) ---
+
+/// Directories to skip when listing (to avoid huge / irrelevant trees).
+const SKIP_DIRS: &[&str] = &[
+	".git",
+	"node_modules",
+	"target",
+	".next",
+	".cache",
+	".turbo",
+	"dist",
+	"build",
+	".DS_Store",
+];
+
+#[derive(serde::Serialize)]
+pub struct DirEntry {
+	pub name: String,
+	pub path: String,
+	pub is_dir: bool,
+	pub size: u64,
+}
+
+/// Resolve `cwd` (expanding `~`) and join `sub_path` if provided.
+fn resolve_workspace_path(cwd: &str, sub_path: Option<&str>) -> Result<PathBuf, String> {
+	let expanded = if cwd.starts_with("~") {
+		let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
+		format!("{}{}", home, &cwd[1..])
+	} else {
+		cwd.to_string()
+	};
+	let base = PathBuf::from(&expanded);
+	let full = match sub_path {
+		Some(s) if !s.is_empty() => base.join(s),
+		_ => base,
+	};
+	// Canonicalize to resolve any `..` etc., but fall back to the raw path.
+	Ok(full.canonicalize().unwrap_or(full))
+}
+
+/// List entries in a directory within the workspace. `sub_path` is relative
+/// to `cwd`. Directories in `SKIP_DIRS` are excluded.
+#[tauri::command]
+pub async fn list_dir(cwd: String, sub_path: Option<String>) -> Result<Vec<DirEntry>, String> {
+	let dir = resolve_workspace_path(&cwd, sub_path.as_deref())?;
+	if !dir.exists() {
+		return Err(format!("Directory does not exist: {}", dir.display()));
+	}
+	if !dir.is_dir() {
+		return Err(format!("Not a directory: {}", dir.display()));
+	}
+
+	let base = resolve_workspace_path(&cwd, None)?;
+	let entries = std::fs::read_dir(&dir).map_err(|e| format!("read_dir: {e}"))?;
+
+	let mut result: Vec<DirEntry> = Vec::new();
+	for entry in entries.filter_map(|e| e.ok()) {
+		let file_name = entry.file_name().to_string_lossy().to_string();
+		// Skip known huge / irrelevant directories.
+		if SKIP_DIRS.contains(&file_name.as_str()) {
+			continue;
+		}
+		let file_type = entry.file_type().map_err(|e| format!("file_type: {e}"))?;
+		let full_path = entry.path();
+		// Compute relative path from workspace root.
+		let rel = full_path
+			.strip_prefix(&base)
+			.map(|p| p.to_string_lossy().to_string())
+			.unwrap_or_else(|_| file_name.clone());
+		let size = if file_type.is_dir() {
+			0
+		} else {
+			entry.metadata().map(|m| m.len()).unwrap_or(0)
+		};
+		result.push(DirEntry {
+			name: file_name,
+			path: rel,
+			is_dir: file_type.is_dir(),
+			size,
+		});
+	}
+
+	// Sort: directories first, then alphabetical.
+	result.sort_by(|a, b| {
+		b.is_dir
+			.cmp(&a.is_dir)
+			.then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+	});
+
+	Ok(result)
+}
+
+/// Read a file's text content within the workspace. `file_path` is relative
+/// to `cwd`. Files larger than 2 MB are rejected to avoid UI overload.
+#[tauri::command]
+pub async fn read_file(cwd: String, file_path: String) -> Result<String, String> {
+	let full = resolve_workspace_path(&cwd, Some(&file_path))?;
+	if !full.exists() {
+		return Err(format!("File does not exist: {}", full.display()));
+	}
+	if full.is_dir() {
+		return Err(format!("Path is a directory: {}", full.display()));
+	}
+	let metadata = std::fs::metadata(&full).map_err(|e| format!("metadata: {e}"))?;
+	const MAX_SIZE: u64 = 2 * 1024 * 1024; // 2 MB
+	if metadata.len() > MAX_SIZE {
+		return Err(format!(
+			"File is too large ({} bytes, max {} bytes)",
+			metadata.len(),
+			MAX_SIZE
+		));
+	}
+	std::fs::read_to_string(&full).map_err(|e| format!("read_to_string: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;

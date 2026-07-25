@@ -102,6 +102,15 @@
 		"approved": "Approved",
 		"rejected": "Rejected"
 	},
+	"files": {
+		"title": "Files",
+		"search": "Search files…",
+		"refresh": "Refresh",
+		"emptyTitle": "No files",
+		"emptyDescription": "File tree for this workspace will appear here.",
+		"noMatch": "No files match your search.",
+		"closeFile": "Close file"
+	},
 	"history": {
 		"title": "History",
 		"description": "Session tree and branch navigation",
