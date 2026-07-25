@@ -1,11 +1,12 @@
 import { useTranslation } from "react-i18next";
-import { GitBranch, Activity } from "lucide-react";
+import { GitBranch, Activity, FolderTree } from "lucide-react";
 import { usePersistedState } from "@/lib/usePersistedState";
 import { cn } from "@/lib/utils";
 import BranchTreeExplorer from "@/views/BranchTreeExplorer";
 import EventTimeline from "@/views/EventTimeline";
+import FileExplorer from "@/views/FileExplorer";
 
-export type RightDockTab = "history" | "timeline";
+export type RightDockTab = "files" | "history" | "timeline";
 
 /**
  * The right-hand dock hosting the History (branch tree) and Timeline (event
@@ -14,9 +15,10 @@ export type RightDockTab = "history" | "timeline";
  */
 export default function RightDock({ workspace }: { workspace?: string | null }) {
 	const { t } = useTranslation();
-	const [tab, setTab] = usePersistedState<RightDockTab>("right-dock-tab", "history");
+	const [tab, setTab] = usePersistedState<RightDockTab>("right-dock-tab", "files");
 
 	const tabs: Array<{ id: RightDockTab; label: string; icon: typeof GitBranch }> = [
+		{ id: "files", label: t("files.title"), icon: FolderTree },
 		{ id: "history", label: t("history.title"), icon: GitBranch },
 		{ id: "timeline", label: t("timeline.title"), icon: Activity },
 	];
@@ -43,7 +45,9 @@ export default function RightDock({ workspace }: { workspace?: string | null }) 
 				))}
 			</div>
 			<div className="min-h-0 flex-1">
-				{tab === "history" ? (
+				{tab === "files" ? (
+					<FileExplorer workspace={workspace} />
+				) : tab === "history" ? (
 					<BranchTreeExplorer workspace={workspace} />
 				) : (
 					<EventTimeline workspace={workspace} />

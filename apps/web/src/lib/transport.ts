@@ -290,6 +290,33 @@ export async function revealWorkspace(cwd: string): Promise<void> {
 	await core.invoke("reveal_workspace", { cwd });
 }
 
+// --- File explorer (Tauri only) ---
+
+export interface DirEntry {
+	name: string;
+	path: string;
+	is_dir: boolean;
+	size: number;
+}
+
+export async function listDir(cwd: string, subPath?: string): Promise<DirEntry[]> {
+	if (!isTauri()) return [];
+	const core = await import("@tauri-apps/api/core");
+	return core.invoke<DirEntry[]>("list_dir", { cwd, subPath: subPath ?? null });
+}
+
+export async function readFileContent(cwd: string, filePath: string): Promise<string> {
+	if (!isTauri()) return "";
+	const core = await import("@tauri-apps/api/core");
+	return core.invoke<string>("read_file", { cwd, filePath });
+}
+
+export async function openInEditor(cwd: string, filePath: string): Promise<void> {
+	if (!isTauri()) return;
+	const core = await import("@tauri-apps/api/core");
+	await core.invoke("open_in_editor", { cwd, filePath });
+}
+
 // --- Provider management (Tauri only) ---
 
 export interface ProviderInfo {

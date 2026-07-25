@@ -24,6 +24,9 @@ fn main() {
 			bridge::remove_provider_api_key,
 			bridge::set_window_background,
 			bridge::transcribe_audio,
+			bridge::list_dir,
+			bridge::read_file,
+			bridge::open_in_editor,
 		])
 		.setup(|_app| {
 			#[cfg(debug_assertions)]
