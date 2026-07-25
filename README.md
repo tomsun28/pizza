@@ -1,6 +1,6 @@
 # Pizza
 
-Pizza is an event-driven agent. Every conversation, tool call, and file edit is an event in an immutable log. Your UI, the LLM context, and the session tree are all projections of that log.
+Pizza is my personal, event-driven agent. Every conversation, tool call, and file edit is an event in an immutable log. Your UI, the LLM context, and the session tree are all projections of that log.
 
 [简体中文](./README.zh-CN.md)
 
