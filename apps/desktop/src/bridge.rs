@@ -385,6 +385,7 @@ pub async fn init_sidecar(
 	// user's shell rc files, so homebrew/cargo/nvm etc. would be missing. Capture
 	// the login-shell PATH once and pass it to the sidecar explicitly.
 	cmd.env("PATH", resolve_shell_path());
+	log_file(&format!("init_sidecar: sidecar PATH = {}", resolve_shell_path()));
 
 	log_file(&format!("init_sidecar: spawning {} {:?}", program, args));
 	let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn: {e}"))?;
