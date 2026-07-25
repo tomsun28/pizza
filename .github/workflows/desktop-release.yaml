@@ -17,8 +17,6 @@ jobs:
         include:
           - os: macos-14
             label: macos-arm64
-          - os: macos-13
-            label: macos-x64
           - os: ubuntu-22.04
             label: linux-x64
           - os: windows-2022
