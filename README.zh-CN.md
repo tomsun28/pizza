@@ -22,12 +22,20 @@ Pizza 的表壳来源于 Pi -> Pizza, 感谢 Pi 的开源。
   在 Pizza 中你不需要手工去新建会话，把它看作你可以持续聊十年的朋友的长程任务，朋友自己会去管理好自己的上下文。
 
 - **所有界面共享同一个运行时**
-  交互式 TUI、JSON-RPC 服务、单次打印模式都消费同一个 `SessionFacade` 的事件流。你可以脚本化它、嵌入它，或者直接在终端聊天 —— 它是同一个 agent。
+  桌面 GUI、交互式 TUI、JSON-RPC 服务、单次打印模式都消费同一个 `SessionFacade` 的事件流。你可以脚本化它、嵌入它，或者直接在终端聊天 —— 它是同一个 agent。
 
 - **Git Log 一样的分支树记忆**
   会话可以从任意一条历史消息分叉。回退、分支、对比。随时随地重开人生。  
 
 ## 快速开始
+
+### 桌面应用
+
+从 [GitHub Releases](https://github.com/tomsun28/pizza/releases) 下载对应平台的安装包（macOS / Linux / Windows），安装后打开即可使用。
+
+> **macOS 用户**：由于应用未经签名，首次打开会被 Gatekeeper 拦截。请在 Finder 中右键点击 Pizza.app → 选择"打开" → 在弹窗中再次点击"打开"；或在终端执行 `xattr -cr /Applications/Pizza.app`。
+
+### CLI
 
 ```bash
 npm install -g @tomsun28/pizza
