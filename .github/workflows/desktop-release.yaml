@@ -91,6 +91,43 @@ jobs:
           LABEL: ${{ matrix.label }}
         shell: bash
 
+      - name: Rename artifacts with platform name
+        run: |
+          LABEL="${{ matrix.label }}"
+          PLATFORM="${LABEL%%-*}"
+          ARCH="${LABEL##*-}"
+          BUNDLE_DIR="apps/desktop/target/release/bundle"
+          VERSION=$(grep -o '"version": "[^"]*"' apps/desktop/tauri.conf.json | head -1 | cut -d'"' -f4)
+
+          find "$BUNDLE_DIR" -type f \( -name "*.dmg" -o -name "*.deb" -o -name "*.rpm" -o -name "*.exe" -o -name "*.msi" \) | while read -r file; do
+            dir=$(dirname "$file")
+            base=$(basename "$file")
+            ext="${base##*.}"
+            case "$ext" in
+              dmg|deb|rpm)
+                new_name="Pizza_${VERSION}_${PLATFORM}_${ARCH}.${ext}"
+                ;;
+              exe)
+                if [[ "$base" == *"-setup.exe" ]]; then
+                  new_name="Pizza_${VERSION}_${PLATFORM}_${ARCH}-setup.exe"
+                else
+                  new_name="Pizza_${VERSION}_${PLATFORM}_${ARCH}.exe"
+                fi
+                ;;
+              msi)
+                lang=$(echo "$base" | sed -n "s/.*_\(.*\)\.msi/\1/p")
+                if [ -n "$lang" ]; then
+                  new_name="Pizza_${VERSION}_${PLATFORM}_${ARCH}_${lang}.msi"
+                else
+                  new_name="Pizza_${VERSION}_${PLATFORM}_${ARCH}.msi"
+                fi
+                ;;
+            esac
+            mv "$file" "$dir/$new_name"
+            echo "Renamed: $base -> $new_name"
+          done
+        shell: bash
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v5
         with:
