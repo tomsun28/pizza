@@ -37,20 +37,6 @@ function getLanguage(filePath: string): string {
 	return map[ext] ?? "text";
 }
 
-function isTextFile(filePath: string): boolean {
-	const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
-	const textExts = [
-		"ts", "tsx", "js", "jsx", "json", "md", "rs", "go", "py",
-		"rb", "java", "c", "cpp", "h", "hpp", "css", "html", "xml",
-		"yaml", "yml", "toml", "sh", "bash", "zsh", "sql", "graphql",
-		"vue", "svelte", "txt", "env", "lock", "gitignore", "dockerfile",
-		"ini", "cfg", "conf", "properties", "gradle", "kt", "swift",
-		"scala", "clj", "ex", "exs", "erl", "hs", "ml", "lua", "r",
-		"dart", "elm", "nim", "v", "zig", "wasm", "asm", "s",
-	];
-	return textExts.includes(ext) || ext === "";
-}
-
 interface TreeNode extends DirEntry {
 	children?: TreeNode[];
 	loaded?: boolean;

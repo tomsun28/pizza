@@ -1092,7 +1092,13 @@ pub async fn open_in_editor(cwd: String, file_path: String) -> Result<(), String
 	// We use `status()` (not `spawn()`) to detect if the app actually exists.
 	#[cfg(target_os = "macos")]
 	{
-		let apps: &[&str] = &["Cursor", "Windsurf", "Visual Studio Code", "Zed", "Sublime Text"];
+		let apps: &[&str] = &[
+			"Cursor",
+			"Windsurf",
+			"Visual Studio Code",
+			"Zed",
+			"Sublime Text",
+		];
 		for app in apps {
 			let result = std::process::Command::new("open")
 				.arg("-a")
@@ -1127,7 +1133,15 @@ pub async fn open_in_editor(cwd: String, file_path: String) -> Result<(), String
 	#[cfg(target_os = "linux")]
 	let (opener, args) = ("xdg-open", vec![path_str]);
 	#[cfg(target_os = "windows")]
-	let (opener, args) = ("cmd", vec!["/C".to_string(), "start".to_string(), "".to_string(), path_str]);
+	let (opener, args) = (
+		"cmd",
+		vec![
+			"/C".to_string(),
+			"start".to_string(),
+			"".to_string(),
+			path_str,
+		],
+	);
 
 	std::process::Command::new(opener)
 		.args(&args)
