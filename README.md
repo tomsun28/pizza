@@ -44,4 +44,4 @@ pizza
 
 ---
 
-![desktop](./resources/pizza-desktop.png)
+![desktop](./resources/pizza-desktop-white.png)
