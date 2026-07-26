@@ -42,6 +42,22 @@ export interface TimelineItem {
 		affectedFiles?: string[];
 		status: "pending" | "approved" | "rejected";
 	};
+	/** Unix ms timestamp when the message was emitted. */
+	timestamp?: number;
+}
+
+/** Format a Unix ms timestamp as HH:mm (24h). Returns "" if invalid. */
+function formatMessageTime(ts?: number): string {
+	if (!ts || !Number.isFinite(ts)) return "";
+	try {
+		return new Date(ts).toLocaleTimeString(undefined, {
+			hour: "2-digit",
+			minute: "2-digit",
+			hour12: false,
+		});
+	} catch {
+		return "";
+	}
 }
 
 const COLLAPSE_LINES = 5;
@@ -265,10 +281,11 @@ function ToolCard({
 	);
 }
 
-function AssistantActions({ text, visible }: { text: string; visible: boolean }) {
+function AssistantActions({ text, visible, timestamp }: { text: string; visible: boolean; timestamp?: number }) {
 	const { t } = useTranslation();
 	const [copied, copy] = useCopy();
 	const [feedback, setFeedback] = useState<null | "up" | "down">(null);
+	const time = formatMessageTime(timestamp);
 	return (
 		<div
 			className={cn(
@@ -306,6 +323,11 @@ function AssistantActions({ text, visible }: { text: string; visible: boolean })
 			>
 				<ThumbsDown className="h-3.5 w-3.5" />
 			</button>
+			{time && (
+				<span className="ml-1 font-mono text-[10px] text-muted" title={new Date(timestamp!).toLocaleString()}>
+					{time}
+				</span>
+			)}
 		</div>
 	);
 }
@@ -351,17 +373,29 @@ function UserBubble({ item }: { item: TimelineItem }) {
 				</span>
 			) : (
 				item.text && (
-					<button
-						type="button"
-						onClick={() => copy(item.text)}
+					<div
 						className={cn(
-							"mt-1 flex h-7 w-7 items-center justify-center rounded-md text-muted transition-opacity hover:bg-surface-2 hover:text-fg",
+							"mt-1 flex items-center gap-1 transition-opacity",
 							hover ? "opacity-100" : "pointer-events-none opacity-0",
 						)}
-						title={t("common.copy")}
 					>
-						{copied ? <Check className="h-3.5 w-3.5 text-success" /> : <Copy className="h-3.5 w-3.5" />}
-					</button>
+						<button
+							type="button"
+							onClick={() => copy(item.text)}
+							className="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-surface-2 hover:text-fg"
+							title={t("common.copy")}
+						>
+							{copied ? <Check className="h-3.5 w-3.5 text-success" /> : <Copy className="h-3.5 w-3.5" />}
+						</button>
+						{formatMessageTime(item.timestamp) && (
+							<span
+								className="ml-1 font-mono text-[10px] text-muted"
+								title={new Date(item.timestamp!).toLocaleString()}
+							>
+								{formatMessageTime(item.timestamp)}
+							</span>
+						)}
+					</div>
 				)
 			)}
 		</div>
@@ -401,7 +435,7 @@ function AssistantMessage({ item }: { item: TimelineItem }) {
 				{item.streaming && item.text && (
 					<span className="ml-0.5 animate-pulse text-accent">▋</span>
 				)}
-				{!item.streaming && item.text && <AssistantActions text={item.text} visible={hover} />}
+				{!item.streaming && item.text && <AssistantActions text={item.text} visible={hover} timestamp={item.timestamp} />}
 			</div>
 		</div>
 	);

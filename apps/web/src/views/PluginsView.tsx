@@ -4,10 +4,10 @@ import { useNavigate, useLocation, useOutletContext } from "react-router-dom";
 import { PageHeader, Card, Badge, Button } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { fetchSkillsSh, getSkills, type SkillsShSkill, type SkillInfo } from "@/lib/transport";
-import { ArrowLeft, ArrowRight, Puzzle, BookOpen, Wrench, Server, Search, ExternalLink, Download, Check } from "lucide-react";
+import { ArrowLeft, ArrowRight, Puzzle, BookOpen, Server, Search, ExternalLink, Download, Check } from "lucide-react";
 import type { LayoutOutletContext } from "@/components/Layout";
 
-type PluginTab = "skills" | "extensions" | "mcp" | "tools";
+type PluginTab = "skills" | "extensions" | "mcp";
 
 interface TabConfig {
 	key: PluginTab;
@@ -18,7 +18,6 @@ const TABS: TabConfig[] = [
 	{ key: "skills", icon: BookOpen },
 	{ key: "extensions", icon: Puzzle },
 	{ key: "mcp", icon: Server },
-	{ key: "tools", icon: Wrench },
 ];
 
 function InstalledSkillCard({ skill }: { skill: SkillInfo }) {
@@ -307,13 +306,6 @@ export default function PluginsView() {
 							icon={Server}
 							title={t("plugins.mcp.comingSoon")}
 							description={t("plugins.mcp.comingSoonHint")}
-						/>
-					)}
-					{tab === "tools" && (
-						<ComingSoonTab
-							icon={Wrench}
-							title={t("plugins.tools.comingSoon")}
-							description={t("plugins.tools.comingSoonHint")}
 						/>
 					)}
 				</div>
