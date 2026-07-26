@@ -38,7 +38,7 @@
 		"timeHoursAgo": "{{count}}h ago",
 		"timeDaysAgo": "{{count}}d ago",
 		"plugins": "Plugins",
-		"pluginsSubtitle": "Skills · Extensions · MCP"
+		"pluginsSubtitle": "Skills · Extensions"
 	},
 	"chat": {
 		"newChat": "New Chat",
@@ -176,15 +176,14 @@
 	},
 	"plugins": {
 		"title": "Plugins",
-		"description": "Manage skills, extensions, MCP tools, and integrations",
+		"description": "Manage skills, extensions, MCP, and integrations",
 		"loading": "Loading...",
 		"error": "Error: {{error}}",
 		"refresh": "Refresh",
 		"tabs": {
 			"skills": "Skills",
 			"extensions": "Extensions",
-			"mcp": "MCP",
-			"tools": "Tools"
+			"mcp": "MCP"
 		},
 		"skills": {
 			"type": "Skill",
@@ -203,12 +202,8 @@
 			"comingSoonHint": "Extension management will be available here."
 		},
 		"mcp": {
-			"comingSoon": "MCP tools coming soon",
+			"comingSoon": "MCP servers coming soon",
 			"comingSoonHint": "MCP server configuration will be available here."
-		},
-		"tools": {
-			"comingSoon": "Tools coming soon",
-			"comingSoonHint": "Custom tool management will be available here."
 		}
 	},
 	"settings": {

@@ -122,16 +122,17 @@ function buildTimelineFromMessages(
 	const toolCardById = new Map<string, TimelineItem>();
 	for (const msg of messages) {
 		const role = msg.role as string;
+		const ts = typeof msg.timestamp === "number" ? msg.timestamp : undefined;
 		if (role === "user") {
 			const text = messageText(msg);
 			const images = messageImages(msg);
-			history.push({ id: `hist-${history.length}`, role: "user", title: t("common.you"), text, status: "", images: images.length > 0 ? images : undefined });
+			history.push({ id: `hist-${history.length}`, role: "user", title: t("common.you"), text, status: "", images: images.length > 0 ? images : undefined, timestamp: ts });
 		} else if (role === "assistant") {
 			const text = messageText(msg);
 			const thinking = messageThinking(msg);
 			const images = messageImages(msg);
 			if (text || thinking || images.length > 0) {
-				history.push({ id: `hist-${history.length}`, role: "assistant", title: t("common.pizza"), text, status: "DONE", streaming: false, thinking: thinking || undefined, images: images.length > 0 ? images : undefined });
+				history.push({ id: `hist-${history.length}`, role: "assistant", title: t("common.pizza"), text, status: "DONE", streaming: false, thinking: thinking || undefined, images: images.length > 0 ? images : undefined, timestamp: ts });
 			}
 			// Emit a tool card for each tool call in the assistant message.
 			for (const call of messageToolCalls(msg)) {
@@ -366,18 +367,19 @@ export default function ChatView({
 				// that bubble in place (swap its id + clear the queued flag)
 				// instead of appending a duplicate.
 				const causedBy = typeof event.caused_by === "string" ? event.caused_by : undefined;
+				const ts = typeof event.timestamp === "number" ? event.timestamp : undefined;
 				updateItems((prev) => {
 					if (causedBy) {
 						const idx = prev.findIndex((it) => it.id === causedBy && it.queued);
 						if (idx >= 0) {
 							const next = [...prev];
-							next[idx] = { ...next[idx]!, id: event.event_id, queued: false, status: "" };
+							next[idx] = { ...next[idx]!, id: event.event_id, queued: false, status: "", timestamp: ts };
 							return next;
 						}
 					}
 					return [
 						...prev,
-						{ id: event.event_id, role: "user", title: tRef.current("common.you"), text, status: "", images: images.length > 0 ? images : undefined },
+						{ id: event.event_id, role: "user", title: tRef.current("common.you"), text, status: "", images: images.length > 0 ? images : undefined, timestamp: ts },
 					];
 				});
 				break;
@@ -390,9 +392,10 @@ export default function ChatView({
 				// arrives (matched via caused_by).
 				const text = messageText(event.payload);
 				const images = messageImages(event.payload);
+				const ts = typeof event.timestamp === "number" ? event.timestamp : undefined;
 				updateItems((prev) => [
 					...prev,
-					{ id: event.event_id, role: "user", title: tRef.current("common.you"), text, status: "", images: images.length > 0 ? images : undefined, queued: true },
+					{ id: event.event_id, role: "user", title: tRef.current("common.you"), text, status: "", images: images.length > 0 ? images : undefined, queued: true, timestamp: ts },
 				]);
 				break;
 			}
@@ -404,9 +407,10 @@ export default function ChatView({
 				} else {
 					activeAssistantByWs.current.set(eventCwd, id);
 				}
+				const ts = typeof event.timestamp === "number" ? event.timestamp : undefined;
 				updateItems((prev) => [
 					...prev,
-					{ id, role: "assistant", title: tRef.current("common.pizza"), text: "", status: "STREAMING", streaming: true },
+					{ id, role: "assistant", title: tRef.current("common.pizza"), text: "", status: "STREAMING", streaming: true, timestamp: ts },
 				]);
 				break;
 			}
