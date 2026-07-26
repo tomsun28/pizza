@@ -21,6 +21,7 @@ import {
 } from "./edit-diff.js";
 import { annotateTextWithLineAnchors } from "./line-anchors.js";
 import { truncateHead } from "./truncate.js";
+import { splitShellWords } from "../shell-words.js";
 
 export interface BuiltinCommandResult {
 	stdout: string;
@@ -479,52 +480,6 @@ function parseOptionalInt(value: string | undefined): number | undefined {
 	if (value === undefined) return undefined;
 	const parsed = parseInt(value, 10);
 	return Number.isNaN(parsed) ? undefined : parsed;
-}
-
-function splitShellWords(input: string): string[] {
-	const words: string[] = [];
-	let current = "";
-	let quote: "'" | "\"" | undefined;
-	let escaped = false;
-
-	for (const char of input) {
-		if (escaped) {
-			current += char;
-			escaped = false;
-			continue;
-		}
-		if (char === "\\") {
-			escaped = true;
-			continue;
-		}
-		if (quote) {
-			if (char === quote) {
-				quote = undefined;
-			} else {
-				current += char;
-			}
-			continue;
-		}
-		if (char === "'" || char === "\"") {
-			quote = char;
-			continue;
-		}
-		if (/\s/.test(char)) {
-			if (current.length > 0) {
-				words.push(current);
-				current = "";
-			}
-			continue;
-		}
-		current += char;
-	}
-	if (escaped) {
-		current += "\\";
-	}
-	if (current.length > 0) {
-		words.push(current);
-	}
-	return words;
 }
 
 function isHelpRequest(args: string[]): boolean {

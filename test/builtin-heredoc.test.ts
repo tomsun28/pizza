@@ -86,6 +86,32 @@ describe("parseBuiltinCommand (heredoc integration)", () => {
 		expect(result.heredoc).toBeUndefined();
 	});
 });
+describe("parseBuiltinCommand (backslash in quoted write content)", () => {
+	it("preserves a literal backslash inside double quotes", () => {
+		// Regression: backslash was dropped before the quote check, so "a\nb"
+		// (4 chars) became "anb" (3 chars). POSIX keeps the backslash here.
+		const result = parseBuiltinCommand('_write f.txt "a' + String.fromCharCode(0x5c) + 'nb"');
+		expect(result.command).toBe("_write");
+		expect(result.args).toEqual(["f.txt", "a" + String.fromCharCode(0x5c) + "nb"]);
+	});
+
+	it("preserves a literal backslash inside single quotes", () => {
+		// Single quotes keep everything literally, including the backslash.
+		const result = parseBuiltinCommand("_write f.txt 'a" + String.fromCharCode(0x5c) + "nb'");
+		expect(result.args).toEqual(["f.txt", "a" + String.fromCharCode(0x5c) + "nb"]);
+	});
+
+	it("still treats a backslash as an escape when unquoted", () => {
+		// Unquoted, backslash escapes the next char (shell semantics).
+		const result = parseBuiltinCommand("_write f.txt a" + String.fromCharCode(0x5c) + "nb");
+		expect(result.args).toEqual(["f.txt", "anb"]);
+	});
+
+	it("escapes a double-quote inside double quotes (\"a\\\"b\" -> a\"b)", () => {
+		const result = parseBuiltinCommand('_write f.txt "a' + String.fromCharCode(0x5c) + '"b"');
+		expect(result.args).toEqual(["f.txt", 'a"b']);
+	});
+});
 
 /**
  * End-to-end routing: a quoted-heredoc write must be routed as a builtin

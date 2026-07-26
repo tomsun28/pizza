@@ -5,6 +5,7 @@
  */
 
 import type { IntentClassification, IntentCategory, IntentRisk } from "./types.js";
+import { splitShellWords } from "../shell-words.js";
 
 // ============================================================================
 // Classifier Configuration
@@ -419,47 +420,6 @@ function parseBuiltinInvocation(command: string): { command: "read" | "write" | 
 	}
 
 	return { command: builtin, path };
-}
-
-function splitShellWords(input: string): string[] {
-	const words: string[] = [];
-	let current = "";
-	let quote: "'" | "\"" | undefined;
-	let escaped = false;
-
-	for (const char of input) {
-		if (escaped) {
-			current += char;
-			escaped = false;
-			continue;
-		}
-		if (char === "\\") {
-			escaped = true;
-			continue;
-		}
-		if (quote) {
-			if (char === quote) {
-				quote = undefined;
-			} else {
-				current += char;
-			}
-			continue;
-		}
-		if (char === "'" || char === "\"") {
-			quote = char;
-			continue;
-		}
-		if (/\s/.test(char)) {
-			if (current) {
-				words.push(current);
-				current = "";
-			}
-			continue;
-		}
-		current += char;
-	}
-	if (current) words.push(current);
-	return words;
 }
 
 function getNonNullRedirectPath(command: string): string | undefined {
