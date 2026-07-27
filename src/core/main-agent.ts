@@ -371,5 +371,16 @@ export function acquireMainLock(mainDir: string): MainAgentLock | null {
 	const onExit = (): void => release();
 	process.once("exit", onExit);
 
+	// Belt-and-suspenders: in some runtimes (notably the Bun --compile binary
+	// used as the desktop sidecar) `process.on("exit")` can be skipped or
+	// fired late if the process is killed by a signal. Hook SIGINT/SIGTERM/
+	// SIGHUP explicitly so the lock is released promptly and a fresh sidecar
+	// can take over without hitting a stale-lock path. The `release()`
+	// guard makes the redundant exit-path call a no-op.
+	const onSignal = (): void => release();
+	process.once("SIGINT", onSignal);
+	process.once("SIGTERM", onSignal);
+	process.once("SIGHUP", onSignal);
+
 	return { release };
 }
