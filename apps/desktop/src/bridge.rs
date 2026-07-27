@@ -1,9 +1,9 @@
 use serde_json::Value;
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
@@ -426,7 +426,12 @@ pub async fn init_sidecar(
 	cmd.current_dir(&cwd);
 	cmd.stdin(Stdio::piped());
 	cmd.stdout(Stdio::piped());
-	cmd.stderr(Stdio::inherit());
+	// Capture the sidecar's stderr so we can surface its real diagnostic when
+	// it crashes immediately. Without this, a sidecar that emits its only
+	// error to stderr (e.g. "Another main agent instance is already running")
+	// fails invisibly inside the .app bundle — the GUI sees only an opaque
+	// exit code with no clue about what went wrong.
+	cmd.stderr(Stdio::piped());
 	// GUI-launched processes inherit launchd's minimal PATH and never source the
 	// user's shell rc files, so homebrew/cargo/nvm etc. would be missing. Capture
 	// the login-shell PATH once and pass it to the sidecar explicitly.
@@ -441,6 +446,21 @@ pub async fn init_sidecar(
 	log_file(&format!("init_sidecar: pid={:?}", child.id()));
 	let stdin = child.stdin.take().ok_or("no stdin")?;
 	let stdout = child.stdout.take().ok_or("no stdout")?;
+	// Drain stderr in a background thread and stash the output. The thread
+	// reads until EOF (which happens when the child closes its stderr end on
+	// exit). When we surface the "sidecar exited" error below, we wait for the
+	// child to exit, then join this thread to read its captured bytes.
+	let stderr_buf: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+	let stderr_handle = child.stderr.take().ok_or("no stderr")?;
+	let stderr_buf_for_thread = Arc::clone(&stderr_buf);
+	let stderr_thread = thread::spawn(move || {
+		let mut reader = BufReader::new(stderr_handle);
+		let mut bytes = Vec::new();
+		let _ = reader.read_to_end(&mut bytes);
+		if let Ok(mut s) = stderr_buf_for_thread.lock() {
+			s.push_str(&String::from_utf8_lossy(&bytes));
+		}
+	});
 
 	// Send get_state BEFORE storing stdin (so we can read the response synchronously).
 	log_file("init_sidecar: sending get_state");
@@ -472,13 +492,57 @@ pub async fn init_sidecar(
 	// to surface a meaningful error instead of storing a dead sidecar that
 	// would cause "Broken pipe" on the next write.
 	if bytes_read == 0 {
-		let exit_info = match child.try_wait() {
-			Ok(Some(status)) => format!(" (exit {})", status),
-			_ => String::new(),
+		// Reap the child (with a short timeout) so the OS closes its stderr
+		// end and the stderr drain thread can finish. try_wait() first to
+		// avoid blocking when the child has already exited.
+		let exit_status = match child.try_wait() {
+			Ok(Some(s)) => Some(s),
+			_ => match child.wait() {
+				Ok(s) => Some(s),
+				Err(e) => {
+					log_file(&format!("init_sidecar: wait failed: {e}"));
+					None
+				}
+			},
+		};
+		// The stderr drain thread reads until EOF, which fires when the child
+		// closes its stderr (i.e. when wait() above reaps it). Give it a
+		// moment to land its buffered bytes, then join.
+		let _ = stderr_thread.join();
+
+		let exit_info = match exit_status {
+			Some(status) => format!(" ({})", status),
+			None => String::new(),
+		};
+		// Append the captured stderr so the user sees *why* the sidecar died,
+		// not just that it did. Trim to the tail to keep the error payload
+		// bounded — startup failures almost always live in the last few KB.
+		const MAX_STDERR_TAIL: usize = 4096;
+		let stderr_suffix = match stderr_buf.lock() {
+			Ok(s) => {
+				let trimmed = s.trim();
+				if trimmed.is_empty() {
+					String::new()
+				} else {
+					let tail = if trimmed.len() > MAX_STDERR_TAIL {
+						let from = trimmed.len() - MAX_STDERR_TAIL;
+						let safe_from = trimmed
+							.char_indices()
+							.map(|(i, _)| i)
+							.find(|&i| i >= from)
+							.unwrap_or(from);
+						&trimmed[safe_from..]
+					} else {
+						trimmed
+					};
+					format!("\n--- sidecar stderr ---\n{}\n--- end ---", tail)
+				}
+			}
+			Err(_) => String::new(),
 		};
 		return Err(format!(
-			"Sidecar exited immediately without responding{}",
-			exit_info
+			"Sidecar exited immediately without responding{}{}",
+			exit_info, stderr_suffix
 		));
 	}
 

@@ -52,3 +52,8 @@ collect.sh
 /apps/desktop/prebuilds-bin/
 /apps/desktop/target/
 docs/
+
+# Local AI agent / Claude convention files (kept on disk for the local
+# tooling to read, but never tracked or pushed to PRs)
+/AGENTS.md
+/CLAUDE.md
