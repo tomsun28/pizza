@@ -233,6 +233,14 @@ async function buildExtensionInfos(facade: SessionFacade): Promise<RpcExtensionI
  * Returns the action result plus a freshly-checked `installed` state so the
  * UI can update without a separate refetch.
  */
+/**
+ * Track in-flight install/uninstall operations per extension id to prevent
+ * concurrent spawns (e.g. user clicks Install twice). Without this, multiple
+ * `agent-browser install` processes can race on the same Chrome download lock
+ * and one of them hangs indefinitely.
+ */
+const lifecycleInFlight = new Map<string, Promise<{ ok: boolean; message: string; installed: boolean }>>();
+
 async function runExtensionLifecycle(
 	facade: SessionFacade,
 	extensionId: string,
@@ -246,21 +254,38 @@ async function runExtensionLifecycle(
 			installed: false,
 		};
 	}
+	// Reject concurrent calls for the same extension id.
+	const inFlight = lifecycleInFlight.get(extensionId);
+	if (inFlight) {
+		return {
+			ok: false,
+			message: `${action} already in progress for ${extensionId}.`,
+			installed: false,
+		};
+	}
 	const cwd = facade.runtime?.cwd ?? process.cwd();
 	const fn = action === "install" ? lc.install : lc.uninstall;
 	if (!fn) {
 		return { ok: false, message: `No ${action} handler for ${extensionId}.`, installed: false };
 	}
-	const result = await fn(cwd);
-	let installed = action === "install" ? result.ok : false;
-	if (lc.checkInstalled) {
+	const task = (async () => {
 		try {
-			installed = (await lc.checkInstalled(cwd)).installed;
-		} catch {
-			installed = action === "install" ? result.ok : false;
+			const result = await fn(cwd);
+			let installed = action === "install" ? result.ok : false;
+			if (lc.checkInstalled) {
+				try {
+					installed = (await lc.checkInstalled(cwd)).installed;
+				} catch {
+					installed = action === "install" ? result.ok : false;
+				}
+			}
+			return { ok: result.ok, message: result.message, installed };
+		} finally {
+			lifecycleInFlight.delete(extensionId);
 		}
-	}
-	return { ok: result.ok, message: result.message, installed };
+	})();
+	lifecycleInFlight.set(extensionId, task);
+	return task;
 }
 
 

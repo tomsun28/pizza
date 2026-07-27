@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useLocation, useOutletContext } from "react-router-dom";
 import { PageHeader, Card, Badge, Button } from "@/components/ui";
@@ -250,6 +250,12 @@ function ExtensionCard({
 	const { t } = useTranslation();
 	const kindLabel = t(`plugins.extensions.${ext.kind}`);
 	const busy = busyId === ext.id;
+	// An installable extension that hasn't had its external dependency installed
+	// is not yet usable — only offer Install, and hide the enabled/disabled badge
+	// and toggle to avoid implying the extension is operational.
+	const notInstalledInstallable = ext.installable && !ext.installed;
+	const showToggle = ext.canToggle && !notInstalledInstallable;
+	const showEnabledBadge = !notInstalledInstallable;
 	return (
 		<Card className="transition-colors hover:border-accent/40">
 			<div className="flex items-start justify-between gap-3">
@@ -262,11 +268,12 @@ function ExtensionCard({
 						<p className="mt-2 line-clamp-2 text-xs text-muted">{ext.description}</p>
 					)}
 					<div className="mt-3 flex flex-wrap items-center gap-2">
-						{ext.enabled ? (
-							<Badge tone="success">{t("plugins.extensions.enabled")}</Badge>
-						) : (
-							<Badge tone="neutral">{t("plugins.extensions.disabled")}</Badge>
-						)}
+						{showEnabledBadge &&
+							(ext.enabled ? (
+								<Badge tone="success">{t("plugins.extensions.enabled")}</Badge>
+							) : (
+								<Badge tone="neutral">{t("plugins.extensions.disabled")}</Badge>
+							))}
 						<Badge tone="neutral">{kindLabel}</Badge>
 						{ext.installable && (
 							<Badge tone={ext.installed ? "success" : "warning"}>
@@ -290,15 +297,22 @@ function ExtensionCard({
 						<Button
 							size="sm"
 							tone={ext.installed ? "neutral" : "accent"}
+							loading={busy}
 							disabled={busy}
 							onClick={() => (ext.installed ? onUninstall(ext.id) : onInstall(ext.id))}
 							title={ext.installed ? t("plugins.extensions.uninstall") : t("plugins.extensions.install")}
 							iconLeft={ext.installed ? <Trash2 className="h-3.5 w-3.5" /> : <Download className="h-3.5 w-3.5" />}
 						>
-							{ext.installed ? t("plugins.extensions.uninstall") : t("plugins.extensions.install")}
+							{busy
+								? ext.installed
+									? t("plugins.extensions.uninstalling")
+									: t("plugins.extensions.installing")
+								: ext.installed
+									? t("plugins.extensions.uninstall")
+									: t("plugins.extensions.install")}
 						</Button>
 					)}
-					{ext.canToggle && (
+					{showToggle && (
 						<Button
 							size="sm"
 							tone={ext.enabled ? "danger" : "accent"}
@@ -352,23 +366,34 @@ function ExtensionsTab() {
 
 	const [busyId, setBusyId] = useState<string | null>(null);
 	const [installMessage, setInstallMessage] = useState<string | null>(null);
+	// Synchronous guard so rapid double-clicks can't bypass the busyId state update.
+	const lifecycleLock = useRef<string | null>(null);
 
 	const runLifecycle = useCallback(
 		async (id: string, fn: (id: string) => Promise<{ ok: boolean; message: string; installed: boolean }>) => {
+			if (lifecycleLock.current) return;
+			lifecycleLock.current = id;
 			setBusyId(id);
 			setInstallMessage(null);
 			try {
 				const result = await fn(id);
 				setInstallMessage(result.message);
-				// Reflect the freshly-checked install state locally.
-				setExtensions((prev) => prev.map((e) => (e.id === id ? { ...e, installed: result.installed } : e)));
+				if (result.ok) {
+					// Re-sync with the agent: install/uninstall may change tool/command counts,
+					// enabled state, or other fields beyond just `installed`.
+					await refresh();
+				} else {
+					// On failure, only update the install flag locally.
+					setExtensions((prev) => prev.map((e) => (e.id === id ? { ...e, installed: result.installed } : e)));
+				}
 			} catch (e) {
 				setInstallMessage(e instanceof Error ? e.message : String(e));
 			} finally {
+				lifecycleLock.current = null;
 				setBusyId(null);
 			}
 		},
-		[],
+		[refresh],
 	);
 
 	const handleInstall = useCallback((id: string) => runLifecycle(id, installExtension), [runLifecycle]);

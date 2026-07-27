@@ -18,12 +18,26 @@
  */
 
 import { getAgentDir, SettingsManager } from "../../index.js";
-import { AGENT_BROWSER_SKILL_CONTENT } from "./skill-content.js";
 import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
 	ExtensionFactory,
 } from "../../core/extensions/types.js";
+
+/**
+ * Short hint injected into the system prompt at the start of every agent turn.
+ * The model can run `agent-browser --help` for the full command reference.
+ */
+const AGENT_BROWSER_PROMPT_HINT = `## agent-browser (built-in)
+
+For web automation, use the \`agent-browser\` CLI via the \`cli\` tool (not a separate tool). If \`agent-browser --version\` fails, tell the user to run \`/browser install\` first.
+
+  agent-browser open <url>     # open a page
+  agent-browser snapshot -i    # interactive elements as @e1, @e2... refs
+  agent-browser click @e3      # act on a ref — re-snapshot after any page change (refs go stale)
+  agent-browser close          # close when done
+
+Full reference: \`agent-browser --help\`.`;
 
 /** Stable id used in `settings.disabledBuiltinExtensions`. */
 export const AGENT_BROWSER_EXTENSION_ID = "agent-browser";
@@ -116,11 +130,12 @@ const USAGE = `Usage:
   /browser help        Show this help`;
 
 export const createAgentBrowserExtension: ExtensionFactory = (pizza: ExtensionAPI) => {
-	// Inject the usage skill into the system prompt at the start of every agent turn.
+	// Inject a short hint into the system prompt at the start of every agent turn.
+	// The full command reference is left for the model to discover via
+	// `agent-browser --help` on demand, rather than burning ~700 tokens per turn.
 	pizza.on("before_agent_start", (event) => {
-		const skill = AGENT_BROWSER_SKILL_CONTENT;
 		const sep = event.systemPrompt.endsWith("\n") ? "\n" : "\n\n";
-		return { systemPrompt: event.systemPrompt + sep + skill };
+		return { systemPrompt: event.systemPrompt + sep + AGENT_BROWSER_PROMPT_HINT };
 	});
 
 	pizza.registerCommand("browser", {

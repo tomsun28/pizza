@@ -218,7 +218,9 @@
 			"installed": "CLI installed",
 			"notInstalled": "CLI not installed",
 			"install": "Install",
-			"uninstall": "Uninstall"
+			"installing": "Installing…",
+			"uninstall": "Uninstall",
+			"uninstalling": "Uninstalling…"
 		},
 		"mcp": {
 			"comingSoon": "MCP servers coming soon",
