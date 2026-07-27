@@ -28,9 +28,10 @@
 	"scripts": {
 		"clean": "shx rm -rf dist",
 		"generate-providers": "node scripts/generate-providers.mjs",
+		"generate-browser-skill": "node scripts/generate-browser-skill.mjs",
 		"dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
 		"start": "node dist/src/cli.js",
-		"build": "tsc -p tsconfig.build.json && shx chmod +x dist/src/cli.js && shx cp package.json README.md dist/ && npm run generate-providers && npm run copy-assets",
+		"build": "tsc -p tsconfig.build.json && shx chmod +x dist/src/cli.js && shx cp package.json README.md dist/ && npm run generate-providers && npm run generate-browser-skill && npm run copy-assets",
 		"build:release": "npm run build && npm run vendor-tools",
 		"build:binary": "npm run build && npm run vendor-tools && bun build --compile ./dist/src/bun/cli.js --outfile dist/pizza && npm run copy-binary-assets",
 		"build:desktop": "npm run build:binary && npm run prepare-desktop-vendor && cd apps/desktop && cargo tauri build",

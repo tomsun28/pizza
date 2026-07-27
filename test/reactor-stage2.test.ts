@@ -894,4 +894,133 @@ describe("Reactor stage-2: policies + queues", () => {
 
 		runtime.dispose();
 	});
+
+	// ────────────────────────────────────────────────────────────────────────
+	// Regression: "ghost" follow-ups resurrected across process restarts.
+	// A USER_FOLLOWUP_QUEUED is durable, but the in-memory buffer it backs is
+	// not. If the process exits with a queued follow-up never delivered (no turn
+	// completed to drain it), the durable event must NOT be replayed days later
+	// by a fresh process run — otherwise stale user messages appear out of nowhere.
+	// ────────────────────────────────────────────────────────────────────────
+
+	it("does not replay a stale follow-up from a previous process run (ghost-followup regression)", async () => {
+		const cwd = makeTempDir();
+		const seen: string[] = [];
+
+		const baseClient: LLMClient = {
+			async complete(req): Promise<LLMResponse> {
+				const last = req.messages[req.messages.length - 1];
+				if (last.role === "user") seen.push(typeof last.content === "string" ? last.content : "?");
+				return {
+					content: [{ type: "text", text: "ok" } as ContentBlock],
+					provider: "test", model: "test",
+					usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, cost: 0 },
+					stopReason: "stop",
+				};
+			},
+		};
+		const config = {
+			cwd, agentDir: cwd, toolRegistry: emptyRegistry, llmClient: baseClient,
+			systemPrompt: "", model: { provider: "test", model_id: "test" }, tools: [],
+		};
+
+		// Process 1: queue a follow-up but never deliver it (turn never runs, then
+		// the process exits). This leaves a USER_FOLLOWUP_QUEUED with no matching
+		// USER_MESSAGE — the exact "ghost" precondition.
+		const runtime1 = new EventSourcedRuntime(config);
+		runtime1.followUp("ghost from yesterday");
+		const queued = runtime1.store.query({ types: ["USER_FOLLOWUP_QUEUED"] });
+		expect(queued).toHaveLength(1);
+		runtime1.dispose();
+
+		// Process 2 on the same store: the stale follow-up must NOT be replayed.
+		const seenAfterRestart: string[] = [];
+		const runtime2 = new EventSourcedRuntime({
+			...config,
+			llmClient: {
+				async complete(req): Promise<LLMResponse> {
+					const last = req.messages[req.messages.length - 1];
+					if (last.role === "user") seenAfterRestart.push(typeof last.content === "string" ? last.content : "?");
+					return {
+						content: [{ type: "text", text: "ok" } as ContentBlock],
+						provider: "test", model: "test",
+						usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, cost: 0 },
+						stopReason: "stop",
+					};
+				},
+			},
+		});
+		await runtime2.prompt("fresh message");
+		// Only the fresh prompt is seen; the stale follow-up is abandoned.
+		expect(seenAfterRestart).toEqual(["fresh message"]);
+		// And no extra USER_MESSAGE was synthesized from the ghost follow-up.
+		expect(runtime2.store.query({ types: ["USER_MESSAGE"] })).toHaveLength(1); // only "fresh message"; the ghost was never delivered
+		runtime2.dispose();
+	});
+
+	it("emits USER_FOLLOWUP_DROPPED when an interrupt discards a queued follow-up", async () => {
+		const cwd = makeTempDir();
+		let calls = 0;
+		const client: LLMClient = {
+			async complete(req): Promise<LLMResponse> {
+				calls++;
+				// First call hangs until aborted, simulating a turn in flight.
+				if (calls === 1) {
+					await new Promise<void>((resolve) => req.signal?.addEventListener("abort", () => resolve(), { once: true }));
+					throw new Error("aborted");
+				}
+				return {
+					content: [{ type: "text", text: "ok" } as ContentBlock],
+					provider: "test", model: "test",
+					usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, cost: 0 },
+					stopReason: "stop",
+				};
+			},
+		};
+
+		const runtime = new EventSourcedRuntime({
+			cwd, agentDir: cwd, toolRegistry: emptyRegistry, llmClient: client,
+			systemPrompt: "", model: { provider: "test", model_id: "test" }, tools: [],
+		});
+
+		const prompt = runtime.prompt("first");
+		await waitForEvent(runtime, "LLM_CALL_REQUESTED");
+		// Queue a follow-up while the turn is in flight...
+		runtime.followUp("queued then dropped");
+		// ...then hard-interrupt (no new content) — this discards the follow-up.
+		runtime.abort();
+		await prompt;
+
+		const dropped = runtime.store.query({ types: ["USER_FOLLOWUP_DROPPED"] });
+		expect(dropped).toHaveLength(1);
+		const followupEvent = runtime.store.query({ types: ["USER_FOLLOWUP_QUEUED"] })[0];
+		expect((dropped[0].payload as { dropped_event_ids: string[] }).dropped_event_ids).toContain(followupEvent.event_id);
+		// The follow-up was never delivered as a user message.
+		expect(runtime.store.query({ types: ["USER_MESSAGE"] })[0].payload).toMatchObject({ content: "first" });
+		expect(runtime.store.query({ types: ["USER_MESSAGE"] })).toHaveLength(1);
+
+		runtime.dispose();
+
+		// And on a fresh process run, the dropped follow-up must stay dropped.
+		const seen2: string[] = [];
+		const runtime2 = new EventSourcedRuntime({
+			cwd, agentDir: cwd, toolRegistry: emptyRegistry,
+			llmClient: {
+				async complete(req): Promise<LLMResponse> {
+					const last = req.messages[req.messages.length - 1];
+					if (last.role === "user") seen2.push(typeof last.content === "string" ? last.content : "?");
+					return {
+						content: [{ type: "text", text: "ok" } as ContentBlock],
+						provider: "test", model: "test",
+						usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, cost: 0 },
+						stopReason: "stop",
+					};
+				},
+			},
+			systemPrompt: "", model: { provider: "test", model_id: "test" }, tools: [],
+		});
+		await runtime2.prompt("next");
+		expect(seen2).toEqual(["next"]);
+		runtime2.dispose();
+	});
 });

@@ -87,7 +87,7 @@ export interface ReactorConfig {
 
 /** A single event handler. Returns void or void Promise. */
 export type EventHandler = (event: EventBase) => void | Promise<void>;
-
+	
 /** Mapping from event type to handler */
 export type EventHandlerMap = Partial<Record<EventType, EventHandler>>;
 
@@ -202,24 +202,46 @@ export class Reactor {
 
 	/**
 	 * Replay USER_FOLLOWUP_QUEUED events that were appended while the reactor was idle.
-	 * Skips events that have already been consumed (i.e. an AGENT_TURN_COMPLETED with a
-	 * caused_by chain that includes them).
 	 *
-	 * For now we use a simple heuristic: count followups vs followup-driven user messages.
-	 * If followups outnumber the consumed ones, replay the difference into the in-memory queue.
+	 * A follow-up is replayed only when ALL of these hold:
+	 *   1. It was queued during THIS process run — i.e. its timestamp is at or after the
+	 *      most recent RUNTIME_STARTED. The follow-up event is durable, but the in-memory
+	 *      queue it backs is not; a follow-up left over from a previous run has no live
+	 *      buffer to belong to, and replaying it would resurrect "ghost" user messages
+	 *      days later. (runtime_id is a constant in local mode, so the RUNTIME_STARTED
+	 *      timestamp is what actually distinguishes process runs.)
+	 *   2. It has not already been delivered: no USER_MESSAGE references it via caused_by.
+	 *   3. It has not been explicitly dropped: no USER_FOLLOWUP_DROPPED event lists its id.
 	 */
 	private _replayPendingFollowUps(): void {
 		const followups = this.config.store.query({ types: ["USER_FOLLOWUP_QUEUED"] });
 		if (followups.length === 0) return;
 
-		// A USER_FOLLOWUP_QUEUED is "consumed" when a USER_MESSAGE event has it as caused_by.
+		// Already-delivered follow-ups: a USER_MESSAGE carries the follow-up id as caused_by.
 		const userMessages = this.config.store.query({ types: ["USER_MESSAGE"] });
-		const consumedCausedBy = new Set(
+		const deliveredCausedBy = new Set(
 			userMessages.map((m) => m.caused_by).filter((id): id is string => !!id),
 		);
 
+		// Explicitly dropped follow-ups (e.g. cleared by a user interrupt).
+		const dropped = this.config.store.query({ types: ["USER_FOLLOWUP_DROPPED"] });
+		const droppedIds = new Set<string>();
+		for (const d of dropped) {
+			const p = d.payload as { dropped_event_ids?: string[] };
+			for (const id of p.dropped_event_ids ?? []) droppedIds.add(id);
+		}
+
+		// The most recent RUNTIME_STARTED marks the start of this process run. Follow-ups
+		// queued before it belong to a previous run whose in-memory buffer is gone.
+		const lastStarted = this.config.store.query({ types: ["RUNTIME_STARTED"], reverse: true, limit: 1 })[0];
+		const runStartedAt = lastStarted?.timestamp ?? 0;
+
 		for (const f of followups) {
-			if (consumedCausedBy.has(f.event_id)) continue;
+			if (deliveredCausedBy.has(f.event_id)) continue;
+			if (droppedIds.has(f.event_id)) continue;
+			// Only replay follow-ups queued during this process run; stale ones from a
+			// previous run are abandoned (their in-memory buffer no longer exists).
+			if (runStartedAt > 0 && f.timestamp < runStartedAt) continue;
 			const p = f.payload as { content: string | unknown[]; images?: unknown[] };
 			this.followUpQueue.push({ content: p.content, images: p.images, sourceEventId: f.event_id });
 		}
@@ -999,6 +1021,20 @@ export class Reactor {
 		// If abort() was called, discard any pending follow-ups so the reactor stops.
 		// _abortedByUser is set by _onUserInterrupt when the interrupt has no new content.
 		if (this._abortedByUser) {
+			// Record the follow-ups we are about to discard so _replayPendingFollowUps does
+			// not resurrect them on the next reactor restart. Only entries that originated
+			// from a USER_FOLLOWUP_QUEUED event have a sourceEventId worth recording.
+			const droppedIds = this.followUpQueue
+				.map((f) => f.sourceEventId)
+				.filter((id): id is string => typeof id === "string");
+			if (droppedIds.length > 0) {
+				this._emit({
+					actor_id: "runtime",
+					type: "USER_FOLLOWUP_DROPPED",
+					payload: { dropped_event_ids: droppedIds, reason: "user_interrupt" },
+					caused_by: event.event_id,
+				});
+			}
 			this.followUpQueue = [];
 			this._abortedByUser = false;
 			return;

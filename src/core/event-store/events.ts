@@ -59,6 +59,16 @@ export interface UserFollowupQueuedEvent extends EventBase {
 	};
 }
 
+/** Follow-ups that were dropped (e.g. by a user interrupt) instead of delivered. */
+export interface UserFollowupDroppedEvent extends EventBase {
+	type: "USER_FOLLOWUP_DROPPED";
+	payload: {
+		/** event_ids of the USER_FOLLOWUP_QUEUED events that were discarded. */
+		dropped_event_ids: string[];
+		reason: string;
+	};
+}
+
 /** User changes configuration */
 export interface UserConfigChangeEvent extends EventBase {
 	type: "USER_CONFIG_CHANGE";
@@ -556,6 +566,7 @@ export type TypedEvent =
 	| UserRejectionEvent
 	| UserInterruptEvent
 	| UserFollowupQueuedEvent
+	| UserFollowupDroppedEvent
 	| UserConfigChangeEvent
 	| AgentTurnRequestedEvent
 	| AgentTurnCompletedEvent

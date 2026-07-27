@@ -316,4 +316,33 @@ describe("SettingsManager", () => {
 			expect(manager.getSessionDir()).toBe(join(homedir(), "sessions"));
 		});
 	});
+
+	describe("disabledBuiltinExtensions", () => {
+		it("defaults to empty (all built-ins enabled)", () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getDisabledBuiltinExtensions().size).toBe(0);
+		});
+
+		it("disables and persists a built-in extension id", async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setBuiltinExtensionDisabled("agent-browser", true);
+			expect(manager.getDisabledBuiltinExtensions().has("agent-browser")).toBe(true);
+			await manager.flush();
+
+			// Reload from disk to confirm persistence.
+			const reloaded = SettingsManager.create(projectDir, agentDir);
+			expect(reloaded.getDisabledBuiltinExtensions().has("agent-browser")).toBe(true);
+		});
+
+		it("re-enables a built-in extension and clears the key when empty", async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setBuiltinExtensionDisabled("agent-browser", true);
+			manager.setBuiltinExtensionDisabled("agent-browser", false);
+			expect(manager.getDisabledBuiltinExtensions().has("agent-browser")).toBe(false);
+			await manager.flush();
+
+			const raw = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
+			expect(raw.disabledBuiltinExtensions).toBeUndefined();
+		});
+	});
 });

@@ -199,7 +199,26 @@
 		},
 		"extensions": {
 			"comingSoon": "Extensions coming soon",
-			"comingSoonHint": "Extension management will be available here."
+			"comingSoonHint": "Extension management will be available here.",
+			"enabled": "Enabled",
+			"disabled": "Disabled",
+			"builtin": "Built-in",
+			"user": "User",
+			"project": "Project",
+			"cli": "CLI",
+			"package": "Package",
+			"enable": "Enable",
+			"disable": "Disable",
+			"tools_one": "{{count}} tool",
+			"tools_other": "{{count}} tools",
+			"commands_one": "{{count}} command",
+			"commands_other": "{{count}} commands",
+			"reloadHint": "Restart the session for changes to take effect.",
+			"empty": "No extensions installed.",
+			"installed": "CLI installed",
+			"notInstalled": "CLI not installed",
+			"install": "Install",
+			"uninstall": "Uninstall"
 		},
 		"mcp": {
 			"comingSoon": "MCP servers coming soon",

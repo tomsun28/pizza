@@ -62,6 +62,7 @@ export type EventType =
 	| "USER_REJECTION"
 	| "USER_INTERRUPT"
 	| "USER_FOLLOWUP_QUEUED"
+	| "USER_FOLLOWUP_DROPPED"
 	| "USER_CONFIG_CHANGE"
 	// Reactor control events (drive state transitions, no side effects themselves)
 	| "AGENT_TURN_REQUESTED"

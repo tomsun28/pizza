@@ -44,6 +44,7 @@ import { printTimings, resetTimings, time } from "./core/timings.js";
 import { InteractiveMode, runGuiModeWithFacade, runPrintModeWithFacade, runRpcModeWithFacade } from "./modes/index.js";
 import { initTheme, stopThemeWatcher } from "../packages/tui/theme/theme.js";
 import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.js";
+import { handleBuiltinCommand } from "./builtin-cli.js";
 import { isLocalPath } from "./utils/paths.js";
 
 /**
@@ -301,6 +302,7 @@ async function createCliSessionSetup(options: {
 			additionalPromptTemplatePaths: resolvedPaths.promptTemplates,
 			additionalThemePaths: resolvedPaths.themes,
 			noExtensions: parsed.noExtensions,
+			noBuiltinExtensions: parsed.noBuiltinExtensions,
 			noSkills: parsed.noSkills,
 			noPromptTemplates: parsed.noPromptTemplates,
 			noThemes: parsed.noThemes,
@@ -411,6 +413,10 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 
 	if (await handlePackageCommand(args)) {
+		return;
+	}
+
+	if (await handleBuiltinCommand(args)) {
 		return;
 	}
 

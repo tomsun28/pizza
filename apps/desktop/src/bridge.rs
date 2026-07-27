@@ -271,6 +271,50 @@ pub fn kill_sidecar_for_window(state: &BridgeState, window_label: &str) {
 	}
 }
 
+/// Send a fire-and-forget JSON-RPC command (no args) to every running sidecar.
+///
+/// Provider credentials live in the shared `~/.pizza/agent/auth.json`, which is
+/// edited out-of-band by `set_provider_api_key` / `remove_provider_api_key`.
+/// Each sidecar caches credentials in memory and only re-reads the file on
+/// explicit reload, so after such an edit we must tell every sidecar to reload
+/// — otherwise a subsequent model switch resolves auth from the stale cache and
+/// silently falls back to an environment-variable key (the wrong token).
+fn broadcast_to_all_sidecars(state: &BridgeState, command_type: &str) {
+	let line = serde_json::json!({ "id": uuid::Uuid::new_v4().to_string(), "type": command_type });
+	let payload = match serde_json::to_string(&line) {
+		Ok(s) => s,
+		Err(e) => {
+			log_file(&format!("broadcast_to_all_sidecars: serialize failed: {e}"));
+			return;
+		}
+	};
+	let mut sent = 0;
+	let mut failed = Vec::new();
+	{
+		let mut sidecars = state.sidecars.lock().unwrap();
+		for (cwd, sidecar) in sidecars.iter_mut() {
+			// A write error here means the sidecar pipe is broken (process died).
+			// The reader thread will reap it; we just log and move on.
+			let result = (|| -> std::io::Result<()> {
+				use std::io::Write;
+				sidecar.stdin.write_all(payload.as_bytes())?;
+				sidecar.stdin.write_all(b"\n")?;
+				sidecar.stdin.flush()?;
+				Ok(())
+			})();
+			if result.is_ok() {
+				sent += 1;
+			} else {
+				failed.push(cwd.clone());
+			}
+		}
+	}
+	log_file(&format!(
+		"broadcast_to_all_sidecars: command={} sent_to={} failed={:?}",
+		command_type, sent, failed
+	));
+}
+
 /// One-shot init: spawns sidecar for the calling window, sends get_state. Returns state JSON.
 /// If a sidecar for this cwd already exists, just switches the active pointer (no restart).
 /// `cwd` is the working directory for the pizza rpc process (the user's project).
@@ -899,7 +943,11 @@ pub async fn list_providers(app: AppHandle) -> Result<Vec<ProviderInfo>, String>
 
 /// Set an API key for a provider in auth.json.
 #[tauri::command]
-pub async fn set_provider_api_key(provider: String, api_key: String) -> Result<(), String> {
+pub async fn set_provider_api_key(
+	state: tauri::State<'_, BridgeState>,
+	provider: String,
+	api_key: String,
+) -> Result<(), String> {
 	let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
 	let auth_dir = PathBuf::from(&home).join(".pizza").join("agent");
 	let auth_path = auth_dir.join("auth.json");
@@ -940,12 +988,18 @@ pub async fn set_provider_api_key(provider: String, api_key: String) -> Result<(
 	}
 
 	log_file(&format!("set_provider_api_key: set key for {}", provider));
+	// auth.json is shared across all workspaces: tell every running sidecar
+	// to reload its in-memory credentials so a model switch uses this new key.
+	broadcast_to_all_sidecars(&state, "reload_providers");
 	Ok(())
 }
 
 /// Remove a provider's credentials from auth.json.
 #[tauri::command]
-pub async fn remove_provider_api_key(provider: String) -> Result<(), String> {
+pub async fn remove_provider_api_key(
+	state: tauri::State<'_, BridgeState>,
+	provider: String,
+) -> Result<(), String> {
 	let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
 	let auth_path = PathBuf::from(&home)
 		.join(".pizza")
@@ -970,6 +1024,9 @@ pub async fn remove_provider_api_key(provider: String) -> Result<(), String> {
 		"remove_provider_api_key: removed key for {}",
 		provider
 	));
+	// Notify every sidecar so they drop the now-removed credential from
+	// their in-memory cache (otherwise auth still resolves as configured).
+	broadcast_to_all_sidecars(&state, "reload_providers");
 	Ok(())
 }
 
