@@ -192,7 +192,7 @@ Project skill`,
 }`,
 			);
 
-			const loader = new DefaultResourceLoader({ cwd, agentDir });
+			const loader = new DefaultResourceLoader({ cwd, agentDir, noBuiltinExtensions: true });
 			await loader.reload();
 
 			const extensionsResult = loader.getExtensions();
@@ -573,6 +573,77 @@ export default function(pizza: ExtensionAPI) {
 			expect(runner.getCommand("deploy:1")?.description).toBe("explicit command");
 			expect(runner.getCommand("deploy:2")?.description).toBe("global command");
 			expect(runner.getToolDefinition("duplicate-tool")?.description).toBe("explicit tool");
+		});
+	});
+
+	describe("built-in extensions", () => {
+		it("loads built-in extensions by default", async () => {
+			const loader = new DefaultResourceLoader({ cwd, agentDir });
+			await loader.reload();
+
+			const extensionsResult = loader.getExtensions();
+			const paths = extensionsResult.extensions.map((e) => e.path);
+			expect(paths).toContain("<builtin:agent-browser>");
+		});
+
+		it("registers the built-in /browser command", async () => {
+			const loader = new DefaultResourceLoader({ cwd, agentDir });
+			await loader.reload();
+
+			const extensionsResult = loader.getExtensions();
+			const sessionManager = new EventStoreExtensionSessionManager({ store: new SqliteEventStore("test", ":memory:", "test"), projection: new SessionProjection(new SqliteEventStore("test", ":memory:", "test"), { session_id: "test", workspace_id: "test", event_range: { start_event_id: "ORIGIN", end_event_id: "HEAD" }, created_by: "user_explicit", created_at: Date.now() }), cwd });
+			const authStorage = AuthStorage.create(join(tempDir, "auth-builtin.json"));
+			const modelRegistry = ModelRegistry.create(authStorage);
+			const runner = new ExtensionRunner(
+				extensionsResult.extensions,
+				extensionsResult.runtime,
+				cwd,
+				sessionManager,
+				modelRegistry,
+			);
+
+			expect(runner.getCommand("browser")).toBeDefined();
+		});
+
+		it("injects the agent-browser skill into the system prompt", async () => {
+			const loader = new DefaultResourceLoader({ cwd, agentDir });
+			await loader.reload();
+
+			const extensionsResult = loader.getExtensions();
+			const sessionManager = new EventStoreExtensionSessionManager({ store: new SqliteEventStore("test", ":memory:", "test"), projection: new SessionProjection(new SqliteEventStore("test", ":memory:", "test"), { session_id: "test", workspace_id: "test", event_range: { start_event_id: "ORIGIN", end_event_id: "HEAD" }, created_by: "user_explicit", created_at: Date.now() }), cwd });
+			const authStorage = AuthStorage.create(join(tempDir, "auth-skill.json"));
+			const modelRegistry = ModelRegistry.create(authStorage);
+			const runner = new ExtensionRunner(
+				extensionsResult.extensions,
+				extensionsResult.runtime,
+				cwd,
+				sessionManager,
+				modelRegistry,
+			);
+
+			const result = await runner.emitBeforeAgentStart("open example.com", undefined, "BASE PROMPT", {} as never);
+			expect(result?.systemPrompt).toBeDefined();
+			expect(result?.systemPrompt).toContain("agent-browser");
+			expect(result?.systemPrompt).toContain("snapshot -i");
+		});
+
+		it("skips built-in extensions when noBuiltinExtensions is true", async () => {
+			const loader = new DefaultResourceLoader({ cwd, agentDir, noBuiltinExtensions: true });
+			await loader.reload();
+
+			const extensionsResult = loader.getExtensions();
+			expect(extensionsResult.extensions.map((e) => e.path)).not.toContain("<builtin:agent-browser>");
+		});
+
+		it("skips a built-in extension disabled in settings", async () => {
+			const settingsManager = SettingsManager.create(cwd, agentDir);
+			settingsManager.setBuiltinExtensionDisabled("agent-browser", true);
+
+			const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
+			await loader.reload();
+
+			const extensionsResult = loader.getExtensions();
+			expect(extensionsResult.extensions.map((e) => e.path)).not.toContain("<builtin:agent-browser>");
 		});
 	});
 });

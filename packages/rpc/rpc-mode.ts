@@ -26,6 +26,11 @@ import type { SessionFacade } from "../../src/core/session-facade.js";
 import { makeSessionRef, parseSessionRef } from "../../src/core/session-ref.js";
 import { executeBashWithOperations } from "../../src/core/bash-executor.js";
 import { createLocalBashOperations } from "../../src/core/tools/bash.js";
+import {
+	getBuiltinExtensionInfo,
+	getBuiltinExtensionInfos,
+	getBuiltinExtensionLifecycle,
+} from "../../src/builtin-extensions/index.js";
 import { exportFromFile } from "../../src/core/export-html/index.js";
 import { buildHistoryTreeNodes } from "../../src/core/projection/history-tree.js";
 import { killTrackedDetachedChildren } from "../../src/utils/shell.js";
@@ -39,6 +44,7 @@ import type {
 	RpcResponse,
 	RpcSessionState,
 	RpcSlashCommand,
+	RpcExtensionInfo,
 } from "./rpc-types.js";
 import type { ImageContent } from "@earendil-works/pi-ai/compat";
 
@@ -120,6 +126,168 @@ function getFacadeSessionStats(facade: SessionFacade): SessionStats {
 		sessionId: descriptor.session_id,
 	};
 }
+
+/** Derive a display name + id from an extension path. Built-ins use their id. */
+function extensionIdFromPath(extPath: string): string {
+	const match = /^<builtin:([^>]+)>$/.exec(extPath);
+	if (match) return match[1];
+	const base = extPath.replace(/\.ts$/, "").replace(/\.js$/, "");
+	const slash = Math.max(base.lastIndexOf("/"), base.lastIndexOf("\\"));
+	return slash >= 0 ? base.slice(slash + 1) : base;
+}
+
+/** Map a loaded extension's sourceInfo/path to the RPC kind. */
+function extensionKind(ext: {
+	path: string;
+	sourceInfo: { source: string; scope: string; origin: string };
+}): RpcExtensionInfo["kind"] {
+	if (/^<builtin:/.test(ext.path)) return "builtin";
+	if (ext.sourceInfo.origin === "package") return "package";
+	if (ext.sourceInfo.source === "cli") return "cli";
+	if (ext.sourceInfo.scope === "project") return "project";
+	return "user";
+}
+
+/**
+ * Build the full extension list for the `get_extensions` RPC: every loaded
+ * extension (enabled), plus any disabled built-ins (so the UI can show and
+ * re-enable them).
+ */
+async function buildExtensionInfos(facade: SessionFacade): Promise<RpcExtensionInfo[]> {
+	const infos: RpcExtensionInfo[] = [];
+	const loadedIds = new Set<string>();
+	const loaded = facade.resourceLoader?.getExtensions().extensions ?? [];
+	const cwd = facade.runtime?.cwd ?? process.cwd();
+
+	// Resolve install state (installed?) for every installable built-in up front,
+	// concurrently. Best-effort: a failed check defaults to "not installed".
+	const installState = new Map<string, { installed: boolean; version?: string }>();
+	await Promise.all(
+		getBuiltinExtensionInfos().map(async (info) => {
+			const lc = getBuiltinExtensionLifecycle(info.id);
+			if (!lc?.installable || !lc.checkInstalled) return;
+			try {
+				installState.set(info.id, await lc.checkInstalled(cwd));
+			} catch {
+				installState.set(info.id, { installed: false });
+			}
+		}),
+	);
+
+	const installableFor = (id: string): boolean => Boolean(getBuiltinExtensionLifecycle(id)?.installable);
+
+	for (const ext of loaded) {
+		const id = extensionIdFromPath(ext.path);
+		loadedIds.add(id);
+		const builtin = getBuiltinExtensionInfo(id);
+		const installable = installableFor(id);
+		infos.push({
+			id,
+			name: builtin?.name ?? id,
+			description: builtin?.description,
+			kind: extensionKind(ext),
+			enabled: true,
+			canToggle: Boolean(builtin),
+			installable,
+			installed: installable ? (installState.get(id)?.installed ?? false) : true,
+			path: ext.path,
+			toolCount: ext.tools.size,
+			commandCount: ext.commands.size,
+		});
+	}
+
+	// Built-ins that are not currently loaded. A built-in shows as disabled only
+	// when the user has explicitly disabled it (settings.disabledBuiltinExtensions);
+	// otherwise it is considered enabled even if this facade has no resource loader
+	// (e.g. minimal/embedded sessions).
+	const disabledBuiltins = facade.settingsManager.getDisabledBuiltinExtensions();
+	for (const info of getBuiltinExtensionInfos()) {
+		if (loadedIds.has(info.id)) continue;
+		const installable = installableFor(info.id);
+		infos.push({
+			id: info.id,
+			name: info.name,
+			description: info.description,
+			kind: "builtin",
+			enabled: !disabledBuiltins.has(info.id),
+			canToggle: true,
+			installable,
+			installed: installable ? (installState.get(info.id)?.installed ?? false) : true,
+			path: `<builtin:${info.id}>`,
+			toolCount: 0,
+			commandCount: 0,
+		});
+	}
+	// Stable ordering: built-ins first, then the rest by id.
+	infos.sort((a, b) => {
+		if ((a.kind === "builtin") !== (b.kind === "builtin")) {
+			return a.kind === "builtin" ? -1 : 1;
+		}
+		return a.id.localeCompare(b.id);
+	});
+	return infos;
+}
+
+/**
+ * Run an install/uninstall lifecycle action for a built-in extension.
+ * Returns the action result plus a freshly-checked `installed` state so the
+ * UI can update without a separate refetch.
+ */
+/**
+ * Track in-flight install/uninstall operations per extension id to prevent
+ * concurrent spawns (e.g. user clicks Install twice). Without this, multiple
+ * `agent-browser install` processes can race on the same Chrome download lock
+ * and one of them hangs indefinitely.
+ */
+const lifecycleInFlight = new Map<string, Promise<{ ok: boolean; message: string; installed: boolean }>>();
+
+async function runExtensionLifecycle(
+	facade: SessionFacade,
+	extensionId: string,
+	action: "install" | "uninstall",
+): Promise<{ ok: boolean; message: string; installed: boolean }> {
+	const lc = getBuiltinExtensionLifecycle(extensionId);
+	if (!lc?.installable) {
+		return {
+			ok: false,
+			message: "This extension does not support install/uninstall.",
+			installed: false,
+		};
+	}
+	// Reject concurrent calls for the same extension id.
+	const inFlight = lifecycleInFlight.get(extensionId);
+	if (inFlight) {
+		return {
+			ok: false,
+			message: `${action} already in progress for ${extensionId}.`,
+			installed: false,
+		};
+	}
+	const cwd = facade.runtime?.cwd ?? process.cwd();
+	const fn = action === "install" ? lc.install : lc.uninstall;
+	if (!fn) {
+		return { ok: false, message: `No ${action} handler for ${extensionId}.`, installed: false };
+	}
+	const task = (async () => {
+		try {
+			const result = await fn(cwd);
+			let installed = action === "install" ? result.ok : false;
+			if (lc.checkInstalled) {
+				try {
+					installed = (await lc.checkInstalled(cwd)).installed;
+				} catch {
+					installed = action === "install" ? result.ok : false;
+				}
+			}
+			return { ok: result.ok, message: result.message, installed };
+		} finally {
+			lifecycleInFlight.delete(extensionId);
+		}
+	})();
+	lifecycleInFlight.set(extensionId, task);
+	return task;
+}
+
 
 /** One-line preview of a message for history_tree view / diff. */
 function formatMessagePreview(message: AgentMessage): string | undefined {
@@ -633,6 +801,66 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 					}))
 				: [];
 			return success(id, "get_skills", { skills });
+		}
+
+		case "get_extensions": {
+			const extensions = await buildExtensionInfos(facade);
+			return success(id, "get_extensions", { extensions });
+		}
+
+		case "set_extension_enabled": {
+			const info = getBuiltinExtensionInfo(command.extensionId);
+			if (!info) {
+				return error(
+					id,
+					"set_extension_enabled",
+					"Only built-in extensions can be toggled. Manage other extensions via `pizza plugin`.",
+				);
+			}
+			facade.settingsManager.setBuiltinExtensionDisabled(command.extensionId, !command.enabled);
+			// Disabling/enabling a built-in changes which extensions are loaded; that
+			// only takes full effect after the session reloads its resources.
+			return success(id, "set_extension_enabled", {
+				id: command.extensionId,
+				enabled: command.enabled,
+				requiresReload: true,
+			});
+		}
+
+		case "install_extension": {
+			const result = await runExtensionLifecycle(facade, command.extensionId, "install");
+			return success(id, "install_extension", {
+				extensionId: command.extensionId,
+				ok: result.ok,
+				message: result.message,
+				installed: result.installed,
+			});
+		}
+
+		case "uninstall_extension": {
+			const result = await runExtensionLifecycle(facade, command.extensionId, "uninstall");
+			return success(id, "uninstall_extension", {
+				extensionId: command.extensionId,
+				ok: result.ok,
+				message: result.message,
+				installed: result.installed,
+			});
+		}
+
+		case "reload_providers": {
+			// Credentials may be written to auth.json out-of-band (e.g. by the
+			// desktop Tauri bridge). Reload the in-memory cache so model auth
+			// resolution picks up the latest keys instead of a stale cache or an
+			// env-var fallback. Also refresh the model registry so hasAuth flags
+			// and any provider baseUrl overrides are recomputed.
+			const registry = facade.modelRegistry;
+			if (registry?.authStorage) {
+				registry.authStorage.reload();
+				registry.refresh();
+			}
+			return success(id, "reload_providers", {
+				providers: registry?.authStorage?.list() ?? [],
+			});
 		}
 
 			default: {

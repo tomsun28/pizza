@@ -170,6 +170,18 @@ describe("parseArgs", () => {
 		});
 	});
 
+	describe("--no-builtin-extensions flag", () => {
+		test("parses --no-builtin-extensions flag", () => {
+			const result = parseArgs(["--no-builtin-extensions"]);
+			expect(result.noBuiltinExtensions).toBe(true);
+		});
+
+		test("does not set the flag when absent", () => {
+			const result = parseArgs([]);
+			expect(result.noBuiltinExtensions).toBeUndefined();
+		});
+	});
+
 	describe("--skill flag", () => {
 		test("parses single --skill", () => {
 			const result = parseArgs(["--skill", "./skill-dir"]);

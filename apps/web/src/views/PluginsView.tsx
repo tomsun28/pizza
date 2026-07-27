@@ -1,10 +1,20 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useLocation, useOutletContext } from "react-router-dom";
 import { PageHeader, Card, Badge, Button } from "@/components/ui";
 import { cn } from "@/lib/utils";
-import { fetchSkillsSh, getSkills, type SkillsShSkill, type SkillInfo } from "@/lib/transport";
-import { ArrowLeft, ArrowRight, Puzzle, BookOpen, Server, Search, ExternalLink, Download, Check } from "lucide-react";
+import {
+	fetchSkillsSh,
+	getSkills,
+	getExtensions,
+	setExtensionEnabled,
+	installExtension,
+	uninstallExtension,
+	type SkillsShSkill,
+	type SkillInfo,
+	type ExtensionInfo,
+} from "@/lib/transport";
+import { ArrowLeft, ArrowRight, Puzzle, BookOpen, Server, Search, ExternalLink, Download, Check, Power, Trash2 } from "lucide-react";
 import type { LayoutOutletContext } from "@/components/Layout";
 
 type PluginTab = "skills" | "extensions" | "mcp";
@@ -223,6 +233,232 @@ function ComingSoonTab({ icon: Icon, title, description }: { icon: typeof BookOp
 	);
 }
 
+
+function ExtensionCard({
+	ext,
+	onToggle,
+	onInstall,
+	onUninstall,
+	busyId,
+}: {
+	ext: ExtensionInfo;
+	onToggle: (id: string, enabled: boolean) => void;
+	onInstall: (id: string) => void;
+	onUninstall: (id: string) => void;
+	busyId: string | null;
+}) {
+	const { t } = useTranslation();
+	const kindLabel = t(`plugins.extensions.${ext.kind}`);
+	const busy = busyId === ext.id;
+	// An installable extension that hasn't had its external dependency installed
+	// is not yet usable — only offer Install, and hide the enabled/disabled badge
+	// and toggle to avoid implying the extension is operational.
+	const notInstalledInstallable = ext.installable && !ext.installed;
+	const showToggle = ext.canToggle && !notInstalledInstallable;
+	const showEnabledBadge = !notInstalledInstallable;
+	return (
+		<Card className="transition-colors hover:border-accent/40">
+			<div className="flex items-start justify-between gap-3">
+				<div className="min-w-0 flex-1">
+					<div className="flex items-center gap-2">
+						<Puzzle className="h-4 w-4 shrink-0 text-accent" />
+						<span className="truncate text-sm font-medium text-fg">{ext.name}</span>
+					</div>
+					{ext.description && (
+						<p className="mt-2 line-clamp-2 text-xs text-muted">{ext.description}</p>
+					)}
+					<div className="mt-3 flex flex-wrap items-center gap-2">
+						{showEnabledBadge &&
+							(ext.enabled ? (
+								<Badge tone="success">{t("plugins.extensions.enabled")}</Badge>
+							) : (
+								<Badge tone="neutral">{t("plugins.extensions.disabled")}</Badge>
+							))}
+						<Badge tone="neutral">{kindLabel}</Badge>
+						{ext.installable && (
+							<Badge tone={ext.installed ? "success" : "warning"}>
+								{ext.installed ? t("plugins.extensions.installed") : t("plugins.extensions.notInstalled")}
+							</Badge>
+						)}
+						{(ext.toolCount > 0 || ext.kind === "builtin") && (
+							<span className="text-[10px] text-muted">
+								{t("plugins.extensions.tools", { count: ext.toolCount })}
+							</span>
+						)}
+						{ext.commandCount > 0 && (
+							<span className="text-[10px] text-muted">
+								{t("plugins.extensions.commands", { count: ext.commandCount })}
+							</span>
+						)}
+					</div>
+				</div>
+				<div className="flex shrink-0 flex-col items-end gap-2">
+					{ext.installable && (
+						<Button
+							size="sm"
+							tone={ext.installed ? "neutral" : "accent"}
+							loading={busy}
+							disabled={busy}
+							onClick={() => (ext.installed ? onUninstall(ext.id) : onInstall(ext.id))}
+							title={ext.installed ? t("plugins.extensions.uninstall") : t("plugins.extensions.install")}
+							iconLeft={ext.installed ? <Trash2 className="h-3.5 w-3.5" /> : <Download className="h-3.5 w-3.5" />}
+						>
+							{busy
+								? ext.installed
+									? t("plugins.extensions.uninstalling")
+									: t("plugins.extensions.installing")
+								: ext.installed
+									? t("plugins.extensions.uninstall")
+									: t("plugins.extensions.install")}
+						</Button>
+					)}
+					{showToggle && (
+						<Button
+							size="sm"
+							tone={ext.enabled ? "danger" : "accent"}
+							disabled={busy}
+							onClick={() => onToggle(ext.id, !ext.enabled)}
+							title={ext.enabled ? t("plugins.extensions.disable") : t("plugins.extensions.enable")}
+							iconLeft={<Power className="h-3.5 w-3.5" />}
+						>
+							{ext.enabled ? t("plugins.extensions.disable") : t("plugins.extensions.enable")}
+						</Button>
+					)}
+				</div>
+			</div>
+		</Card>
+	);
+}
+
+function ExtensionsTab() {
+	const { t } = useTranslation();
+	const [extensions, setExtensions] = useState<ExtensionInfo[]>([]);
+	const [loading, setLoading] = useState(true);
+	const [error, setError] = useState("");
+	const [reloadHint, setReloadHint] = useState(false);
+
+	const refresh = useCallback(async () => {
+		try {
+			setLoading(true);
+			setError("");
+			const exts = await getExtensions();
+			setExtensions(exts);
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		} finally {
+			setLoading(false);
+		}
+	}, []);
+
+	useEffect(() => {
+		refresh();
+	}, [refresh]);
+
+	const handleToggle = useCallback(
+		async (id: string, enabled: boolean) => {
+			const requiresReload = await setExtensionEnabled(id, enabled);
+			setReloadHint(requiresReload);
+			// Optimistically flip the local state; a full refresh re-syncs with the agent.
+			setExtensions((prev) => prev.map((e) => (e.id === id ? { ...e, enabled } : e)));
+		},
+		[],
+	);
+
+	const [busyId, setBusyId] = useState<string | null>(null);
+	const [installMessage, setInstallMessage] = useState<string | null>(null);
+	// Synchronous guard so rapid double-clicks can't bypass the busyId state update.
+	const lifecycleLock = useRef<string | null>(null);
+
+	const runLifecycle = useCallback(
+		async (id: string, fn: (id: string) => Promise<{ ok: boolean; message: string; installed: boolean }>) => {
+			if (lifecycleLock.current) return;
+			lifecycleLock.current = id;
+			setBusyId(id);
+			setInstallMessage(null);
+			try {
+				const result = await fn(id);
+				setInstallMessage(result.message);
+				if (result.ok) {
+					// Re-sync with the agent: install/uninstall may change tool/command counts,
+					// enabled state, or other fields beyond just `installed`.
+					await refresh();
+				} else {
+					// On failure, only update the install flag locally.
+					setExtensions((prev) => prev.map((e) => (e.id === id ? { ...e, installed: result.installed } : e)));
+				}
+			} catch (e) {
+				setInstallMessage(e instanceof Error ? e.message : String(e));
+			} finally {
+				lifecycleLock.current = null;
+				setBusyId(null);
+			}
+		},
+		[refresh],
+	);
+
+	const handleInstall = useCallback((id: string) => runLifecycle(id, installExtension), [runLifecycle]);
+	const handleUninstall = useCallback((id: string) => runLifecycle(id, uninstallExtension), [runLifecycle]);
+
+	if (loading) {
+		return (
+			<Card>
+				<div className="text-sm text-muted">{t("plugins.loading")}</div>
+			</Card>
+		);
+	}
+
+	if (error) {
+		return (
+			<Card>
+				<div className="text-sm text-danger">{t("plugins.error", { error })}</div>
+			</Card>
+		);
+	}
+
+	return (
+		<div className="space-y-4">
+			<div className="flex items-center justify-end">
+				<Button size="sm" tone="neutral" onClick={refresh}>
+					{t("plugins.refresh")}
+				</Button>
+			</div>
+
+			{reloadHint && (
+				<Card>
+					<p className="text-xs text-muted">{t("plugins.extensions.reloadHint")}</p>
+				</Card>
+			)}
+			{installMessage && (
+				<Card>
+					<p className="text-xs text-muted">{installMessage}</p>
+				</Card>
+			)}
+
+			{extensions.length === 0 ? (
+				<Card>
+					<div className="py-6 text-center">
+						<Puzzle className="mx-auto mb-2 h-8 w-8 text-muted/40" />
+						<p className="font-mono text-xs text-muted">{t("plugins.extensions.empty")}</p>
+					</div>
+				</Card>
+			) : (
+				<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+					{extensions.map((ext) => (
+						<ExtensionCard
+							key={ext.id}
+							ext={ext}
+							onToggle={handleToggle}
+							onInstall={handleInstall}
+							onUninstall={handleUninstall}
+							busyId={busyId}
+						/>
+					))}
+				</div>
+			)}
+		</div>
+	);
+}
+
 export default function PluginsView() {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
@@ -294,13 +530,7 @@ export default function PluginsView() {
 					</div>
 
 					{tab === "skills" && <SkillsTab />}
-					{tab === "extensions" && (
-						<ComingSoonTab
-							icon={Puzzle}
-							title={t("plugins.extensions.comingSoon")}
-							description={t("plugins.extensions.comingSoonHint")}
-						/>
-					)}
+					{tab === "extensions" && <ExtensionsTab />}
 					{tab === "mcp" && (
 						<ComingSoonTab
 							icon={Server}

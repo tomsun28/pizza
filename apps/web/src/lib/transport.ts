@@ -274,6 +274,63 @@ export async function getSkills(): Promise<SkillInfo[]> {
 	}
 }
 
+export type ExtensionKind = "builtin" | "user" | "project" | "cli" | "package";
+
+export interface ExtensionInfo {
+	id: string;
+	name: string;
+	description?: string;
+	kind: ExtensionKind;
+	enabled: boolean;
+	canToggle: boolean;
+	installable: boolean;
+	installed: boolean;
+	path: string;
+	toolCount: number;
+	commandCount: number;
+}
+
+/** List all extensions (built-in + user-installed), including disabled built-ins. */
+export async function getExtensions(): Promise<ExtensionInfo[]> {
+	try {
+		const r = await sendCommandAwait<{ extensions: ExtensionInfo[] }>({ type: "get_extensions" }, 10000);
+		return r.data?.extensions ?? [];
+	} catch {
+		return [];
+	}
+}
+
+/** Enable or disable a built-in extension. Returns whether a reload is required. */
+export async function setExtensionEnabled(id: string, enabled: boolean): Promise<boolean> {
+	const r = await sendCommandAwait<{ requiresReload: boolean }>(
+		{ type: "set_extension_enabled", extensionId: id, enabled },
+		5000,
+	);
+	return r.data?.requiresReload ?? true;
+}
+
+/** Install an extension's external dependency (e.g. the agent-browser CLI). Long-running. */
+export async function installExtension(
+	id: string,
+): Promise<{ ok: boolean; message: string; installed: boolean }> {
+	const r = await sendCommandAwait<{ ok: boolean; message: string; installed: boolean }>(
+		{ type: "install_extension", extensionId: id },
+		600000,
+	);
+	return { ok: r.data?.ok ?? false, message: r.data?.message ?? "", installed: r.data?.installed ?? false };
+}
+
+/** Uninstall an extension's external dependency. */
+export async function uninstallExtension(
+	id: string,
+): Promise<{ ok: boolean; message: string; installed: boolean }> {
+	const r = await sendCommandAwait<{ ok: boolean; message: string; installed: boolean }>(
+		{ type: "uninstall_extension", extensionId: id },
+		120000,
+	);
+	return { ok: r.data?.ok ?? false, message: r.data?.message ?? "", installed: r.data?.installed ?? false };
+}
+
 // --- Skills.sh directory ---
 
 export interface SkillsShSkill {

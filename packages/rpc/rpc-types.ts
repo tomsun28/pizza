@@ -18,6 +18,7 @@ export {
 	type RpcHistoryTreeResult,
 	type RpcForensicEvent,
 	type RpcSkillInfo,
+	type RpcExtensionInfo,
 	classifyLine,
 	PROTOCOL_VERSION,
 } from "@pizza/protocol";

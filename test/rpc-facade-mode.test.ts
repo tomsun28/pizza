@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -6,6 +6,8 @@ import { SqliteEventStore } from "../src/core/event-store/sqlite-store.js";
 import type { ContentBlock, EventBase } from "../src/core/event-store/types.js";
 import type { ToolRegistry } from "../src/core/intent/types.js";
 import type { ModelRegistry } from "../src/core/model-registry.js";
+import { AuthStorage } from "../src/core/auth-storage.js";
+import { ModelRegistry as RealModelRegistry } from "../src/core/model-registry.js";
 import { SessionManager } from "../src/core/projection/session-manager.js";
 import type { LLMClient, LLMResponse } from "../src/core/runtime/llm-types.js";
 import { EventSourcedRuntime } from "../src/core/runtime/runtime.js";
@@ -33,6 +35,37 @@ vi.mock("../packages/rpc/jsonl.js", () => ({
 		return () => {};
 	}),
 	serializeJsonLine: (value: unknown) => `${JSON.stringify(value)}\n`,
+}));
+
+const execMock = vi.hoisted(() => ({
+	// Whether the agent-browser CLI is "on PATH". Install sets it true, uninstall false.
+	installed: false,
+	reset(installed = false) {
+		this.installed = installed;
+	},
+}));
+
+vi.mock("../src/core/exec.js", () => ({
+	execCommand: vi.fn(async (command: string, args: string[]) => {
+		const key = `${command}:${args[0]}`;
+		// version probe reflects install state
+		if (key === "agent-browser:--version") {
+			return execMock.installed
+				? { stdout: "0.0.0-mock", stderr: "", code: 0 }
+				: { stdout: "", stderr: "not found", code: 127 };
+		}
+		// installing the CLI succeeds and flips install state on
+		if (key === "npm:install" || key === "agent-browser:install") {
+			execMock.installed = true;
+			return { stdout: "", stderr: "", code: 0 };
+		}
+		// uninstalling flips install state off
+		if (key === "npm:uninstall") {
+			execMock.installed = false;
+			return { stdout: "", stderr: "", code: 0 };
+		}
+		return { stdout: "", stderr: `mock: ${key} not handled`, code: 127 };
+	}),
 }));
 
 const tempDirs: string[] = [];
@@ -277,6 +310,213 @@ describe("runRpcModeWithFacade", () => {
 			);
 		});
 		expect(facade.model).toMatchObject({ provider: "test", model_id: "next-model" });
+
+		facade.dispose();
+	});
+
+	it("reload_providers re-reads externally-written auth.json (desktop token refresh)", async () => {
+		// Reproduces the desktop bug: the Tauri bridge writes a provider key directly
+		// to auth.json while the sidecar holds a stale in-memory AuthStorage cache.
+		// Without reload_providers, getApiKeyAndHeaders would fall back to the old
+		// key (or an env var). After reload_providers it must use the fresh key.
+		const dir = makeTempDir();
+		const authJsonPath = join(dir, "auth.json");
+		const modelsJsonPath = join(dir, "models.json");
+		// Seed the file the sidecar would have loaded at startup (old key).
+		writeFileSync(authJsonPath, JSON.stringify({ openai: { type: "api_key", key: "old-openai-key" } }, null, 2));
+		writeFileSync(
+			modelsJsonPath,
+			JSON.stringify({
+				providers: {
+					openai: {
+						baseUrl: "https://api.openai.com/v1",
+						api: "openai-responses",
+						apiKey: "openai", // auth-only override on a built-in provider
+					},
+				},
+			}),
+		);
+
+		const authStorage = AuthStorage.create(authJsonPath);
+		const modelRegistry = RealModelRegistry.create(authStorage, modelsJsonPath);
+		const facade = createFacade(undefined, modelRegistry);
+		void runRpcModeWithFacade(facade);
+		await vi.waitFor(() => expect(rpcIo.lineHandler).toBeDefined());
+
+		const model = modelRegistry.getAll().find((m) => m.provider === "openai");
+		expect(model).toBeDefined();
+
+		// Before reload: resolves the old key from the in-memory cache.
+		const before = await modelRegistry.getApiKeyAndHeaders(model!);
+		expect(before.ok).toBe(true);
+		expect(before.ok && before.apiKey).toBe("old-openai-key");
+
+		// The desktop bridge edits auth.json out-of-band (new key), then broadcasts
+		// reload_providers to every sidecar.
+		writeFileSync(authJsonPath, JSON.stringify({ openai: { type: "api_key", key: "new-openai-key" } }, null, 2));
+		rpcIo.lineHandler!(JSON.stringify({ id: "reload-1", type: "reload_providers" }));
+		await vi.waitFor(() => {
+			expect(parseOutputLines()).toContainEqual(
+				expect.objectContaining({
+					id: "reload-1",
+					type: "response",
+					command: "reload_providers",
+					success: true,
+					data: { providers: ["openai"] },
+				}),
+			);
+		});
+
+		// After reload: the fresh key is used for model auth resolution.
+		const after = await modelRegistry.getApiKeyAndHeaders(model!);
+		expect(after.ok).toBe(true);
+		expect(after.ok && after.apiKey).toBe("new-openai-key");
+
+		facade.dispose();
+	});
+
+	it("get_extensions returns extensions (empty when no resource loader)", async () => {
+		const facade = createFacade();
+		void runRpcModeWithFacade(facade);
+		await vi.waitFor(() => expect(rpcIo.lineHandler).toBeDefined());
+
+		rpcIo.lineHandler!(JSON.stringify({ id: "ext-1", type: "get_extensions" }));
+		await vi.waitFor(() => {
+			const records = parseOutputLines();
+			expect(records).toContainEqual(
+				expect.objectContaining({
+					id: "ext-1",
+					type: "response",
+					command: "get_extensions",
+					success: true,
+				}),
+			);
+			const exts = records.find((r) => r.command === "get_extensions")?.data as
+				| { extensions: Array<{ id: string; kind: string; enabled: boolean; canToggle: boolean }> }
+				| undefined;
+			// Built-ins are listed even without a resource loader; agent-browser is enabled by default.
+			const ab = exts?.extensions.find((e) => e.id === "agent-browser");
+			expect(ab).toEqual(
+				expect.objectContaining({ id: "agent-browser", kind: "builtin", enabled: true, canToggle: true }),
+			);
+		});
+
+		facade.dispose();
+	});
+
+	it("set_extension_enabled toggles a built-in extension and reports reload", async () => {
+		const facade = createFacade();
+		void runRpcModeWithFacade(facade);
+		await vi.waitFor(() => expect(rpcIo.lineHandler).toBeDefined());
+
+		rpcIo.lineHandler!(
+			JSON.stringify({ id: "toggle-1", type: "set_extension_enabled", extensionId: "agent-browser", enabled: false }),
+		);
+		await vi.waitFor(() => {
+			expect(parseOutputLines()).toContainEqual(
+				expect.objectContaining({
+					id: "toggle-1",
+					type: "response",
+					command: "set_extension_enabled",
+					success: true,
+					data: { id: "agent-browser", enabled: false, requiresReload: true },
+				}),
+			);
+		});
+		expect(facade.settingsManager.getDisabledBuiltinExtensions().has("agent-browser")).toBe(true);
+
+		facade.dispose();
+	});
+
+	it("set_extension_enabled rejects non-built-in ids", async () => {
+		const facade = createFacade();
+		void runRpcModeWithFacade(facade);
+		await vi.waitFor(() => expect(rpcIo.lineHandler).toBeDefined());
+
+		rpcIo.lineHandler!(
+			JSON.stringify({ id: "toggle-2", type: "set_extension_enabled", extensionId: "not-a-builtin", enabled: true }),
+		);
+		await vi.waitFor(() => {
+			expect(parseOutputLines()).toContainEqual(
+				expect.objectContaining({
+					id: "toggle-2",
+					type: "response",
+					command: "set_extension_enabled",
+					success: false,
+				}),
+			);
+		});
+
+		facade.dispose();
+	});
+
+	it("install_extension installs agent-browser and reports installed=true", async () => {
+		execMock.reset(false);
+		const facade = createFacade();
+		void runRpcModeWithFacade(facade);
+		await vi.waitFor(() => expect(rpcIo.lineHandler).toBeDefined());
+
+		rpcIo.lineHandler!(
+			JSON.stringify({ id: "inst-1", type: "install_extension", extensionId: "agent-browser" }),
+		);
+		await vi.waitFor(() => {
+			expect(parseOutputLines()).toContainEqual(
+				expect.objectContaining({
+					id: "inst-1",
+					type: "response",
+					command: "install_extension",
+					success: true,
+					data: expect.objectContaining({ extensionId: "agent-browser", ok: true, installed: true }),
+				}),
+			);
+		});
+
+		facade.dispose();
+	});
+
+	it("uninstall_extension reports installed=false", async () => {
+		execMock.reset(false);
+		const facade = createFacade();
+		void runRpcModeWithFacade(facade);
+		await vi.waitFor(() => expect(rpcIo.lineHandler).toBeDefined());
+
+		rpcIo.lineHandler!(
+			JSON.stringify({ id: "uninst-1", type: "uninstall_extension", extensionId: "agent-browser" }),
+		);
+		await vi.waitFor(() => {
+			expect(parseOutputLines()).toContainEqual(
+				expect.objectContaining({
+					id: "uninst-1",
+					type: "response",
+					command: "uninstall_extension",
+					success: true,
+					data: expect.objectContaining({ extensionId: "agent-browser", installed: false }),
+				}),
+			);
+		});
+
+		facade.dispose();
+	});
+
+	it("install_extension rejects a non-installable id", async () => {
+		const facade = createFacade();
+		void runRpcModeWithFacade(facade);
+		await vi.waitFor(() => expect(rpcIo.lineHandler).toBeDefined());
+
+		rpcIo.lineHandler!(
+			JSON.stringify({ id: "inst-2", type: "install_extension", extensionId: "not-installable" }),
+		);
+		await vi.waitFor(() => {
+			expect(parseOutputLines()).toContainEqual(
+				expect.objectContaining({
+					id: "inst-2",
+					type: "response",
+					command: "install_extension",
+					success: true,
+					data: expect.objectContaining({ ok: false }),
+				}),
+			);
+		});
 
 		facade.dispose();
 	});

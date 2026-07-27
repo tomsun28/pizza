@@ -1,6 +1,6 @@
 {
 	"name": "@pizza/protocol",
-	"version": "0.1.7",
+	"version": "0.1.11",
 	"private": true,
 	"type": "module",
 	"main": "./index.ts",

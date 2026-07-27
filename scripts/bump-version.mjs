@@ -56,6 +56,18 @@ const files = {
 		const old = match?.[2];
 		return { result: content.replace(regex, `$1"${version}"`), old };
 	},
+	"packages/protocol/package.json": (content, version) => {
+		const json = JSON.parse(content);
+		const old = json.version;
+		json.version = version;
+		return { result: JSON.stringify(json, null, "\t") + "\n", old };
+	},
+	"apps/web/package.json": (content, version) => {
+		const json = JSON.parse(content);
+		const old = json.version;
+		json.version = version;
+		return { result: JSON.stringify(json, null, "\t") + "\n", old };
+	},
 };
 
 function getCurrentVersion() {
@@ -103,11 +115,6 @@ const newVersion = ["patch", "minor", "major"].includes(arg)
 if (!/^\d+\.\d+\.\d+$/.test(newVersion)) {
 	console.error(`Invalid version format: ${newVersion}`);
 	process.exit(1);
-}
-
-if (newVersion === current) {
-	console.log(`Version is already ${current}, nothing to do.`);
-	process.exit(0);
 }
 
 console.log(`Bumping version: ${current} → ${newVersion}\n`);

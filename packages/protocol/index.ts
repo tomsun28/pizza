@@ -97,7 +97,16 @@ export type RpcCommand =
 	| { id?: string; type: "reject"; intentEventId: string }
 	| { id?: string; type: "set_safe_mode"; enabled: boolean }
 	| { id?: string; type: "new_session" }
-	| { id?: string; type: "get_skills" };
+	| { id?: string; type: "new_session" }
+	| { id?: string; type: "get_skills" }
+	| { id?: string; type: "get_extensions" }
+	| { id?: string; type: "set_extension_enabled"; extensionId: string; enabled: boolean }
+	| { id?: string; type: "install_extension"; extensionId: string }
+	| { id?: string; type: "uninstall_extension"; extensionId: string }
+	// Provider auth: reload in-memory credentials from auth.json (used after the
+	// desktop bridge edits auth.json out-of-band, so a model switch picks up the
+	// new key instead of the stale in-memory cache or an env-var fallback).
+	| { id?: string; type: "reload_providers" };
 
 // ============================================================================
 // RPC Slash Command (for get_commands response)
@@ -122,6 +131,31 @@ export interface RpcSkillInfo {
 	/** Human-readable name. */
 	name: string;
 	description?: string;
+}
+
+/** An extension loaded by the agent, as returned by get_extensions. */
+export interface RpcExtensionInfo {
+	/** Stable id. For built-in extensions this is the built-in id (e.g. "agent-browser"); otherwise derived from the path. */
+	id: string;
+	/** Human-readable name. */
+	name: string;
+	description?: string;
+	/** Where the extension comes from. */
+	kind: "builtin" | "user" | "project" | "cli" | "package";
+	/** Whether the extension is currently active (loaded). Disabled built-ins report false. */
+	enabled: boolean;
+	/** Whether toggling enable/disable is supported (currently only built-in extensions). */
+	canToggle: boolean;
+	/** Whether this extension ships an external dependency (e.g. a CLI binary) that can be installed/uninstalled. */
+	installable: boolean;
+	/** Whether the external dependency is currently installed. Only meaningful when installable is true. */
+	installed: boolean;
+	/** Internal path / source tag (e.g. "<builtin:agent-browser>" or a file path). */
+	path: string;
+	/** Number of tools this extension registers. */
+	toolCount: number;
+	/** Number of slash commands this extension registers. */
+	commandCount: number;
 }
 
 // ============================================================================
@@ -229,6 +263,11 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "set_safe_mode"; success: true; data: { safeMode: boolean } }
 	| { id?: string; type: "response"; command: "new_session"; success: true; data: { sessionId: string } }
 	| { id?: string; type: "response"; command: "get_skills"; success: true; data: { skills: RpcSkillInfo[] } }
+	| { id?: string; type: "response"; command: "get_extensions"; success: true; data: { extensions: RpcExtensionInfo[] } }
+	| { id?: string; type: "response"; command: "set_extension_enabled"; success: true; data: { id: string; enabled: boolean; requiresReload: boolean } }
+	| { id?: string; type: "response"; command: "install_extension"; success: true; data: { extensionId: string; ok: boolean; message: string; installed: boolean } }
+	| { id?: string; type: "response"; command: "uninstall_extension"; success: true; data: { extensionId: string; ok: boolean; message: string; installed: boolean } }
+	| { id?: string; type: "response"; command: "reload_providers"; success: true; data: { providers: string[] } }
 
 	// Error response (any command can fail)
 	| { id?: string; type: "response"; command: string; success: false; error: string };

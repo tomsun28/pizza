@@ -28,6 +28,12 @@ function writeCompatOutput(fd: 1 | 2, text: string): void {
 
 // Check if this is a built-in command call
 const args = process.argv.slice(2);
+const BUILTIN_EXTENSION_SUBCOMMANDS = new Set(["list", "enable", "disable"]);
+// `pizza builtin list|enable|disable` manages built-in EXTENSIONS (in main.ts),
+// not the built-in CLI commands (_read/_write/_edit/…). Route those to main() so
+// cli.ts's built-in-command handling does not intercept them.
+const isBuiltinExtensionCommand =
+	args[0] === "builtin" && BUILTIN_EXTENSION_SUBCOMMANDS.has(args[1]);
 
 if (args[0] === "__compat" && args.length >= 2) {
 	const command = args[1];
@@ -41,7 +47,7 @@ if (args[0] === "__compat" && args.length >= 2) {
 	writeCompatOutput(1, result.stdout);
 	writeCompatOutput(2, result.stderr);
 	process.exitCode = result.exitCode;
-} else if (args[0] === "builtin" && args.length >= 2) {
+} else if (args[0] === "builtin" && args.length >= 2 && !isBuiltinExtensionCommand) {
 	const command = args[1] as typeof BUILTIN_COMMANDS[number];
 
 	if (!BUILTIN_COMMANDS.includes(command)) {

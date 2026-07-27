@@ -85,6 +85,7 @@ export interface Settings {
 	skills?: string[]; // Array of local skill file paths or directories
 	prompts?: string[]; // Array of local prompt template paths or directories
 	themes?: string[]; // Array of local theme file paths or directories
+	disabledBuiltinExtensions?: string[]; // Built-in extension ids to disable (e.g. ["agent-browser"]). Empty/absent = all built-ins enabled.
 	enableSkillCommands?: boolean; // default: true - register skills as /skill:name commands
 	terminal?: TerminalSettings;
 	images?: ImageSettings;
@@ -834,6 +835,25 @@ export class SettingsManager {
 	setEnableSkillCommands(enabled: boolean): void {
 		this.globalSettings.enableSkillCommands = enabled;
 		this.markModified("enableSkillCommands");
+		this.save();
+	}
+
+	/** Return the set of built-in extension ids the user has disabled. */
+	getDisabledBuiltinExtensions(): Set<string> {
+		return new Set(this.settings.disabledBuiltinExtensions ?? []);
+	}
+
+	/** Disable (true) or enable (false) a built-in extension by id, persisted to user settings. */
+	setBuiltinExtensionDisabled(id: string, disabled: boolean): void {
+		const current = new Set(this.settings.disabledBuiltinExtensions ?? []);
+		if (disabled) {
+			current.add(id);
+		} else {
+			current.delete(id);
+		}
+		const arr = Array.from(current);
+		this.globalSettings.disabledBuiltinExtensions = arr.length > 0 ? arr : undefined;
+		this.markModified("disabledBuiltinExtensions");
 		this.save();
 	}
 

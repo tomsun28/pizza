@@ -20,6 +20,7 @@ import { SettingsManager } from "./settings-manager.js";
 import type { Skill } from "./skills.js";
 import { loadSkills } from "./skills.js";
 import { createSourceInfo, type SourceInfo } from "./source-info.js";
+import { getBuiltinExtensionFactories, type BuiltinExtension } from "../builtin-extensions/index.js";
 
 export interface ResourceExtensionPaths {
 	skillPaths?: Array<{ path: string; metadata: PathMetadata }>;
@@ -135,6 +136,8 @@ export interface DefaultResourceLoaderOptions {
 	additionalThemePaths?: string[];
 	extensionFactories?: ExtensionFactory[];
 	noExtensions?: boolean;
+	/** Skip loading built-in extensions (agent-browser, …). Default: false. */
+	noBuiltinExtensions?: boolean;
 	noSkills?: boolean;
 	noPromptTemplates?: boolean;
 	noThemes?: boolean;
@@ -179,6 +182,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 	private additionalThemePaths: string[];
 	private extensionFactories: ExtensionFactory[];
 	private noExtensions: boolean;
+	private noBuiltinExtensions: boolean;
 	private noSkills: boolean;
 	private noPromptTemplates: boolean;
 	private noThemes: boolean;
@@ -242,6 +246,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.additionalThemePaths = options.additionalThemePaths ?? [];
 		this.extensionFactories = options.extensionFactories ?? [];
 		this.noExtensions = options.noExtensions ?? false;
+		this.noBuiltinExtensions = options.noBuiltinExtensions ?? false;
 		this.noSkills = options.noSkills ?? false;
 		this.noPromptTemplates = options.noPromptTemplates ?? false;
 		this.noThemes = options.noThemes ?? false;
@@ -453,6 +458,20 @@ export class DefaultResourceLoader implements ResourceLoader {
 		const inlineExtensions = await this.loadExtensionFactories(extensionsResult.runtime);
 		extensionsResult.extensions.push(...inlineExtensions.extensions);
 		extensionsResult.errors.push(...inlineExtensions.errors);
+
+		// Load built-in extensions. They are always present unless disabled in
+		// settings (disabledBuiltinExtensions) or this loader opts out entirely
+		// (noBuiltinExtensions, e.g. for tests or an explicit --no-builtin-extensions).
+		if (!this.noBuiltinExtensions) {
+			const disabledBuiltins = this.settingsManager.getDisabledBuiltinExtensions();
+			const builtinExts = getBuiltinExtensionFactories(disabledBuiltins);
+			const builtinExtensions = await this.loadBuiltinExtensionFactories(
+				extensionsResult.runtime,
+				builtinExts,
+			);
+			extensionsResult.extensions.push(...builtinExtensions.extensions);
+			extensionsResult.errors.push(...builtinExtensions.errors);
+		}
 
 		// Detect extension conflicts (tools, commands, flags with same names from different extensions)
 		// Keep all extensions loaded. Conflicts are reported as diagnostics, and precedence is handled by load order.
@@ -835,6 +854,41 @@ export class DefaultResourceLoader implements ResourceLoader {
 				extensions.push(extension);
 			} catch (error) {
 				const message = error instanceof Error ? error.message : "failed to load extension";
+				errors.push({ path: extensionPath, error: message });
+			}
+		}
+
+		return { extensions, errors };
+	}
+
+	/**
+	 * Load built-in extension factories. Mirrors {@link loadExtensionFactories}
+	 * but tags each extension with a `<builtin:id>` path so source attribution
+	 * (in diagnostics / UI) reflects that it ships with Pizza.
+	 */
+	private async loadBuiltinExtensionFactories(
+		runtime: ExtensionRuntime,
+		builtins: BuiltinExtension[],
+	): Promise<{
+		extensions: Extension[];
+		errors: Array<{ path: string; error: string }>;
+	}> {
+		const extensions: Extension[] = [];
+		const errors: Array<{ path: string; error: string }> = [];
+
+		for (const builtin of builtins) {
+			const extensionPath = `<builtin:${builtin.id}>`;
+			try {
+				const extension = await loadExtensionFromFactory(
+					builtin.factory,
+					this.cwd,
+					this.eventBus,
+					runtime,
+					extensionPath,
+				);
+				extensions.push(extension);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : "failed to load built-in extension";
 				errors.push({ path: extensionPath, error: message });
 			}
 		}
