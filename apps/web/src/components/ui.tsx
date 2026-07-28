@@ -281,3 +281,102 @@ export function ThemeToggle() {
 		/>
 	);
 }
+
+/**
+ * A single menu entry. Either an action item (icon + label + click handler)
+ * or a visual divider. Use the union shape to make dividers type-safe.
+ */
+export type ContextMenuItem =
+	| {
+			divider?: never;
+			icon: typeof import("lucide-react").Folder;
+			label: string;
+			hint?: string;
+			disabled?: boolean;
+			danger?: boolean;
+			onClick: () => void;
+	  }
+	| { divider: true };
+
+export interface ContextMenuProps {
+	/** Position in viewport coordinates (typically `e.clientX/Y`). */
+	x: number;
+	y: number;
+	items: ContextMenuItem[];
+	onDismiss: () => void;
+}
+
+/**
+ * Floating context menu rendered as a `position: fixed` div with viewport
+ * coordinates. Dismisses on outside mousedown or Escape (handled by the
+ * caller via `onDismiss` — typically a window-level listener installed in
+ * a `useEffect` while the menu is open).
+ */
+export function ContextMenu({ x, y, items, onDismiss }: ContextMenuProps) {
+	// Clamp the menu inside the viewport so it doesn't overflow right/bottom
+	// edges. Width/height are estimates (item widths vary); we re-measure
+	// after mount via `useEffect` for an exact fit, but a simple upfront
+	// clamp already keeps it usable on narrow right docks.
+	const minWidth = 208; // matches the min-w-52 class below
+	const maxHeight = 360;
+	const clampedX = Math.max(8, Math.min(x, window.innerWidth - minWidth - 8));
+	const clampedY = Math.max(8, Math.min(y, window.innerHeight - maxHeight - 8));
+
+	return (
+		<div
+			className="fixed z-50 min-w-52 rounded-md border border-border bg-surface-2 py-1 shadow-lg"
+			style={{ left: clampedX, top: clampedY }}
+			onMouseDown={(e) => e.stopPropagation()}
+		>
+			{items.map((item, i) => (
+				item.divider ? (
+					<div key={i} className="my-1 h-px bg-border" />
+				) : (
+					<ContextMenuRow
+						key={i}
+						item={item}
+						onClick={() => {
+							if (item.disabled) return;
+							onDismiss();
+							item.onClick();
+						}}
+					/>
+				)
+			))}
+		</div>
+	);
+}
+
+function ContextMenuRow({
+	item,
+	onClick,
+}: {
+	item: Exclude<ContextMenuItem, { divider: true }>;
+	onClick: () => void;
+}) {
+	const Icon = item.icon;
+	return (
+		<button
+			type="button"
+			disabled={item.disabled}
+			onClick={onClick}
+			title={item.hint}
+			className={cn(
+				"flex w-full items-start gap-2 px-3 py-1.5 text-left font-mono text-xs transition-colors",
+				item.disabled
+					? "cursor-not-allowed text-muted/40"
+					: item.danger
+						? "text-danger hover:bg-danger/10 hover:text-danger"
+						: "text-fg hover:bg-accent/10 hover:text-accent",
+			)}
+		>
+			<Icon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+			<span className="flex min-w-0 flex-col gap-0.5">
+				<span className="truncate">{item.label}</span>
+				{item.hint && (
+					<span className="truncate text-[10px] font-normal text-muted">{item.hint}</span>
+				)}
+			</span>
+		</button>
+	);
+}
