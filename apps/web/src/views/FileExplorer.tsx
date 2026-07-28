@@ -10,16 +10,31 @@ import {
 	RefreshCw,
 	ArrowLeft,
 	Copy,
+	ClipboardCopy,
+	Eye,
 	ExternalLink,
+	ChevronsUpDown,
+	FolderSearch,
 } from "lucide-react";
-import { listDir, readFileContent, openInEditor, type DirEntry } from "@/lib/transport";
-import { EmptyState, ErrorBanner, Spinner } from "@/components/ui";
+import {
+	listDir,
+	readFileContent,
+	openInEditor,
+	revealPath,
+	type DirEntry,
+} from "@/lib/transport";
+import { EmptyState, ErrorBanner, Spinner, ContextMenu, type ContextMenuItem } from "@/components/ui";
 import { cn } from "@/lib/utils";
 
 function formatSize(bytes: number): string {
 	if (bytes < 1024) return `${bytes} B`;
 	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
 	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+interface ContextMenuState {
+	node: TreeNode;
+	x: number;
+	y: number;
 }
 
 function getLanguage(filePath: string): string {
@@ -55,9 +70,36 @@ export default function FileExplorer({ workspace }: { workspace?: string | null 
 	const [fileLoading, setFileLoading] = useState(false);
 	const [fileError, setFileError] = useState("");
 	const [breadcrumb, setBreadcrumb] = useState<string[]>([]);
+	const [menu, setMenu] = useState<ContextMenuState | null>(null);
 	const fileContentRef = useRef<HTMLDivElement>(null);
 
 	const cwd = workspace ?? "";
+
+	// Dismiss context menu on any outside click / escape.
+	useEffect(() => {
+		if (!menu) return;
+		const onDown = () => setMenu(null);
+		const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setMenu(null); };
+		window.addEventListener("mousedown", onDown);
+		window.addEventListener("keydown", onKey);
+		return () => {
+			window.removeEventListener("mousedown", onDown);
+			window.removeEventListener("keydown", onKey);
+		};
+	}, [menu]);
+
+	const absolutePath = useCallback(
+		(relPath: string) => (cwd ? `${cwd.replace(/\/$/, "")}/${relPath}` : relPath),
+		[cwd],
+	);
+
+	const copyText = useCallback((text: string) => {
+		try {
+			void navigator.clipboard?.writeText(text);
+		} catch {
+			/* clipboard unavailable; ignore silently */
+		}
+	}, []);
 
 	const loadRoot = useCallback(async () => {
 		if (!cwd) return;
@@ -199,6 +241,10 @@ export default function FileExplorer({ workspace }: { workspace?: string | null 
 								<li
 									key={node.path}
 									onClick={() => (node.is_dir ? void toggleExpand(node.path) : void openFile(node.path))}
+									onContextMenu={(e) => {
+										e.preventDefault();
+										setMenu({ node, x: e.clientX, y: e.clientY });
+									}}
 									className={cn(
 										"flex cursor-pointer items-center gap-1.5 px-3 py-1.5 transition-colors hover:bg-surface-2",
 										selectedFile === node.path && "bg-accent/10",
@@ -223,10 +269,42 @@ export default function FileExplorer({ workspace }: { workspace?: string | null 
 						selectedFile={selectedFile}
 						onToggle={toggleExpand}
 						onOpenFile={openFile}
+						onContextMenu={(node, x, y) => setMenu({ node, x, y })}
 						depth={0}
 					/>
 				)}
 			</div>
+
+			{/* Context menu (rendered via portal-style fixed positioning) */}
+			{menu && (
+				<ContextMenu
+					x={menu.x}
+					y={menu.y}
+					onDismiss={() => setMenu(null)}
+					items={buildFileMenuItems(menu.node, t, {
+						absolutePath,
+						copyText,
+						onView: (node) => void openFile(node.path),
+						onOpenInEditor: (node) =>
+							openInEditor(cwd, node.path).catch((e) =>
+								console.error("openInEditor failed:", e),
+							),
+						onReveal: (node) =>
+							revealPath(cwd, node.path).catch((e) =>
+								console.error("revealPath failed:", e),
+							),
+						onCopyContent: async (node) => {
+							try {
+								const content = await readFileContent(cwd, node.path);
+								copyText(content);
+							} catch (e) {
+								console.error("readFileContent failed:", e);
+							}
+						},
+						onToggleExpand: (node) => void toggleExpand(node.path),
+					})}
+				/>
+			)}
 
 			{/* File content viewer */}
 			{selectedFile && (
@@ -281,12 +359,14 @@ export default function FileExplorer({ workspace }: { workspace?: string | null 
 	);
 }
 
+
 function TreeList({
 	nodes,
 	expanded,
 	selectedFile,
 	onToggle,
 	onOpenFile,
+	onContextMenu,
 	depth,
 }: {
 	nodes: TreeNode[];
@@ -294,6 +374,7 @@ function TreeList({
 	selectedFile: string | null;
 	onToggle: (path: string) => void;
 	onOpenFile: (path: string) => void;
+	onContextMenu: (node: TreeNode, x: number, y: number) => void;
 	depth: number;
 }) {
 	return (
@@ -306,6 +387,7 @@ function TreeList({
 					selectedFile={selectedFile}
 					onToggle={onToggle}
 					onOpenFile={onOpenFile}
+					onContextMenu={onContextMenu}
 					depth={depth}
 				/>
 			))}
@@ -319,6 +401,7 @@ function TreeItem({
 	selectedFile,
 	onToggle,
 	onOpenFile,
+	onContextMenu,
 	depth,
 }: {
 	node: TreeNode;
@@ -326,6 +409,7 @@ function TreeItem({
 	selectedFile: string | null;
 	onToggle: (path: string) => void;
 	onOpenFile: (path: string) => void;
+	onContextMenu: (node: TreeNode, x: number, y: number) => void;
 	depth: number;
 }) {
 	const isOpen = expanded.has(node.path);
@@ -335,6 +419,10 @@ function TreeItem({
 		<li>
 			<div
 				onClick={() => (node.is_dir ? onToggle(node.path) : onOpenFile(node.path))}
+				onContextMenu={(e) => {
+					e.preventDefault();
+					onContextMenu(node, e.clientX, e.clientY);
+				}}
 				className={cn(
 					"flex cursor-pointer items-center gap-1.5 py-1 pr-3 transition-colors hover:bg-surface-2",
 					selectedFile === node.path && "bg-accent/10",
@@ -381,6 +469,7 @@ function TreeItem({
 							selectedFile={selectedFile}
 							onToggle={onToggle}
 							onOpenFile={onOpenFile}
+							onContextMenu={onContextMenu}
 							depth={depth + 1}
 						/>
 					) : (
@@ -392,6 +481,84 @@ function TreeItem({
 			)}
 		</li>
 	);
+}
+
+// --- Menu helpers ---
+
+interface FileMenuHandlers {
+	absolutePath: (rel: string) => string;
+	copyText: (text: string) => void;
+	onView: (node: TreeNode) => void;
+	onOpenInEditor: (node: TreeNode) => void;
+	onReveal: (node: TreeNode) => void;
+	onCopyContent: (node: TreeNode) => void;
+	onToggleExpand: (node: TreeNode) => void;
+}
+
+/**
+ * Build the context-menu items for a file or directory node. Items are split
+ * into two visual groups separated by the `---` divider marker (the shared
+ * ContextMenu component renders anything between dividers with a separator
+ * before it).
+ */
+function buildFileMenuItems(
+	node: TreeNode,
+	t: (k: string) => string,
+	h: FileMenuHandlers,
+): ContextMenuItem[] {
+	const abs = h.absolutePath(node.path);
+	const items: ContextMenuItem[] = [];
+
+	if (node.is_dir) {
+		items.push({
+			icon: ChevronsUpDown,
+			label: t("files.toggleExpand"),
+			onClick: () => h.onToggleExpand(node),
+		});
+	} else {
+		items.push({
+			icon: Eye,
+			label: t("files.view"),
+			onClick: () => h.onView(node),
+		});
+	}
+
+	items.push({
+		icon: ExternalLink,
+		label: t("files.openInEditor"),
+		onClick: () => h.onOpenInEditor(node),
+	});
+
+	items.push({ divider: true });
+
+	items.push({
+		icon: FolderSearch,
+		label: node.is_dir ? t("files.revealInFiles") : t("files.revealInFilesDir"),
+		onClick: () => h.onReveal(node),
+	});
+
+	items.push({ divider: true });
+
+	items.push({
+		icon: ClipboardCopy,
+		label: t("files.copyAbsolutePath"),
+		hint: abs,
+		onClick: () => h.copyText(abs),
+	});
+	items.push({
+		icon: Copy,
+		label: t("files.copyFileName"),
+		onClick: () => h.copyText(node.name),
+	});
+	if (!node.is_dir) {
+		items.push({
+			icon: Copy,
+			label: t("files.copyFileContent"),
+			onClick: () => h.onCopyContent(node),
+		});
+	}
+
+	return items;
 }
 
 // --- Tree helpers ---

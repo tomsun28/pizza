@@ -112,7 +112,14 @@
     "emptyDescription": "当前工作区的文件树将显示在这里。",
     "noMatch": "没有匹配的文件。",
     "closeFile": "关闭文件",
-    "openInEditor": "在编辑器中打开"
+    "openInEditor": "在编辑器中打开",
+    "toggleExpand": "展开 / 折叠",
+    "view": "查看",
+    "revealInFiles": "在文件管理器中显示",
+    "revealInFilesDir": "打开所在目录",
+    "copyAbsolutePath": "复制绝对路径",
+    "copyFileName": "复制文件名",
+    "copyFileContent": "复制文件内容"
   },
   "history": {
     "title": "历史",

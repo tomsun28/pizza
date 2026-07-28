@@ -430,6 +430,12 @@ export async function openInEditor(cwd: string, filePath: string): Promise<void>
 	await core.invoke("open_in_editor", { cwd, filePath });
 }
 
+export async function revealPath(cwd: string, subPath: string): Promise<void> {
+	if (!isTauri()) return;
+	const core = await import("@tauri-apps/api/core");
+	await core.invoke("reveal_path", { cwd, subPath });
+}
+
 // --- Provider management (Tauri only) ---
 
 export interface ProviderInfo {
