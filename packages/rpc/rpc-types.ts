@@ -28,6 +28,8 @@ import type {
 	RpcHistoryTreeResult,
 	RpcForensicEvent,
 	RpcSkillInfo,
+	ScheduledTaskSummary,
+	ScheduledTaskRun,
 } from "@pizza/protocol";
 
 import type { AgentMessage, ThinkingLevel } from "../../src/core/agent/types.js";
@@ -113,6 +115,15 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "set_safe_mode"; success: true; data: { safeMode: boolean } }
 	| { id?: string; type: "response"; command: "new_session"; success: true; data: { sessionId: string } }
 	| { id?: string; type: "response"; command: "get_skills"; success: true; data: { skills: RpcSkillInfo[] } }
+
+	// Scheduled tasks
+	| { id?: string; type: "response"; command: "schedule_list"; success: true; data: { tasks: ScheduledTaskSummary[] } }
+	| { id?: string; type: "response"; command: "schedule_create"; success: true; data: { task: ScheduledTaskSummary } }
+	| { id?: string; type: "response"; command: "schedule_update"; success: true; data: { task: ScheduledTaskSummary } }
+	| { id?: string; type: "response"; command: "schedule_delete"; success: true; data: { ok: true; taskId: string } }
+	| { id?: string; type: "response"; command: "schedule_run_now"; success: true; data: { fired: true; taskId: string; at: number } }
+	| { id?: string; type: "response"; command: "schedule_reload"; success: true; data: { reloaded: number } }
+	| { id?: string; type: "response"; command: "schedule_history"; success: true; data: { runs: ScheduledTaskRun[] } }
 
 	// Error response (any command can fail)
 	| { id?: string; type: "response"; command: string; success: false; error: string };

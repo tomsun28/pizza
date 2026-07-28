@@ -489,6 +489,88 @@ export async function restartSidecar(cwd: string): Promise<void> {
 	await core.invoke("restart_sidecar", { cwd });
 }
 
+
+// --- Scheduled tasks ----------------------------------------------------------
+
+export async function listScheduledTasks(
+	scope: "main" | "workspace",
+	workspaceId?: string,
+): Promise<import("./types.js").ScheduledTaskSummary[]> {
+	const r = await sendCommandAwait<{ tasks: import("./types.js").ScheduledTaskSummary[] }>(
+		{ type: "schedule_list", scope, workspaceId },
+		10000,
+	);
+	return r.data?.tasks ?? [];
+}
+
+export async function createScheduledTask(
+	task: import("./types.js").ScheduledTaskCreateInput,
+): Promise<import("./types.js").ScheduledTaskSummary> {
+	const r = await sendCommandAwait<{ task: import("./types.js").ScheduledTaskSummary }>(
+		{ type: "schedule_create", task },
+		10000,
+	);
+	if (!r.data?.task) throw new Error("schedule_create returned no task");
+	return r.data.task;
+}
+
+export async function updateScheduledTask(
+	taskId: string,
+	patch: import("./types.js").ScheduledTaskPatch,
+	scope: "main" | "workspace",
+	workspaceId?: string,
+): Promise<import("./types.js").ScheduledTaskSummary> {
+	const r = await sendCommandAwait<{ task: import("./types.js").ScheduledTaskSummary }>(
+		{ type: "schedule_update", taskId, patch, scope, workspaceId },
+		10000,
+	);
+	if (!r.data?.task) throw new Error("schedule_update returned no task");
+	return r.data.task;
+}
+
+export async function deleteScheduledTask(
+	taskId: string,
+	scope: "main" | "workspace",
+	workspaceId?: string,
+): Promise<void> {
+	await sendCommandAwait(
+		{ type: "schedule_delete", taskId, scope, workspaceId },
+		5000,
+	);
+}
+
+export async function runScheduledTaskNow(
+	taskId: string,
+	scope: "main" | "workspace",
+	workspaceId?: string,
+): Promise<void> {
+	await sendCommandAwait(
+		{ type: "schedule_run_now", taskId, scope, workspaceId },
+		5000,
+	);
+}
+
+export async function reloadScheduledTasks(): Promise<number> {
+	const r = await sendCommandAwait<{ reloaded: number }>(
+		{ type: "schedule_reload" },
+		5000,
+	);
+	return r.data?.reloaded ?? 0;
+}
+
+export async function getScheduledTaskHistory(
+	taskId: string,
+	scope: "main" | "workspace",
+	workspaceId?: string,
+	limit = 50,
+): Promise<import("./types.js").ScheduledTaskRun[]> {
+	const r = await sendCommandAwait<{ runs: import("./types.js").ScheduledTaskRun[] }>(
+		{ type: "schedule_history", taskId, scope, workspaceId, limit },
+		5000,
+	);
+	return r.data?.runs ?? [];
+}
+
 // --- SSE implementation for browser mode ---
 
 let sseSource: EventSource | null = null;

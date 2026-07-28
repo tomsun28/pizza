@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { useOutletContext } from "react-router-dom";
+import { useNavigate, useOutletContext } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { sendCommandAwait, subscribeEvents, subscribeSidecarExit } from "@/lib/transport";
 import type { RpcSessionState, TypedEvent } from "@/lib/types";
@@ -181,6 +181,7 @@ export default function ChatView({
 	workspace?: string | null;
 	onRefreshState?: () => void;
 }) {
+	const navigate = useNavigate();
 	const { sidebarCollapsed } = useOutletContext<LayoutOutletContext>() ?? { sidebarCollapsed: false };
 	const { t } = useTranslation();
 	const [items, setItems] = useState<TimelineItem[]>([]);
@@ -467,7 +468,27 @@ export default function ChatView({
 				}
 				break;
 			}
-			case "AGENT_TURN_COMPLETED": {
+				case "SCHEDULED_TASK_FIRED": {
+					// Render a non-intrusive system notice in the timeline so the user
+					// can see "your scheduled task just fired" inline. The follow-up
+					// USER_MESSAGE will arrive as a regular event right after.
+					const payload = event.payload as Record<string, unknown> | undefined;
+					const taskId = (payload?.taskId as string) ?? "";
+					const firedAt = typeof payload?.at === "number" ? (payload.at as number) : Date.now();
+					updateItems((prev) => [
+						...prev,
+						{
+							id: event.event_id,
+							role: "system",
+							title: tRef.current("schedule.triggeredNotice", { name: taskId }),
+							text: "",
+							status: "",
+							timestamp: firedAt,
+						},
+					]);
+					break;
+				}
+				case "AGENT_TURN_COMPLETED": {
 				const id = activeRef.current;
 				const payload = event.payload as Record<string, unknown> | undefined;
 				const reason = String(payload?.reason ?? "");
@@ -791,6 +812,8 @@ export default function ChatView({
 				onSend={handleSend}
 				onAbort={handleAbort}
 				onRefreshState={onRefreshState}
+				onOpenSchedules={() => navigate("/schedules")}
+				onCreateSchedule={() => navigate("/schedules?create=1")}
 				/>
 		</div>
 	);

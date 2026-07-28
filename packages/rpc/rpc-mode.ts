@@ -36,6 +36,8 @@ import { buildHistoryTreeNodes } from "../../src/core/projection/history-tree.js
 import { killTrackedDetachedChildren } from "../../src/utils/shell.js";
 import { startPtyServer, type PtyServer } from "../pty/pty-server.js";
 import { type Theme, theme } from "../../packages/tui/theme/theme.js";
+import { SchedulerEngine, type Dispatcher as SchedulerDispatcher } from "../../src/core/scheduler/index.js";
+import { SCHEDULED_TASK_FIRED, SCHEDULED_TASK_COMPLETED } from "@pizza/protocol";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
 import type {
 	RpcCommand,
@@ -414,6 +416,66 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 		ptyServer = await startPtyServer({ cwd: process.cwd() });
 	} catch { /* PTY server unavailable; terminal pane degrades */ }
 
+	// ----------------------------------------------------------------------
+	// Scheduler — fires the user's saved tasks by dispatching them to the
+	// facade. One engine per RPC process; the engine reads/writes
+	// ~/.pizza/main/scheduler/tasks.json (or per-workspace when the sidecar
+	// was launched in a non-main workspace). Engine is disposed during
+	// shutdown so no orphan timers fire after the sidecar exits.
+	// ----------------------------------------------------------------------
+	// The SessionDescriptor only carries a hashed workspace_id, so we can't
+	// tell from the descriptor alone whether this sidecar is the persistent
+	// main agent. The CLI surfaces "--main" via process.argv, so we detect
+	// that here. The desktop Tauri bridge also passes --main when spawning
+	// the sidecar for the main agent.
+	const descriptor = facade.getProjection().getDescriptor();
+	const isMain = process.argv.includes("--main");
+	const schedulerScope: "main" | "workspace" = isMain ? "main" : "workspace";
+	const schedulerWorkspaceId = isMain ? undefined : descriptor.workspace_id;
+	let lastDispatchedUserMessageId: string | undefined;
+	const schedulerDispatcher: SchedulerDispatcher = {
+		dispatch: async (task) => {
+			try {
+				lastDispatchedUserMessageId = undefined;
+				// Subscribe BEFORE prompt so we capture the exact event id.
+				const unsub = facade.subscribe((event) => {
+					if (event.type === "USER_MESSAGE") {
+						lastDispatchedUserMessageId = event.event_id;
+					}
+				});
+				await facade.prompt(task.prompt);
+				unsub();
+				return { eventId: lastDispatchedUserMessageId };
+			} catch (e) {
+				return { error: e instanceof Error ? e.message : String(e) };
+			}
+		},
+	};
+	const scheduler = new SchedulerEngine({
+		scope: schedulerScope,
+		workspaceId: schedulerWorkspaceId,
+		dispatcher: schedulerDispatcher,
+		listener: (event) => {
+			// Forward scheduler lifecycle events over the rpc_event stream so
+			// the UI can render the "⏰ 已触发" notice + history in real time.
+			if (event.type === "task.fired") {
+				const p = event.payload as { taskId: string; at: number };
+				writeRawStdout(serializeJsonLine({
+					type: SCHEDULED_TASK_FIRED,
+					event_id: `evt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+					payload: { taskId: p.taskId, at: p.at, scope: schedulerScope, workspaceId: schedulerWorkspaceId },
+				}));
+			} else if (event.type === "task.completed") {
+				writeRawStdout(serializeJsonLine({
+					type: SCHEDULED_TASK_COMPLETED,
+					event_id: `evt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+					payload: event.payload,
+				}));
+			}
+		},
+	});
+	scheduler.load();
+
 	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
 		writeRawStdout(serializeJsonLine(obj));
 	};
@@ -476,6 +538,7 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 			cleanup();
 		}
 		unsubscribe?.();
+		scheduler.dispose();
 		await Promise.resolve(facade.dispose());
 		await ptyServer?.close().catch(() => {});
 		detachInput();
@@ -862,6 +925,85 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 				providers: registry?.authStorage?.list() ?? [],
 			});
 		}
+
+			case "schedule_list": {
+				return success(id, "schedule_list", { tasks: scheduler.list() });
+			}
+
+			case "schedule_create": {
+				const t = command.task;
+				// The scope on the wire wins, but we validate it matches the engine.
+				if (t.scope !== schedulerScope) {
+					return error(id, "schedule_create", `Scope mismatch: sidecar is ${schedulerScope}, task is ${t.scope}`);
+				}
+				if (t.scope === "workspace" && t.workspaceId !== schedulerWorkspaceId) {
+					return error(id, "schedule_create", `Workspace mismatch: sidecar is ${schedulerWorkspaceId}, task is ${t.workspaceId}`);
+				}
+				const r = scheduler.create({
+					name: t.name,
+					prompt: t.prompt,
+					schedule: t.schedule,
+					enabled: t.enabled,
+					createdBy: t.createdBy ?? "user",
+					sourceText: t.sourceText,
+					startAt: t.startAt,
+					endAt: t.endAt,
+				});
+				if (!r.ok) return error(id, "schedule_create", r.error);
+				return success(id, "schedule_create", { task: r.task });
+			}
+
+			case "schedule_update": {
+				if (command.scope !== schedulerScope) {
+					return error(id, "schedule_update", `Scope mismatch`);
+				}
+				if (command.scope === "workspace" && command.workspaceId !== schedulerWorkspaceId) {
+					return error(id, "schedule_update", `Workspace mismatch`);
+				}
+				const r = scheduler.update(command.taskId, command.patch);
+				if (!r.ok) return error(id, "schedule_update", r.error);
+				return success(id, "schedule_update", { task: r.task });
+			}
+
+			case "schedule_delete": {
+				if (command.scope !== schedulerScope) {
+					return error(id, "schedule_delete", `Scope mismatch`);
+				}
+				if (command.scope === "workspace" && command.workspaceId !== schedulerWorkspaceId) {
+					return error(id, "schedule_delete", `Workspace mismatch`);
+				}
+				const r = scheduler.delete(command.taskId);
+				if (!r.ok) return error(id, "schedule_delete", r.error);
+				return success(id, "schedule_delete", { ok: true, taskId: command.taskId });
+			}
+
+			case "schedule_run_now": {
+				if (command.scope !== schedulerScope) {
+					return error(id, "schedule_run_now", `Scope mismatch`);
+				}
+				if (command.scope === "workspace" && command.workspaceId !== schedulerWorkspaceId) {
+					return error(id, "schedule_run_now", `Workspace mismatch`);
+				}
+				const r = await scheduler.runNow(command.taskId);
+				if (!r.ok) return error(id, "schedule_run_now", r.error);
+				return success(id, "schedule_run_now", { fired: true, taskId: r.taskId, at: r.at });
+			}
+
+			case "schedule_reload": {
+				const reloaded = scheduler.reload();
+				return success(id, "schedule_reload", { reloaded });
+			}
+
+			case "schedule_history": {
+				if (command.scope !== schedulerScope) {
+					return error(id, "schedule_history", `Scope mismatch`);
+				}
+				if (command.scope === "workspace" && command.workspaceId !== schedulerWorkspaceId) {
+					return error(id, "schedule_history", `Workspace mismatch`);
+				}
+				const runs = scheduler.history(command.taskId, command.limit ?? 50);
+				return success(id, "schedule_history", { runs });
+			}
 
 			default: {
 				const unknownCommand = command as { type: string };
