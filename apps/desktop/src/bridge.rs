@@ -1,5 +1,5 @@
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -226,6 +226,11 @@ pub struct BridgeState {
 	sidecars: Mutex<HashMap<String, SidecarEntry>>,
 	/// Active cwd per window label.
 	active: Mutex<HashMap<String, String>>,
+	/// cwds that are currently being intentionally restarted by
+	/// `restart_sidecar`. The auto-restart path in the GUI checks this
+	/// before respawning a sidecar whose exit it observed, so the
+	/// user-initiated restart doesn't get clobbered by a race.
+	restarting: Mutex<HashSet<String>>,
 }
 
 impl Default for BridgeState {
@@ -233,6 +238,7 @@ impl Default for BridgeState {
 		Self {
 			sidecars: Mutex::new(HashMap::new()),
 			active: Mutex::new(HashMap::new()),
+			restarting: Mutex::new(HashSet::new()),
 		}
 	}
 }
@@ -658,15 +664,24 @@ pub async fn init_sidecar(
 			}
 		}
 		// Notify all windows — sidecar_exit includes cwd for frontend filtering.
+		// Suppress the event while restart_sidecar is in the middle of
+		// reaping the old child, so the GUI's auto-restart loop doesn't
+		// race it. (Even if the event leaks through, the GUI restart loop
+		// checks BridgeState.restarting client-side via a separate
+		// query, but suppressing server-side is cleaner.)
 		let app_ref = &app;
-		let active = app_ref.state::<BridgeState>();
+		let state_ref = app_ref.state::<BridgeState>();
+		let suppress = state_ref.restarting.lock().unwrap().contains(&reader_cwd);
+		let active = state_ref;
 		let active_map = active.active.lock().unwrap();
-		for (label, _ac_cwd) in active_map.iter() {
-			if let Some(win) = app_ref.get_webview_window(label) {
-				let _ = win.emit(
-					"sidecar_exit",
-					serde_json::json!({ "code": null, "cwd": reader_cwd }),
-				);
+		if !suppress {
+			for (label, _ac_cwd) in active_map.iter() {
+				if let Some(win) = app_ref.get_webview_window(label) {
+					let _ = win.emit(
+						"sidecar_exit",
+						serde_json::json!({ "code": null, "cwd": reader_cwd }),
+					);
+				}
 			}
 		}
 	});
@@ -678,8 +693,13 @@ pub async fn init_sidecar(
 /// Kill the sidecar for `cwd` (if any) and respawn it. Used after writing
 /// a new provider API key so the freshly-written `auth.json` is picked up
 /// — the facade caches its model registry on startup and won't rescan it
-/// mid-session. The GUI's existing `sidecar_exit` auto-restart loop will
-/// fire after this returns, so the new sidecar comes up automatically.
+/// mid-session.
+///
+/// Marks `cwd` in the `restarting` set first so the GUI's auto-restart
+/// path (which fires when it observes a `sidecar_exit` event) doesn't
+/// race us by spawning its own replacement sidecar while we're still
+/// reaping the old one. Without this guard `init_sidecar` ends up taking
+/// the "already running" fast-path and silently does nothing.
 #[tauri::command]
 pub async fn restart_sidecar(
 	window: tauri::Window,
@@ -687,6 +707,12 @@ pub async fn restart_sidecar(
 	cwd: String,
 ) -> Result<String, String> {
 	log_file(&format!("restart_sidecar: start, cwd={}", cwd));
+	// Claim the restart slot BEFORE killing so any sidecar_exit event
+	// observed by the reader thread (which fires `kill_sidecar_for_cwd`
+	// + emits the event) sees the flag and the GUI's auto-restart loop
+	// no-ops.
+	state.restarting.lock().unwrap().insert(cwd.clone());
+
 	// Drop stdin + reap child so the OS releases the .lock in ~/.pizza/main
 	// before we spawn the new sidecar.
 	{
@@ -706,7 +732,13 @@ pub async fn restart_sidecar(
 	// (and, for the persistent Chat workspace, the .lock file gets
 	// cleared by the dying process's exit handler).
 	tokio::time::sleep(Duration::from_millis(150)).await;
-	init_sidecar(window, state, Some(cwd)).await
+	// `init_sidecar` takes `tauri::State` by value (per the tauri
+	// command-macro convention). Clone our handle so we can release
+	// the `restarting` flag after it returns.
+	let state_for_cleanup = state.clone();
+	let result = init_sidecar(window, state, Some(cwd.clone())).await;
+	state_for_cleanup.restarting.lock().unwrap().remove(&cwd);
+	result
 }
 
 #[tauri::command]
