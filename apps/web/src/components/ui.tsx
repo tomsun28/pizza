@@ -314,9 +314,8 @@ export interface ContextMenuProps {
  */
 export function ContextMenu({ x, y, items, onDismiss }: ContextMenuProps) {
 	// Clamp the menu inside the viewport so it doesn't overflow right/bottom
-	// edges. Width/height are estimates (item widths vary); we re-measure
-	// after mount via `useEffect` for an exact fit, but a simple upfront
-	// clamp already keeps it usable on narrow right docks.
+	// edges. Width/height are estimates (item widths vary); a simple upfront
+	// clamp keeps it usable on narrow right docks.
 	const minWidth = 208; // matches the min-w-52 class below
 	const maxHeight = 360;
 	const clampedX = Math.max(8, Math.min(x, window.innerWidth - minWidth - 8));

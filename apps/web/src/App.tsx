@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { PxlKitSurfaceProvider } from "@pxlkit/ui-kit";
 import Layout from "@/components/Layout";
@@ -16,6 +16,7 @@ function isTauri(): boolean {
 
 function AppInner() {
 	const navigate = useNavigate();
+	const location = useLocation();
 	const { t } = useTranslation();
 	const [state, setState] = useState<RpcSessionState | null>(null);
 	const [sidecarReady, setSidecarReady] = useState(false);
@@ -252,6 +253,10 @@ function AppInner() {
 		if (state.model !== undefined) return;
 		// Only redirect once per workspace, and only if the user isn't
 		// already on the setup settings page (avoid stealing the back button).
+		// Read the path off `window` rather than `useLocation` on purpose: we
+		// deliberately do NOT want this effect re-running on every navigation,
+		// otherwise an unconfigured user gets yanked back here the moment they
+		// try to visit /plugins or anywhere else.
 		if (!window.location.pathname.startsWith("/settings")) {
 			navigate("/settings?setup=true", { replace: true });
 		}
@@ -265,10 +270,10 @@ function AppInner() {
 	// would let the redirect-above re-trigger and bounce them back.
 	useEffect(() => {
 		if (!state || state.model === undefined) return;
-		if (!window.location.pathname.startsWith("/settings")) return;
-		if (!window.location.search.includes("setup=true")) return;
+		if (!location.pathname.startsWith("/settings")) return;
+		if (new URLSearchParams(location.search).get("setup") !== "true") return;
 		navigate("/", { replace: true });
-	}, [state, navigate]);
+	}, [state, navigate, location.pathname, location.search]);
 
 	if (initError) {
 		return (

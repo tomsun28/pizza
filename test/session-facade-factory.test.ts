@@ -28,10 +28,14 @@ describe("createSessionFacade", () => {
 		return dir;
 	}
 
-	/** Minimal ResourceLoader stub to avoid filesystem scanning. */
-	function makeResourceLoader(extensions: Extension[] = []): ResourceLoader {
+	/**
+	 * Minimal ResourceLoader stub to avoid filesystem scanning. Pass `runtime`
+	 * to hold onto the ExtensionRuntime the runner binds its actions onto, so a
+	 * test can drive the extension-facing setModel/setThinkingLevel APIs.
+	 */
+	function makeResourceLoader(extensions: Extension[] = [], runtime = createExtensionRuntime()): ResourceLoader {
 		return {
-			getExtensions: () => ({ extensions, errors: [], runtime: createExtensionRuntime() }),
+			getExtensions: () => ({ extensions, errors: [], runtime }),
 			getSkills: () => ({ skills: [], diagnostics: [] }),
 			getPrompts: () => ({ prompts: [], diagnostics: [] }),
 			getThemes: () => ({ themes: [], diagnostics: [] }),
@@ -194,6 +198,61 @@ describe("createSessionFacade", () => {
 		await observed;
 		expect(observedText).toBe("hello extension");
 		expect(sawEventBackedContext).toBe(true);
+
+		facade.dispose();
+	});
+
+	// The extension-facing setModel/setThinkingLevel actions bypass SessionFacade
+	// (they talk to the runtime directly), so they need their own persistence and
+	// their own coverage — the SessionFacade tests don't exercise this path.
+	it("persists model and thinking level chosen through the extension API", async () => {
+		const authStorage = AuthStorage.inMemory();
+		// Makes modelRegistry.hasConfiguredAuth() pass so setModel isn't rejected.
+		authStorage.setRuntimeApiKey("test", "sk-test");
+		const extensionRuntime = createExtensionRuntime();
+		const settingsManager = SettingsManager.inMemory({ defaultProvider: "test", defaultModel: "test-model" });
+
+		const { facade } = await createSessionFacade({
+			cwd: makeTempDir(),
+			storagePath: ":memory:",
+			authStorage,
+			modelRegistry: ModelRegistry.inMemory(authStorage),
+			settingsManager,
+			resourceLoader: makeResourceLoader([], extensionRuntime),
+			model: fakeModel,
+		});
+
+		const nextModel = { ...fakeModel, provider: "test", id: "other-model" } as unknown as Model<any>;
+		expect(await extensionRuntime.setModel(nextModel)).toBe(true);
+		extensionRuntime.setThinkingLevel("high");
+		await settingsManager.flush();
+
+		expect(settingsManager.getDefaultProvider()).toBe("test");
+		expect(settingsManager.getDefaultModel()).toBe("other-model");
+		expect(settingsManager.getDefaultThinkingLevel()).toBe("high");
+
+		facade.dispose();
+	});
+
+	it("skips thinking levels that settings.json cannot represent", async () => {
+		const extensionRuntime = createExtensionRuntime();
+		const settingsManager = SettingsManager.inMemory({ defaultProvider: "test", defaultModel: "test-model" });
+
+		const { facade } = await createSessionFacade({
+			...makeOptions(),
+			settingsManager,
+			resourceLoader: makeResourceLoader([], extensionRuntime),
+		});
+
+		extensionRuntime.setThinkingLevel("high");
+		await settingsManager.flush();
+		expect(settingsManager.getDefaultThinkingLevel()).toBe("high");
+
+		// "max" is a valid runtime/pi-ai level but not a persistable one; the
+		// previously stored value must survive rather than be clobbered.
+		extensionRuntime.setThinkingLevel("max" as never);
+		await settingsManager.flush();
+		expect(settingsManager.getDefaultThinkingLevel()).toBe("high");
 
 		facade.dispose();
 	});

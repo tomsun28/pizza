@@ -262,7 +262,7 @@ describe("Reactor streaming chunks", () => {
 		}
 	});
 
-	it("chunks are stored in the EventStore and queryable after completion", async () => {
+	it("chunks are not persisted in the EventStore (streaming-only, END holds full content)", async () => {
 		const chunks = [
 			{ kind: "text_delta" as const, contentIndex: 0, delta: "one" },
 			{ kind: "text_delta" as const, contentIndex: 0, delta: " two" },
@@ -276,13 +276,15 @@ describe("Reactor streaming chunks", () => {
 		try {
 			await runtime.prompt("test");
 
-			// Query the store directly
+			// Chunks are streaming-only: they are delivered to live subscribers
+			// but not persisted. The store should have no AGENT_MESSAGE_CHUNK rows.
 			const chunkEvents = runtime.store.query({ types: ["AGENT_MESSAGE_CHUNK"] });
-			expect(chunkEvents).toHaveLength(2);
+			expect(chunkEvents).toHaveLength(0);
 
-			const payloads = chunkEvents.map((e) => (e.payload as any).chunk);
-			expect(payloads[0]).toMatchObject({ kind: "text_delta", delta: "one" });
-			expect(payloads[1]).toMatchObject({ kind: "text_delta", delta: " two" });
+			// The full content is recoverable from AGENT_MESSAGE_END.
+			const endEvents = runtime.store.query({ types: ["AGENT_MESSAGE_END"] });
+			expect(endEvents).toHaveLength(1);
+			expect((endEvents[0].payload as any).content).toEqual([{ type: "text", text: "one two" }]);
 		} finally {
 			runtime.dispose();
 		}

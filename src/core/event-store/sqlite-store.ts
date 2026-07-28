@@ -37,6 +37,8 @@ export class SqliteEventStore implements EventStore, SessionStore {
 	private nextSubId = 0;
 	private sessionStore: SqliteSessionStore;
 
+	private _nextSequence = 0;
+
 	readonly workspace_id: string;
 
 	constructor(
@@ -51,6 +53,7 @@ export class SqliteEventStore implements EventStore, SessionStore {
 		this.db = new (loadDatabaseSync())(dbPath);
 		this._applyPragmas(dbPath);
 		this._initSchema();
+		this._nextSequence = this._dbMaxSequence() + 1;
 		this.sessionStore = new SqliteSessionStore(this.db, workspaceId);
 	}
 
@@ -61,6 +64,17 @@ export class SqliteEventStore implements EventStore, SessionStore {
 		}
 
 		const event = this._normalizeEvent(partial);
+
+		// AGENT_MESSAGE_CHUNK events are streaming-only: notify subscribers for
+		// live UI rendering but do NOT persist. The complete message content is
+		// captured by the subsequent AGENT_MESSAGE_END event (whose payload.content
+		// holds the full LLM response), so persisting chunks is pure redundancy.
+		// Historical replay / context rebuild / compaction all read END, never CHUNK.
+		if (partial.type === "AGENT_MESSAGE_CHUNK") {
+			this._notify(event);
+			return event;
+		}
+
 		this._insert(event);
 		const inserted = this.get(event.event_id) ?? event;
 		this._notify(inserted);
@@ -224,10 +238,7 @@ export class SqliteEventStore implements EventStore, SessionStore {
 	}
 
 	get head_sequence(): number {
-		const row = this.db
-			.prepare("select coalesce(max(sequence), 0) as sequence from events where workspace_id = ?")
-			.get(this.workspace_id) as { sequence: number };
-		return row.sequence;
+		return this._nextSequence - 1;
 	}
 
 	close(): void {
@@ -290,9 +301,13 @@ export class SqliteEventStore implements EventStore, SessionStore {
 	}
 
 	private _normalizeEvent(partial: EventAppendInput): EventBase {
+		const sequence = partial.sequence ?? this._nextSequence;
+		if (sequence >= this._nextSequence) {
+			this._nextSequence = sequence + 1;
+		}
 		return {
 			...partial,
-			sequence: partial.sequence ?? this.head_sequence + 1,
+			sequence,
 			event_id: partial.event_id ?? uuidv7(),
 			workspace_id: this.workspace_id,
 			runtime_id: partial.runtime_id ?? this.runtimeId,
@@ -322,6 +337,13 @@ export class SqliteEventStore implements EventStore, SessionStore {
 			event.schema_version,
 			event.idempotency_key ?? null,
 		);
+	}
+
+	private _dbMaxSequence(): number {
+		const row = this.db
+			.prepare("select coalesce(max(sequence), 0) as sequence from events where workspace_id = ?")
+			.get(this.workspace_id) as { sequence: number };
+		return row.sequence;
 	}
 
 	private _getByIdempotencyKey(idempotencyKey: string): EventBase | undefined {
