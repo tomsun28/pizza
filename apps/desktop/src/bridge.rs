@@ -675,6 +675,40 @@ pub async fn init_sidecar(
 	Ok(state_data.to_string())
 }
 
+/// Kill the sidecar for `cwd` (if any) and respawn it. Used after writing
+/// a new provider API key so the freshly-written `auth.json` is picked up
+/// — the facade caches its model registry on startup and won't rescan it
+/// mid-session. The GUI's existing `sidecar_exit` auto-restart loop will
+/// fire after this returns, so the new sidecar comes up automatically.
+#[tauri::command]
+pub async fn restart_sidecar(
+	window: tauri::Window,
+	state: tauri::State<'_, BridgeState>,
+	cwd: String,
+) -> Result<String, String> {
+	log_file(&format!("restart_sidecar: start, cwd={}", cwd));
+	// Drop stdin + reap child so the OS releases the .lock in ~/.pizza/main
+	// before we spawn the new sidecar.
+	{
+		let mut sidecars = state.sidecars.lock().unwrap();
+		if let Some(mut entry) = sidecars.remove(&cwd) {
+			let pid = entry.child.id();
+			drop(entry.stdin);
+			let _ = entry.child.kill();
+			let _ = entry.child.wait();
+			log_file(&format!(
+				"restart_sidecar: reaped old sidecar pid={:?}",
+				pid
+			));
+		}
+	}
+	// Small grace period so the OS fully releases the process slot
+	// (and, for the persistent Chat workspace, the .lock file gets
+	// cleared by the dying process's exit handler).
+	tokio::time::sleep(Duration::from_millis(150)).await;
+	init_sidecar(window, state, Some(cwd)).await
+}
+
 #[tauri::command]
 pub fn stop_sidecar(
 	window: tauri::Window,

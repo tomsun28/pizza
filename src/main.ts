@@ -574,11 +574,15 @@ export async function main(args: string[], options?: MainOptions) {
 		time("createSessionFacade");
 
 		if (!created.model) {
-			console.error(chalk.red("No models available."));
-			console.error(chalk.yellow("\nSet an API key environment variable:"));
-			console.error("  ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, etc.");
-			console.error(chalk.yellow(`\nOr create ${getModelsPath()}`));
-			process.exit(1);
+			// GUI first-run mode: don't exit — keep the sidecar alive so the
+			// desktop app can render an in-app setup wizard. The facade will
+			// use a placeholder model (provider="none", id="none"); get_state
+			// will return model=undefined; the GUI detects this via
+			// RpcSessionState.model === undefined and redirects to Settings.
+			// CLI modes (interactive/print) below still hard-exit because
+			// they have no UI to recover in.
+			console.error(chalk.yellow("No models available — entering setup mode. Configure an API key in Settings to continue."));
+			console.error(chalk.dim(`\nSet an API key environment variable (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, etc.) or create ${getModelsPath()}.`));
 		}
 
 		const startupBenchmark = isTruthyEnvFlag(process.env.PIZZA_STARTUP_BENCHMARK);

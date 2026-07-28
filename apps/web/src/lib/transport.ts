@@ -476,6 +476,19 @@ export async function removeProviderApiKey(provider: string): Promise<void> {
 	await core.invoke("remove_provider_api_key", { provider });
 }
 
+/**
+ * Restart the sidecar for the given workspace so it picks up newly-configured
+ * API keys. The facade caches its model registry on startup, so after writing
+ * a new key to ~/.pizza/agent/auth.json the sidecar must be respawned for the
+ * model list to refresh. No-op outside Tauri (web/preview builds don't have
+ * a sidecar to restart).
+ */
+export async function restartSidecar(cwd: string): Promise<void> {
+	if (!isTauri()) return;
+	const core = await import("@tauri-apps/api/core");
+	await core.invoke("restart_sidecar", { cwd });
+}
+
 // --- SSE implementation for browser mode ---
 
 let sseSource: EventSource | null = null;

@@ -6,7 +6,7 @@ import Layout from "@/components/Layout";
 import ChatView from "@/views/ChatView";
 import SettingsView from "@/views/SettingsView";
 import PluginsView from "@/views/PluginsView";
-import { subscribeSidecarExit, subscribeEvents, initSidecar, sendCommandAwait, listWorkspaces } from "@/lib/transport";
+import { subscribeSidecarExit, subscribeEvents, initSidecar, sendCommandAwait, listWorkspaces, restartSidecar } from "@/lib/transport";
 import { BrandIcon } from "@/components/BrandIcon";
 import type { RpcSessionState, WorkspaceMeta } from "@/lib/types";
 
@@ -242,6 +242,21 @@ function AppInner() {
 		return () => clearTimeout(timer);
 	}, [sidecarReady, workspace]);
 
+	// First-run / unconfigured-key detection: when the sidecar comes up but
+	// `state.model` is undefined, no provider has an API key configured yet.
+	// Redirect the user into a setup-mode Settings page instead of dumping
+	// them into an empty chat they can't actually use.
+	useEffect(() => {
+		if (!sidecarReady) return;
+		if (!state) return;
+		if (state.model !== undefined) return;
+		// Only redirect once per workspace, and only if the user isn't
+		// already on the setup settings page (avoid stealing the back button).
+		if (!window.location.pathname.startsWith("/settings")) {
+			navigate("/settings?setup=true", { replace: true });
+		}
+	}, [sidecarReady, state, navigate]);
+
 	if (initError) {
 		return (
 			<PxlKitSurfaceProvider surface="pixel">
@@ -309,7 +324,20 @@ function AppInner() {
 								/>
 							}
 						/>
-						<Route path="/settings" element={<SettingsView state={state} />} />
+						<Route path="/settings" element={
+							<SettingsView
+								state={state}
+								onRestartSidecar={async () => {
+									if (!workspace) return;
+									await restartSidecar(workspace);
+									// Rust kills the old sidecar and emits a sidecar_exit
+									// event; the existing auto-restart loop in App.tsx
+									// will respawn it. The new sidecar will pick up the
+									// freshly-written auth.json and report a real model
+									// in its first get_state response.
+								}}
+							/>
+						} />
 						<Route path="/plugins" element={<PluginsView />} />
 						<Route path="*" element={<Navigate to="/" replace />} />
 					</Route>
