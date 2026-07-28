@@ -98,10 +98,12 @@ export class SessionFacade {
 	setModel(model: ModelConfig | Model<any>, thinkingLevel?: string): void {
 		const modelId = "model_id" in model ? model.model_id : model.id;
 		this.runtime.setModel(model.provider, modelId);
+		this.persistModel(model.provider, modelId);
 
 		const nextThinkingLevel = thinkingLevel ?? ("thinking_level" in model ? model.thinking_level : undefined);
 		if (nextThinkingLevel !== undefined) {
 			this.runtime.setThinkingLevel(nextThinkingLevel);
+			this.persistThinkingLevel(nextThinkingLevel);
 		}
 	}
 
@@ -112,6 +114,43 @@ export class SessionFacade {
 	set thinkingLevel(level: string | undefined) {
 		if (level !== undefined) {
 			this.runtime.setThinkingLevel(level);
+			this.persistThinkingLevel(level);
+		}
+	}
+
+	/**
+	 * Persist the user's model choice as the global default so the next sidecar
+	 * launch picks it up. Best-effort: a settings-write error is warned but never
+	 * thrown, because the in-memory state has already been updated by
+	 * `runtime.setModel` above and we don't want to break the current turn over
+	 * a disk-side failure.
+	 */
+	private persistModel(provider: string, modelId: string): void {
+		try {
+			this.settingsManager.setDefaultModelAndProvider(provider, modelId);
+		} catch (e) {
+			console.warn(
+				`[pizza] failed to persist model preference (${provider}/${modelId}): ${
+					e instanceof Error ? e.message : String(e)
+				}`,
+			);
+		}
+	}
+
+	/**
+	 * Persist the user's thinking-level choice as the global default. Same
+	 * best-effort semantics as {@link persistModel}. The `as never` cast avoids
+	 * pulling the ThinkingLevel union into this file just for the setter type.
+	 */
+	private persistThinkingLevel(level: string): void {
+		try {
+			this.settingsManager.setDefaultThinkingLevel(level as never);
+		} catch (e) {
+			console.warn(
+				`[pizza] failed to persist thinking-level preference (${level}): ${
+					e instanceof Error ? e.message : String(e)
+				}`,
+			);
 		}
 	}
 
