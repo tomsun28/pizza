@@ -303,12 +303,18 @@ function AddProviderInline({
 	);
 }
 
-function ProviderTab() {
+function ProviderTab({
+	isSetupMode = false,
+	onConfigured,
+}: {
+	isSetupMode?: boolean;
+	onConfigured?: () => void | Promise<void>;
+}) {
 	const { t } = useTranslation();
 	const [providers, setProviders] = useState<ProviderInfo[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState("");
-	const [showAddInline, setShowAddInline] = useState(false);
+	const [showAddInline, setShowAddInline] = useState(isSetupMode);
 
 	const refresh = useCallback(async () => {
 		try {
@@ -350,15 +356,21 @@ function ProviderTab() {
 			<Card>
 				<div className="mb-3 flex items-center justify-between">
 					<div className="text-sm font-medium text-fg">{t("settings.provider.title")}</div>
-					<Button size="sm" tone="accent" iconLeft={<Plus className="h-3.5 w-3.5" />} onClick={() => setShowAddInline(true)}>
-						{t("settings.provider.addProvider")}
-					</Button>
+					{!isSetupMode && (
+						<Button size="sm" tone="accent" iconLeft={<Plus className="h-3.5 w-3.5" />} onClick={() => setShowAddInline(true)}>
+							{t("settings.provider.addProvider")}
+						</Button>
+					)}
 				</div>
 
 				{showAddInline && (
 					<AddProviderInline
 						available={available}
-						onSaved={() => { setShowAddInline(false); refresh(); }}
+						onSaved={() => {
+							setShowAddInline(false);
+							refresh();
+							if (onConfigured) void onConfigured();
+						}}
 						onCancel={() => setShowAddInline(false)}
 					/>
 				)}
@@ -371,23 +383,73 @@ function ProviderTab() {
 				)}
 
 				{configured.map((p) => (
-					<ProviderRow key={p.id} provider={p} onRefresh={refresh} />
+					<ProviderRow
+						key={p.id}
+						provider={p}
+						onRefresh={() => {
+							refresh();
+							if (onConfigured) void onConfigured();
+						}}
+					/>
 				))}
 			</Card>
 		</div>
 	);
 }
 
+function SetupBanner({ state }: { state: RpcSessionState | null }) {
+	const { t } = useTranslation();
+	const isSetup = !state || state.model === undefined;
+	if (!isSetup) return null;
+	return (
+		<Card className="border-accent/40 bg-accent/5">
+			<div className="flex items-start gap-3">
+				<Key className="mt-0.5 h-5 w-5 text-accent" />
+				<div className="flex-1 space-y-1">
+					<div className="text-sm font-medium text-fg">{t("settings.setup.bannerTitle")}</div>
+					<div className="font-mono text-xs text-muted">{t("settings.setup.bannerBody")}</div>
+				</div>
+			</div>
+		</Card>
+	);
+}
+
 export default function SettingsView({
 	state,
+	onRestartSidecar,
 }: {
 	state: RpcSessionState | null;
+	onRestartSidecar?: () => Promise<void> | void;
 }) {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const location = useLocation();
 	const { sidebarCollapsed } = useOutletContext<LayoutOutletContext>() ?? { sidebarCollapsed: false };
-	const [tab, setTab] = useState<"general" | "provider">("general");
+	// First-run / unconfigured-key setup mode is signaled by ?setup=true in the
+	// URL. App.tsx redirects there when the sidecar reports state.model === undefined.
+	const isSetupMode = new URLSearchParams(location.search).get("setup") === "true";
+	const [tab, setTab] = useState<"general" | "provider">(isSetupMode ? "provider" : "general");
+	const [restarting, setRestarting] = useState(false);
+	const [restartError, setRestartError] = useState("");
+	const handleConfigured = useCallback(async () => {
+		// Prefer the sidecar-restart path (re-scans modelRegistry with the new key).
+		// Fall back to "just go back to chat" if no restart callback was provided
+		// (e.g. web/preview builds without Tauri).
+		if (onRestartSidecar) {
+			setRestarting(true);
+			setRestartError("");
+			try {
+				await onRestartSidecar();
+				navigate("/", { replace: true });
+			} catch (e) {
+				setRestartError(e instanceof Error ? e.message : String(e));
+			} finally {
+				setRestarting(false);
+			}
+		} else {
+			navigate("/", { replace: true });
+		}
+	}, [onRestartSidecar, navigate]);
 
 	// Track browser history position so we can enable/disable back/forward.
 	// react-router v6 stores { idx, usr, key } on window.history.state.
@@ -442,7 +504,21 @@ export default function SettingsView({
 			{/* Scrollable content — scrollbar hidden, but still scrollable */}
 			<div className="scrollbar-hide flex-1 overflow-y-auto">
 				<div className="mx-auto max-w-5xl px-10 pb-10 pt-10">
-					<PageHeader title={t("settings.title")} />
+					<PageHeader title={isSetupMode ? t("settings.setup.title") : t("settings.title")} />
+
+					{isSetupMode && (
+						<div className="mb-6">
+							<SetupBanner state={state} />
+							{restarting && (
+								<p className="mt-2 font-mono text-xs text-muted">
+									{t("settings.setup.restarting")}
+								</p>
+							)}
+							{restartError && (
+								<p className="mt-2 font-mono text-xs text-danger">{restartError}</p>
+							)}
+						</div>
+					)}
 
 					<div className="mb-6 flex gap-1 border-b border-border">
 						<button
@@ -469,7 +545,11 @@ export default function SettingsView({
 						</button>
 					</div>
 
-					{tab === "general" ? <GeneralTab state={state} /> : <ProviderTab />}
+					{tab === "general" ? (
+						<GeneralTab state={state} />
+					) : (
+						<ProviderTab isSetupMode={isSetupMode} onConfigured={handleConfigured} />
+					)}
 				</div>
 			</div>
 		</div>

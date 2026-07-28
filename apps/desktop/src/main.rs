@@ -22,6 +22,7 @@ fn main() {
 			bridge::list_providers,
 			bridge::set_provider_api_key,
 			bridge::remove_provider_api_key,
+			bridge::restart_sidecar,
 			bridge::set_window_background,
 			bridge::transcribe_audio,
 			bridge::list_dir,
