@@ -14,6 +14,7 @@ import type { ModelRegistry } from "./model-registry.js";
 import type { ResourceLoader } from "./resource-loader.js";
 import type { SessionProjection } from "./projection/session-projection.js";
 import type { SettingsManager } from "./settings-manager.js";
+import { isPersistableThinkingLevel } from "./settings-manager.js";
 import type { ModelConfig, ToolDefinition } from "./runtime/llm-types.js";
 import type { RuntimeCompactOptions } from "./runtime/runtime.js";
 import { EventSourcedRuntime } from "./runtime/runtime.js";
@@ -139,12 +140,14 @@ export class SessionFacade {
 
 	/**
 	 * Persist the user's thinking-level choice as the global default. Same
-	 * best-effort semantics as {@link persistModel}. The `as never` cast avoids
-	 * pulling the ThinkingLevel union into this file just for the setter type.
+	 * best-effort semantics as {@link persistModel}. The runtime accepts
+	 * arbitrary level strings, so values settings.json can't represent are
+	 * skipped rather than written back as garbage.
 	 */
 	private persistThinkingLevel(level: string): void {
+		if (!isPersistableThinkingLevel(level)) return;
 		try {
-			this.settingsManager.setDefaultThinkingLevel(level as never);
+			this.settingsManager.setDefaultThinkingLevel(level);
 		} catch (e) {
 			console.warn(
 				`[pizza] failed to persist thinking-level preference (${level}): ${

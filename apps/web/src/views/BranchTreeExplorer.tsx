@@ -242,6 +242,7 @@ function buildHistoryMenuItems(
 			label: t("history.rename"),
 			onClick: handlers.onRename,
 		},
+		{ divider: true },
 		{
 			icon: Copy,
 			label: t("history.copyId"),
