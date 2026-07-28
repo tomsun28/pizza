@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Calendar, Plus, RefreshCw } from "lucide-react";
+import { ArrowLeft, Calendar, Pencil, Play, Plus, RefreshCw } from "lucide-react";
 import type { ScheduledTaskSummary } from "@/lib/types";
 import {
 	deleteScheduledTask,
@@ -32,6 +33,7 @@ export default function SchedulesView({
 	workspaceId?: string;
 }) {
 	const { t } = useTranslation();
+	const navigate = useNavigate();
 	const [tasks, setTasks] = useState<ScheduledTaskSummary[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
@@ -150,18 +152,32 @@ export default function SchedulesView({
 				description={t("schedule.subtitle", { scope: scope === "main" ? t("schedule.scopeMain") : t("schedule.scopeWorkspace") })}
 				actions={
 					<div className="flex items-center gap-2">
-						<Button tone="neutral" variant="ghost" size="sm" onClick={handleReload}>
-							<RefreshCw className="h-3.5 w-3.5" />
-							{t("schedule.reload")}
-						</Button>
+					<Button
+						tone="neutral"
+						variant="ghost"
+						size="sm"
+						iconLeft={<ArrowLeft className="h-3.5 w-3.5" />}
+						onClick={() => navigate("/")}
+					>
+						{t("common.backToChat")}
+					</Button>
+					<Button
+						tone="neutral"
+						variant="ghost"
+						size="sm"
+						iconLeft={<RefreshCw className="h-3.5 w-3.5" />}
+						onClick={handleReload}
+					>
+						{t("schedule.reload")}
+					</Button>
 						<Button
 							tone="accent"
+							iconLeft={<Plus className="h-3.5 w-3.5" />}
 							onClick={() => {
 								setEditingTask(null);
 								setDialogOpen(true);
 							}}
 						>
-							<Plus className="h-3.5 w-3.5" />
 							{t("schedule.new")}
 						</Button>
 					</div>
@@ -180,8 +196,11 @@ export default function SchedulesView({
 					title={t("schedule.emptyTitle")}
 					description={t("schedule.emptyDescription")}
 					action={
-						<Button tone="accent" onClick={() => setDialogOpen(true)}>
-							<Plus className="h-3.5 w-3.5" />
+						<Button
+							tone="accent"
+							iconLeft={<Plus className="h-3.5 w-3.5" />}
+							onClick={() => setDialogOpen(true)}
+						>
 							{t("schedule.new")}
 						</Button>
 					}
@@ -306,10 +325,10 @@ function TaskDetail({
 					</div>
 				</div>
 				<div className="flex items-center gap-1">
-					<Button tone="accent" size="sm" onClick={onRunNow}>
+					<Button tone="accent" size="sm" iconLeft={<Play className="h-3.5 w-3.5" />} onClick={onRunNow}>
 						{t("schedule.runNow")}
 					</Button>
-					<Button tone="neutral" variant="ghost" size="sm" onClick={onEdit}>
+					<Button tone="neutral" variant="ghost" size="sm" iconLeft={<Pencil className="h-3.5 w-3.5" />} onClick={onEdit}>
 						{t("schedule.edit")}
 					</Button>
 					<DeleteTaskButton onClick={onDelete} />
