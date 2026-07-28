@@ -257,6 +257,19 @@ function AppInner() {
 		}
 	}, [sidecarReady, state, navigate]);
 
+	// After the user configures a key, the sidecar is restarted and a new
+	// state arrives with `state.model !== undefined`. Pull them back out of
+	// the setup-mode Settings page automatically. Doing it here (rather
+	// than inside SettingsView.handleConfigured) avoids a race where the
+	// local `setState` hasn't propagated before navigate fires, which
+	// would let the redirect-above re-trigger and bounce them back.
+	useEffect(() => {
+		if (!state || state.model === undefined) return;
+		if (!window.location.pathname.startsWith("/settings")) return;
+		if (!window.location.search.includes("setup=true")) return;
+		navigate("/", { replace: true });
+	}, [state, navigate]);
+
 	if (initError) {
 		return (
 			<PxlKitSurfaceProvider surface="pixel">
@@ -329,12 +342,25 @@ function AppInner() {
 								state={state}
 								onRestartSidecar={async () => {
 									if (!workspace) return;
-									await restartSidecar(workspace);
-									// Rust kills the old sidecar and emits a sidecar_exit
-									// event; the existing auto-restart loop in App.tsx
-									// will respawn it. The new sidecar will pick up the
-									// freshly-written auth.json and report a real model
-									// in its first get_state response.
+									// restart_sidecar (Rust) returns the entire JSON-RPC
+									// response envelope `{id, type, command, success,
+									// data: {...}}` from the new sidecar's first
+									// get_state. Unwrap the `.data` payload before
+									// feeding it into `state`, otherwise state.model
+									// stays undefined and the navigate-back useEffect
+									// below never fires.
+									const newStateJson = await restartSidecar(workspace);
+									try {
+										const parsed = JSON.parse(newStateJson);
+										const data = parsed?.data ?? parsed;
+										if (data && typeof data === "object" && Object.keys(data).length > 0) {
+											setState(data as unknown as RpcSessionState);
+										}
+									} catch {
+										// Best-effort: if parsing fails, the sidecar's
+										// own MODEL_CHANGED event will still propagate a
+										// fresh state via subscribeEvents → get_state.
+									}
 								}}
 							/>
 						} />

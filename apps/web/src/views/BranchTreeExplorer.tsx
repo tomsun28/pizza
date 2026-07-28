@@ -11,6 +11,7 @@ import {
 import type { RpcHistoryTreeNode } from "@/lib/types";
 import { EmptyState, ErrorBanner, Spinner } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import { ContextMenu, type ContextMenuItem } from "@/components/ui";
 
 interface ContextMenuState {
 	node: RpcHistoryTreeNode;
@@ -195,79 +196,58 @@ export default function BranchTreeExplorer({ workspace }: { workspace?: string |
 
 			{/* Context menu */}
 			{menu && (
-				<div
-					className="fixed z-50 min-w-52 rounded-md border border-border bg-surface-2 py-1 shadow-lg"
-					style={{ left: menu.x, top: menu.y }}
-					onMouseDown={(e) => e.stopPropagation()}
-				>
-					{/* Jump is the natural primary action for open branches (just
-						switches the active pointer, no new node). For closed branches
-						it reopens by forking (creates a new node). Disabled on the
-						active session (no-op). */}
-					<MenuItem
-						icon={CornerUpRight}
-						label={t("history.jumpHere")}
-						hint={
-							menu.node.is_active
-								? undefined
-								: menu.node.closed
-									? t("history.jumpClosedHint")
-									: t("history.jumpOpenHint")
-						}
-						disabled={menu.node.is_active}
-						onClick={() => void onJump(menu.node)}
-					/>
-					{/* Fork always creates a new child branch; if the source is open
-						and at HEAD, it gets frozen at the fork point. */}
-					<MenuItem
-						icon={GitFork}
-						label={t("history.forkFromHere")}
-						hint={t("history.forkHint")}
-						onClick={() => void onFork(menu.node)}
-					/>
-					<MenuItem icon={Pencil} label={t("history.rename")} onClick={() => void onRename(menu.node)} />
-					<div className="my-1 h-px bg-border" />
-					<MenuItem
-						icon={Copy}
-						label={t("history.copyId")}
-						onClick={() => { void navigator.clipboard?.writeText(menu.node.session_id); setMenu(null); }}
-					/>
-				</div>
+				<ContextMenu
+					x={menu.x}
+					y={menu.y}
+					onDismiss={() => setMenu(null)}
+					items={buildHistoryMenuItems(menu.node, t, {
+						onJump: () => void onJump(menu.node),
+						onFork: () => void onFork(menu.node),
+						onRename: () => void onRename(menu.node),
+						onCopyId: () => {
+							void navigator.clipboard?.writeText(menu.node.session_id);
+						},
+					})}
+				/>
 			)}
 		</div>
 	);
 }
 
-function MenuItem({
-	icon: Icon,
-	label,
-	hint,
-	onClick,
-	disabled,
-}: {
-	icon: typeof GitFork;
-	label: string;
-	hint?: string;
-	onClick: () => void;
-	disabled?: boolean;
-}) {
-	return (
-		<button
-			disabled={disabled}
-			onClick={onClick}
-			title={hint}
-			className={cn(
-				"flex w-full items-start gap-2 px-3 py-1.5 text-left font-mono text-xs transition-colors",
-				disabled ? "cursor-not-allowed text-muted/40" : "text-fg hover:bg-accent/10 hover:text-accent",
-			)}
-		>
-			<Icon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-			<span className="flex flex-col gap-0.5">
-				<span>{label}</span>
-				{hint && <span className="text-[10px] font-normal text-muted">{hint}</span>}
-			</span>
-		</button>
-	);
+function buildHistoryMenuItems(
+	node: RpcHistoryTreeNode,
+	t: (k: string) => string,
+	handlers: { onJump: () => void; onFork: () => void; onRename: () => void; onCopyId: () => void },
+): ContextMenuItem[] {
+	return [
+		{
+			icon: CornerUpRight,
+			label: t("history.jumpHere"),
+			hint: node.is_active
+				? undefined
+				: node.closed
+					? t("history.jumpClosedHint")
+					: t("history.jumpOpenHint"),
+			disabled: node.is_active,
+			onClick: handlers.onJump,
+		},
+		{
+			icon: GitFork,
+			label: t("history.forkFromHere"),
+			hint: t("history.forkHint"),
+			onClick: handlers.onFork,
+		},
+		{
+			icon: Pencil,
+			label: t("history.rename"),
+			onClick: handlers.onRename,
+		},
+		{
+			icon: Copy,
+			label: t("history.copyId"),
+			onClick: handlers.onCopyId,
+		},
+	];
 }
 
 function TreeRow({
