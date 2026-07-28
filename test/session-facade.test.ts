@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import type { ContentBlock, EventBase, EventType } from "../src/core/event-store/types.js";
 import type { ToolRegistry } from "../src/core/intent/types.js";
@@ -162,5 +162,57 @@ describe("SessionFacade", () => {
 		expect(facade.signal).toBeUndefined();
 
 		facade.dispose();
+	});
+
+	describe("preference persistence (settings.json)", () => {
+		it("persists the new model when setModel is called", async () => {
+			const { facade, settingsManager } = makeFacade();
+			facade.setModel({ provider: "anthropic", id: "claude-sonnet-4-5" } as never);
+			await settingsManager.flush();
+			expect(settingsManager.getDefaultProvider()).toBe("anthropic");
+			expect(settingsManager.getDefaultModel()).toBe("claude-sonnet-4-5");
+			facade.dispose();
+		});
+
+		it("persists the new model via the `set model` shorthand", async () => {
+			const { facade, settingsManager } = makeFacade();
+			facade.model = { provider: "anthropic", model_id: "claude-sonnet-4-5", thinking_level: "off" };
+			await settingsManager.flush();
+			expect(settingsManager.getDefaultProvider()).toBe("anthropic");
+			expect(settingsManager.getDefaultModel()).toBe("claude-sonnet-4-5");
+			facade.dispose();
+		});
+
+		it("persists thinking-level changes from the setter", async () => {
+			const { facade, settingsManager } = makeFacade();
+			facade.thinkingLevel = "xhigh";
+			await settingsManager.flush();
+			expect(settingsManager.getDefaultThinkingLevel()).toBe("xhigh");
+			facade.dispose();
+		});
+
+		it("persists the optional thinkingLevel passed to setModel", async () => {
+			const { facade, settingsManager } = makeFacade();
+			facade.setModel({ provider: "openai", id: "gpt-5", thinking_level: "high" } as never);
+			await settingsManager.flush();
+			expect(settingsManager.getDefaultModel()).toBe("gpt-5");
+			expect(settingsManager.getDefaultThinkingLevel()).toBe("high");
+			facade.dispose();
+		});
+
+		it("survives a settings-write failure without breaking the runtime", async () => {
+			const { facade, runtime, settingsManager } = makeFacade();
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+			vi.spyOn(settingsManager, "setDefaultModelAndProvider").mockImplementation(() => {
+				throw new Error("disk full");
+			});
+			expect(() => facade.setModel({ provider: "anthropic", id: "claude-sonnet-4-5" } as never)).not.toThrow();
+			// Runtime state still updated despite the persistence failure.
+			expect(runtime.getModel().provider).toBe("anthropic");
+			expect(runtime.getModel().model_id).toBe("claude-sonnet-4-5");
+			expect(warn).toHaveBeenCalled();
+			warn.mockRestore();
+			facade.dispose();
+		});
 	});
 });
