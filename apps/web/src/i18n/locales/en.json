@@ -118,8 +118,7 @@
     "revealInFiles": "Reveal in file manager",
     "revealInFilesDir": "Reveal containing folder",
     "copyAbsolutePath": "Copy absolute path",
-    "copyFileName": "Copy file name",
-    "copyFileContent": "Copy file content"
+    "copyFileName": "Copy file name"
   },
   "history": {
     "title": "History",

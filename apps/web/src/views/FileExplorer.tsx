@@ -293,14 +293,6 @@ export default function FileExplorer({ workspace }: { workspace?: string | null 
 							revealPath(cwd, node.path).catch((e) =>
 								console.error("revealPath failed:", e),
 							),
-						onCopyContent: async (node) => {
-							try {
-								const content = await readFileContent(cwd, node.path);
-								copyText(content);
-							} catch (e) {
-								console.error("readFileContent failed:", e);
-							}
-						},
 						onToggleExpand: (node) => void toggleExpand(node.path),
 					})}
 				/>
@@ -491,7 +483,6 @@ interface FileMenuHandlers {
 	onView: (node: TreeNode) => void;
 	onOpenInEditor: (node: TreeNode) => void;
 	onReveal: (node: TreeNode) => void;
-	onCopyContent: (node: TreeNode) => void;
 	onToggleExpand: (node: TreeNode) => void;
 }
 
@@ -550,14 +541,6 @@ function buildFileMenuItems(
 		label: t("files.copyFileName"),
 		onClick: () => h.copyText(node.name),
 	});
-	if (!node.is_dir) {
-		items.push({
-			icon: Copy,
-			label: t("files.copyFileContent"),
-			onClick: () => h.onCopyContent(node),
-		});
-	}
-
 	return items;
 }
 
