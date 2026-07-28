@@ -73,17 +73,16 @@ export default function SchedulesView({
 			void refresh();
 		};
 		(async () => {
-			const unsub = await subscribeEvents((event) => {
-				const type = (event as { type?: string }).type;
-				if (type === "SCHEDULED_TASK_FIRED" || type === "SCHEDULED_TASK_COMPLETED") {
-					onAny();
-				}
-			}).catch(() => { /* subscribe failed — rely on manual reload */ });
-			if (cancelled) {
-				unsub?.();
-				return;
+			try {
+				unsubscribe = await subscribeEvents((event) => {
+					const type = (event as { type?: string }).type;
+					if (type === "SCHEDULED_TASK_FIRED" || type === "SCHEDULED_TASK_COMPLETED") {
+						onAny();
+					}
+				});
+			} catch {
+				/* subscribe failed — rely on manual reload */
 			}
-			unsubscribe = unsub;
 		})();
 		return () => {
 			cancelled = true;
@@ -315,6 +314,21 @@ function TaskListItem({
 			</div>
 			<div className="mt-0.5 truncate font-mono text-[10px] text-muted">
 				{describeSchedule(task)}
+			</div>
+			<div className="mt-0.5 flex flex-wrap items-center gap-1 truncate text-[10px] text-muted">
+				<span>
+					{!task.sessionTarget || task.sessionTarget.kind === "current"
+						? t("schedule.sessionCurrent")
+						: t("schedule.sessionNew")}
+				</span>
+				<span>·</span>
+				<span>{t(`schedule.policy_${task.concurrencyPolicy ?? "skip"}`)}</span>
+				{task.timeoutMinutes && task.timeoutMinutes > 0 && (
+					<>
+						<span>·</span>
+						<span>{task.timeoutMinutes}m</span>
+					</>
+				)}
 			</div>
 			<div className="mt-1 truncate text-[10px] text-muted">
 				{t("schedule.nextRun")}: {formatNextRun(task.nextRunAt)}

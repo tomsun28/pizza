@@ -138,7 +138,26 @@
       "weekly": "每周几固定时间",
       "monthly": "每月固定时间",
       "cron": "Cron 表达式"
-    }
+    },
+    "sessionTarget": "运行会话",
+    "sessionCurrent": "当前会话",
+    "sessionCurrentHint": "在 sidecar 当前的 active session 里跑",
+    "sessionNew": "每次新建会话",
+    "sessionNewHint": "每次触发创建一个独立 session,任务上下文隔离",
+    "sessionNewPurposePlaceholder": "新 session 的用途 (如:每日新闻汇总)",
+    "concurrency": "并发控制",
+    "concurrency_skip": "跳过本次",
+    "concurrency_skip_hint": "会话有任务在跑时,新到点的任务直接跳过(推荐)",
+    "concurrency_queue": "排队等待",
+    "concurrency_queue_hint": "会话有任务在跑时,新到点的任务排队等当前任务完成",
+    "concurrency_preempt": "抢占运行",
+    "concurrency_preempt_hint": "会话有任务在跑时,新到点的任务取消当前任务,自己跑",
+    "timeout": "单次超时",
+    "timeoutHint": "任务超过这个时间还没完成,自动取消并标记失败",
+    "timeoutNoLimit": "不限时",
+    "policy_skip": "跳过 (Skip)",
+    "policy_queue": "排队 (Queue)",
+    "policy_preempt": "抢占 (Preempt)"
   },
   "conversation": {
     "showLess": "收起",

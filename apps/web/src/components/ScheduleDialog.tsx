@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Trash2 } from "lucide-react";
-import type { DayOfMonth, ScheduleSpec, ScheduledTaskSummary, TimeOfDay, Weekday } from "@/lib/types";
+import type { ConcurrencyPolicy, DayOfMonth, ScheduleSpec, ScheduledTaskSummary, SessionTarget, TimeOfDay, Weekday } from "@/lib/types";
 import { Button, ErrorBanner, Field, Modal, Spinner } from "@/components/ui";
 import { ScheduleModePicker } from "@/components/ScheduleModePicker";
 import { TimePointChips, formatTimeOfDay } from "@/components/TimePointChips";
@@ -46,7 +46,20 @@ export function ScheduleDialog(props: ScheduleDialogProps) {
 	// survives re-renders of `renderModeFields` (which is a plain function,
 	// not a component, so it can't call hooks itself).
 	const [daysOfMonthDraft, setDaysOfMonthDraft] = useState("");
-
+	// Phase 2: where this task runs and how to behave on session contention.
+	// Defaults mirror the engine's fallback for backward compatibility.
+	const [sessionTarget, setSessionTarget] = useState<SessionTarget>(
+		existing?.sessionTarget ?? { kind: "current" },
+	);
+	const [concurrencyPolicy, setConcurrencyPolicy] = useState<ConcurrencyPolicy>(
+		existing?.concurrencyPolicy ?? "skip",
+	);
+	const [timeoutMinutes, setTimeoutMinutes] = useState<number>(
+		existing?.timeoutMinutes ?? 0,
+	);
+	const [newSessionPurpose, setNewSessionPurpose] = useState(
+		existing?.sessionTarget?.kind === "new" ? existing.sessionTarget.purpose : "",
+	);
 	// Reset whenever the dialog opens with a different existing task.
 	useEffect(() => {
 		if (!open) return;
@@ -391,6 +404,101 @@ export function ScheduleDialog(props: ScheduleDialogProps) {
 						rows={3}
 						className="w-full rounded-md border border-border bg-surface px-3 py-2.5 text-sm text-fg outline-none focus:border-accent"
 					/>
+				</Field>
+
+				<Field label={t("schedule.sessionTarget")}>
+					<div className="grid gap-1.5">
+						<label
+							className={cn(
+								"flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2 text-sm transition-colors",
+								sessionTarget.kind === "current"
+									? "border-accent bg-accent/10"
+									: "border-border bg-surface-2 hover:bg-surface",
+							)}
+						>
+						<input
+							type="radio"
+							name="sessionTarget"
+							checked={sessionTarget.kind === "current"}
+							onChange={() => setSessionTarget({ kind: "current" })}
+							className="mt-1"
+						/>
+						<div>
+							<div className="font-medium text-fg">{t("schedule.sessionCurrent")}</div>
+							<div className="text-[11px] text-muted">{t("schedule.sessionCurrentHint")}</div>
+						</div>
+					</label>
+						<label
+							className={cn(
+								"flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2 text-sm transition-colors",
+								sessionTarget.kind === "new"
+									? "border-accent bg-accent/10"
+									: "border-border bg-surface-2 hover:bg-surface",
+							)}
+						>
+						<input
+							type="radio"
+							name="sessionTarget"
+							checked={sessionTarget.kind === "new"}
+							onChange={() => setSessionTarget({ kind: "new", purpose: newSessionPurpose })}
+							className="mt-1"
+						/>
+						<div className="flex-1">
+							<div className="font-medium text-fg">{t("schedule.sessionNew")}</div>
+							<div className="mb-1.5 text-[11px] text-muted">{t("schedule.sessionNewHint")}</div>
+							{sessionTarget.kind === "new" && (
+								<input
+									type="text"
+									placeholder={t("schedule.sessionNewPurposePlaceholder")}
+									value={newSessionPurpose}
+									onChange={(e) => {
+										const v = e.target.value;
+										setNewSessionPurpose(v);
+										if (sessionTarget.kind === "new") setSessionTarget({ kind: "new", purpose: v });
+									}}
+									className="h-8 w-full rounded-md border border-border bg-surface px-2 text-xs text-fg outline-none focus:border-accent"
+								/>
+							)}
+						</div>
+					</label>
+					</div>
+				</Field>
+
+				<Field label={t("schedule.concurrency")}>
+					<div className="grid gap-1.5">
+						{(["skip", "queue", "preempt"] as const).map((p) => (
+							<button
+								key={p}
+								type="button"
+								onClick={() => setConcurrencyPolicy(p)}
+								className={cn(
+									"flex w-full items-start justify-between gap-2 rounded-lg border px-3 py-2 text-left text-sm transition-colors",
+									concurrencyPolicy === p
+										? "border-accent bg-accent/10 text-fg"
+										: "border-border bg-surface-2 text-muted hover:bg-surface hover:text-fg",
+								)}
+							>
+								<div>
+									<div className="font-medium">{t(`schedule.concurrency_${p}`)}</div>
+									<div className="text-[11px] text-muted">{t(`schedule.concurrency_${p}_hint`)}</div>
+								</div>
+							</button>
+						))}
+					</div>
+				</Field>
+
+				<Field label={t("schedule.timeout")} hint={t("schedule.timeoutHint")}>
+					<div className="flex items-center gap-2">
+						<input
+							type="number"
+						min={0}
+						max={1440}
+						value={timeoutMinutes}
+							onChange={(e) => setTimeoutMinutes(Math.max(0, Number(e.target.value || 0)))}
+							className="h-8 w-24 rounded-md border border-border bg-surface px-2 text-sm text-fg outline-none focus:border-accent"
+						/>
+						<span className="text-xs text-muted">{t("schedule.minute")} (0 = {t("schedule.timeoutNoLimit")})</span>
+					</div>
 				</Field>
 
 				<SchedulePreview spec={spec} />

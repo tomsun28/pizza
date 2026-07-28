@@ -138,7 +138,26 @@
       "weekly": "Weekly on chosen days",
       "monthly": "Monthly on chosen days",
       "cron": "Cron expression"
-    }
+    },
+    "sessionTarget": "Run in session",
+    "sessionCurrent": "Current session",
+    "sessionCurrentHint": "Run in the sidecar's currently active session",
+    "sessionNew": "New session per fire",
+    "sessionNewHint": "Each fire creates an isolated session; the task's context stays separate",
+    "sessionNewPurposePlaceholder": "Purpose of the new session (e.g. Daily news brief)",
+    "concurrency": "Concurrency",
+    "concurrency_skip": "Skip (recommended)",
+    "concurrency_skip_hint": "If the session is busy, drop the new tick (cron-style)",
+    "concurrency_queue": "Queue",
+    "concurrency_queue_hint": "If the session is busy, wait for it to free up",
+    "concurrency_preempt": "Preempt",
+    "concurrency_preempt_hint": "If the session is busy, cancel the current task and run this one",
+    "timeout": "Per-run timeout",
+    "timeoutHint": "Auto-cancel the task if it doesn't finish in time",
+    "timeoutNoLimit": "no limit",
+    "policy_skip": "Skip",
+    "policy_queue": "Queue",
+    "policy_preempt": "Preempt"
   },
   "conversation": {
     "showLess": "Show less",
