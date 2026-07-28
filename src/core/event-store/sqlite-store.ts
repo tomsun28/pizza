@@ -31,9 +31,6 @@ type EventRow = {
 	idempotency_key: string | null;
 };
 
-const CHUNK_FLUSH_THRESHOLD = 50;
-const CHUNK_FLUSH_INTERVAL_MS = 200;
-
 export class SqliteEventStore implements EventStore, SessionStore {
 	private db: DatabaseSync;
 	private subscribers: Map<number, { handler: (event: EventBase) => void; options?: SubscribeOptions }> = new Map();
@@ -41,8 +38,6 @@ export class SqliteEventStore implements EventStore, SessionStore {
 	private sessionStore: SqliteSessionStore;
 
 	private _nextSequence = 0;
-	private _chunkQueue: EventBase[] = [];
-	private _flushTimer: ReturnType<typeof setTimeout> | undefined;
 
 	readonly workspace_id: string;
 
@@ -70,18 +65,16 @@ export class SqliteEventStore implements EventStore, SessionStore {
 
 		const event = this._normalizeEvent(partial);
 
+		// AGENT_MESSAGE_CHUNK events are streaming-only: notify subscribers for
+		// live UI rendering but do NOT persist. The complete message content is
+		// captured by the subsequent AGENT_MESSAGE_END event (whose payload.content
+		// holds the full LLM response), so persisting chunks is pure redundancy.
+		// Historical replay / context rebuild / compaction all read END, never CHUNK.
 		if (partial.type === "AGENT_MESSAGE_CHUNK") {
 			this._notify(event);
-			this._chunkQueue.push(event);
-			if (this._chunkQueue.length >= CHUNK_FLUSH_THRESHOLD) {
-				this._flush();
-			} else if (!this._flushTimer) {
-				this._flushTimer = setTimeout(() => this._flush(), CHUNK_FLUSH_INTERVAL_MS);
-			}
 			return event;
 		}
 
-		this._flush();
 		this._insert(event);
 		const inserted = this.get(event.event_id) ?? event;
 		this._notify(inserted);
@@ -90,7 +83,6 @@ export class SqliteEventStore implements EventStore, SessionStore {
 	}
 
 	appendBatch(partials: EventAppendInput[]): EventBase[] {
-		this._flush();
 		const events: EventBase[] = [];
 		const newEvents: EventBase[] = [];
 		let nextSequence = this.head_sequence + 1;
@@ -250,7 +242,6 @@ export class SqliteEventStore implements EventStore, SessionStore {
 	}
 
 	close(): void {
-		this._flush();
 		this.db.close();
 	}
 
@@ -346,29 +337,6 @@ export class SqliteEventStore implements EventStore, SessionStore {
 			event.schema_version,
 			event.idempotency_key ?? null,
 		);
-	}
-
-	private _flush(): void {
-		if (this._flushTimer) {
-			clearTimeout(this._flushTimer);
-			this._flushTimer = undefined;
-		}
-		if (this._chunkQueue.length === 0) return;
-
-		const batch = this._chunkQueue;
-		this._chunkQueue = [];
-
-		try {
-			this.db.exec("begin");
-			for (const event of batch) {
-				this._insert(event);
-			}
-			this.db.exec("commit");
-		} catch (error) {
-			this.db.exec("rollback");
-			this._chunkQueue.unshift(...batch);
-			throw error;
-		}
 	}
 
 	private _dbMaxSequence(): number {
