@@ -31,11 +31,18 @@ type EventRow = {
 	idempotency_key: string | null;
 };
 
+const CHUNK_FLUSH_THRESHOLD = 50;
+const CHUNK_FLUSH_INTERVAL_MS = 200;
+
 export class SqliteEventStore implements EventStore, SessionStore {
 	private db: DatabaseSync;
 	private subscribers: Map<number, { handler: (event: EventBase) => void; options?: SubscribeOptions }> = new Map();
 	private nextSubId = 0;
 	private sessionStore: SqliteSessionStore;
+
+	private _nextSequence = 0;
+	private _chunkQueue: EventBase[] = [];
+	private _flushTimer: ReturnType<typeof setTimeout> | undefined;
 
 	readonly workspace_id: string;
 
@@ -51,6 +58,7 @@ export class SqliteEventStore implements EventStore, SessionStore {
 		this.db = new (loadDatabaseSync())(dbPath);
 		this._applyPragmas(dbPath);
 		this._initSchema();
+		this._nextSequence = this._dbMaxSequence() + 1;
 		this.sessionStore = new SqliteSessionStore(this.db, workspaceId);
 	}
 
@@ -61,6 +69,19 @@ export class SqliteEventStore implements EventStore, SessionStore {
 		}
 
 		const event = this._normalizeEvent(partial);
+
+		if (partial.type === "AGENT_MESSAGE_CHUNK") {
+			this._notify(event);
+			this._chunkQueue.push(event);
+			if (this._chunkQueue.length >= CHUNK_FLUSH_THRESHOLD) {
+				this._flush();
+			} else if (!this._flushTimer) {
+				this._flushTimer = setTimeout(() => this._flush(), CHUNK_FLUSH_INTERVAL_MS);
+			}
+			return event;
+		}
+
+		this._flush();
 		this._insert(event);
 		const inserted = this.get(event.event_id) ?? event;
 		this._notify(inserted);
@@ -69,6 +90,7 @@ export class SqliteEventStore implements EventStore, SessionStore {
 	}
 
 	appendBatch(partials: EventAppendInput[]): EventBase[] {
+		this._flush();
 		const events: EventBase[] = [];
 		const newEvents: EventBase[] = [];
 		let nextSequence = this.head_sequence + 1;
@@ -224,13 +246,11 @@ export class SqliteEventStore implements EventStore, SessionStore {
 	}
 
 	get head_sequence(): number {
-		const row = this.db
-			.prepare("select coalesce(max(sequence), 0) as sequence from events where workspace_id = ?")
-			.get(this.workspace_id) as { sequence: number };
-		return row.sequence;
+		return this._nextSequence - 1;
 	}
 
 	close(): void {
+		this._flush();
 		this.db.close();
 	}
 
@@ -290,9 +310,13 @@ export class SqliteEventStore implements EventStore, SessionStore {
 	}
 
 	private _normalizeEvent(partial: EventAppendInput): EventBase {
+		const sequence = partial.sequence ?? this._nextSequence;
+		if (sequence >= this._nextSequence) {
+			this._nextSequence = sequence + 1;
+		}
 		return {
 			...partial,
-			sequence: partial.sequence ?? this.head_sequence + 1,
+			sequence,
 			event_id: partial.event_id ?? uuidv7(),
 			workspace_id: this.workspace_id,
 			runtime_id: partial.runtime_id ?? this.runtimeId,
@@ -322,6 +346,36 @@ export class SqliteEventStore implements EventStore, SessionStore {
 			event.schema_version,
 			event.idempotency_key ?? null,
 		);
+	}
+
+	private _flush(): void {
+		if (this._flushTimer) {
+			clearTimeout(this._flushTimer);
+			this._flushTimer = undefined;
+		}
+		if (this._chunkQueue.length === 0) return;
+
+		const batch = this._chunkQueue;
+		this._chunkQueue = [];
+
+		try {
+			this.db.exec("begin");
+			for (const event of batch) {
+				this._insert(event);
+			}
+			this.db.exec("commit");
+		} catch (error) {
+			this.db.exec("rollback");
+			this._chunkQueue.unshift(...batch);
+			throw error;
+		}
+	}
+
+	private _dbMaxSequence(): number {
+		const row = this.db
+			.prepare("select coalesce(max(sequence), 0) as sequence from events where workspace_id = ?")
+			.get(this.workspace_id) as { sequence: number };
+		return row.sequence;
 	}
 
 	private _getByIdempotencyKey(idempotencyKey: string): EventBase | undefined {
