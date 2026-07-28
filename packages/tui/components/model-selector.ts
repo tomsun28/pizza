@@ -40,6 +40,10 @@ export class ModelSelectorComponent extends Container implements Focusable {
 	private filteredModels: ModelItem[] = [];
 	private selectedIndex: number = 0;
 	private currentModel?: Model<any>;
+	// Kept for API compatibility with the caller in interactive-mode.ts,
+	// but no longer used here: model persistence now lives in
+	// SessionFacade.setModel so every entry point (this selector, /model
+	// command, RPC set_model, …) shares one write path.
 	private settingsManager: SettingsManager;
 	private modelRegistry: ModelRegistry;
 	private onSelectCallback: (model: Model<any>) => void;
@@ -259,8 +263,10 @@ export class ModelSelectorComponent extends Container implements Focusable {
 	}
 
 	private handleSelect(model: Model<any>): void {
-		// Save as new default
-		this.settingsManager.setDefaultModelAndProvider(model.provider, model.id);
+		// Persistence happens inside SessionFacade.setModel (the callback
+		// ultimately calls facade.setModel), so we don't need to touch the
+		// settings manager here. Keeping the writes in one place avoids the
+		// "which one is authoritative" question.
 		this.onSelectCallback(model);
 	}
 
