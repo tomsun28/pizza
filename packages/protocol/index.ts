@@ -107,6 +107,49 @@ export interface ScheduledTask {
 	createdBy: "user" | "intent";
 	/** Original user sentence when createdBy === "intent" (auditability). */
 	sourceText?: string;
+	/**
+	 * Which session the task runs in at each fire time.
+	 *   - { kind: "current" }   → dispatch into the sidecar's current active session
+	 *   - { kind: "new", purpose } → each fire creates a fresh session whose first
+	 *                               user message is the task prompt
+	 * Optional for backwards compat: missing falls back to { kind: "current" }.
+	 */
+	sessionTarget?: SessionTarget;
+	/**
+	 * What to do when this task wants to fire but its target session is
+	 * already running another task. Default: "skip" (cron-style drop the tick).
+	 */
+	concurrencyPolicy?: ConcurrencyPolicy;
+	/**
+	 * Auto-release the session lock and mark the task as failed if it
+	 * doesn't finish within this many minutes. 0 = no timeout (default).
+	 * Recommended: 15 for interactive agents, 0 for batch jobs.
+	 */
+	timeoutMinutes?: number;
+}
+
+/**
+ * Where a task runs when it fires.
+ */
+export type SessionTarget =
+	| { kind: "current" }
+	| { kind: "new"; purpose: string };
+
+/**
+ * What to do when a second task wants to run while another is in flight
+ * in the same target session.
+ */
+export type ConcurrencyPolicy = "skip" | "queue" | "preempt";
+
+/**
+ * Per-scope scheduler policy (the global defaults for newly-created
+ * tasks). Persisted in settings.json. Per-task fields on ScheduledTask
+ * override these defaults.
+ */
+export interface SchedulerPolicy {
+	concurrency: ConcurrencyPolicy;
+	timeoutMinutes: number;
+	defaultSessionTarget: SessionTarget;
 }
 
 /** Lightweight status snapshot returned to UI when listing tasks. */
@@ -255,6 +298,9 @@ export interface ScheduledTaskCreateInput {
 	sourceText?: string;
 	startAt?: number;
 	endAt?: number;
+	sessionTarget?: SessionTarget;
+	concurrencyPolicy?: ConcurrencyPolicy;
+	timeoutMinutes?: number;
 }
 
 /** Patch object for schedule_update. Any field omitted is left unchanged. */
@@ -265,6 +311,9 @@ export interface ScheduledTaskPatch {
 	enabled?: boolean;
 	startAt?: number | null;
 	endAt?: number | null;
+	sessionTarget?: SessionTarget | null;
+	concurrencyPolicy?: ConcurrencyPolicy | null;
+	timeoutMinutes?: number | null;
 }
 
 // ============================================================================

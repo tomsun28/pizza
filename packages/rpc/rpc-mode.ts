@@ -138,6 +138,18 @@ function extensionIdFromPath(extPath: string): string {
 	return slash >= 0 ? base.slice(slash + 1) : base;
 }
 
+/**
+ * Hash a workspace cwd to the same `ws_<12hex>` identifier used by the
+ * EventStore. Mirrors src/core/event-store/workspace.ts#deriveWorkspaceId
+ * so the RPC layer can accept the raw path from the frontend and compare
+ * it against `descriptor.workspace_id` (which is the hash).
+ */
+function canonicalWorkspaceId(cwd: string): string {
+	const { resolve } = require("node:path") as typeof import("node:path");
+	const canonical = resolve(cwd).replace(/\\/g, "/");
+	return `ws_${require("node:crypto").createHash("sha256").update(canonical).digest("hex").slice(0, 12)}`;
+}
+
 /** Map a loaded extension's sourceInfo/path to the RPC kind. */
 function extensionKind(ext: {
 	path: string;
@@ -437,17 +449,46 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 		dispatch: async (task) => {
 			try {
 				lastDispatchedUserMessageId = undefined;
+				// For SessionTarget: new, spawn a fresh session before the prompt
+				// so the task runs in isolation. We use "schedule" as the
+				// boundary reason so it shows up as a dedicated session in the
+				// history / branch tree.
+				const target = task.sessionTarget ?? { kind: "current" };
+				if (target.kind === "new") {
+					try {
+						const desc = facade.runtime.sessionManager?.createSession("schedule");
+						if (!desc) {
+							return { error: "sessionManager unavailable; cannot create new session" };
+						}
+					} catch (e) {
+						return { error: `createSession failed: ${e instanceof Error ? e.message : String(e)}` };
+					}
+				}
 				// Subscribe BEFORE prompt so we capture the exact event id.
 				const unsub = facade.subscribe((event) => {
 					if (event.type === "USER_MESSAGE") {
 						lastDispatchedUserMessageId = event.event_id;
 					}
 				});
-				await facade.prompt(task.prompt);
-				unsub();
-				return { eventId: lastDispatchedUserMessageId };
+				try {
+					await facade.prompt(task.prompt);
+				} finally {
+					unsub();
+				}
+				const sessionId = facade.runtime.sessionManager?.getActiveSessionId();
+				return { eventId: lastDispatchedUserMessageId, sessionId };
 			} catch (e) {
 				return { error: e instanceof Error ? e.message : String(e) };
+			}
+		},
+		abort: (taskId) => {
+			// Best-effort abort. facade.abort() drops the in-flight turn and
+			// resolves any waiting settlement promises. The scheduler engine
+			// handles the post-abort bookkeeping (run record, lock release).
+			try {
+				facade.abort();
+			} catch {
+				/* ignore */
 			}
 		},
 	};
@@ -936,8 +977,11 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 				if (t.scope !== schedulerScope) {
 					return error(id, "schedule_create", `Scope mismatch: sidecar is ${schedulerScope}, task is ${t.scope}`);
 				}
-				if (t.scope === "workspace" && t.workspaceId !== schedulerWorkspaceId) {
-					return error(id, "schedule_create", `Workspace mismatch: sidecar is ${schedulerWorkspaceId}, task is ${t.workspaceId}`);
+				if (t.scope === "workspace") {
+					const provided = t.workspaceId ? canonicalWorkspaceId(t.workspaceId) : undefined;
+					if (provided !== schedulerWorkspaceId) {
+						return error(id, "schedule_create", `Workspace mismatch: sidecar is ${schedulerWorkspaceId}, task is ${provided} (from ${t.workspaceId})`);
+					}
 				}
 				const r = scheduler.create({
 					name: t.name,
@@ -948,6 +992,9 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 					sourceText: t.sourceText,
 					startAt: t.startAt,
 					endAt: t.endAt,
+					sessionTarget: t.sessionTarget,
+					concurrencyPolicy: t.concurrencyPolicy,
+					timeoutMinutes: t.timeoutMinutes,
 				});
 				if (!r.ok) return error(id, "schedule_create", r.error);
 				return success(id, "schedule_create", { task: r.task });
@@ -957,8 +1004,11 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 				if (command.scope !== schedulerScope) {
 					return error(id, "schedule_update", `Scope mismatch`);
 				}
-				if (command.scope === "workspace" && command.workspaceId !== schedulerWorkspaceId) {
-					return error(id, "schedule_update", `Workspace mismatch`);
+				if (command.scope === "workspace") {
+					const provided = command.workspaceId ? canonicalWorkspaceId(command.workspaceId) : undefined;
+					if (provided !== schedulerWorkspaceId) {
+						return error(id, "schedule_update", `Workspace mismatch`);
+					}
 				}
 				const r = scheduler.update(command.taskId, command.patch);
 				if (!r.ok) return error(id, "schedule_update", r.error);
@@ -969,8 +1019,11 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 				if (command.scope !== schedulerScope) {
 					return error(id, "schedule_delete", `Scope mismatch`);
 				}
-				if (command.scope === "workspace" && command.workspaceId !== schedulerWorkspaceId) {
-					return error(id, "schedule_delete", `Workspace mismatch`);
+				if (command.scope === "workspace") {
+					const provided = command.workspaceId ? canonicalWorkspaceId(command.workspaceId) : undefined;
+					if (provided !== schedulerWorkspaceId) {
+						return error(id, "schedule_delete", `Workspace mismatch`);
+					}
 				}
 				const r = scheduler.delete(command.taskId);
 				if (!r.ok) return error(id, "schedule_delete", r.error);
@@ -981,8 +1034,11 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 				if (command.scope !== schedulerScope) {
 					return error(id, "schedule_run_now", `Scope mismatch`);
 				}
-				if (command.scope === "workspace" && command.workspaceId !== schedulerWorkspaceId) {
-					return error(id, "schedule_run_now", `Workspace mismatch`);
+				if (command.scope === "workspace") {
+					const provided = command.workspaceId ? canonicalWorkspaceId(command.workspaceId) : undefined;
+					if (provided !== schedulerWorkspaceId) {
+						return error(id, "schedule_run_now", `Workspace mismatch`);
+					}
 				}
 				const r = await scheduler.runNow(command.taskId);
 				if (!r.ok) return error(id, "schedule_run_now", r.error);
@@ -998,8 +1054,11 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 				if (command.scope !== schedulerScope) {
 					return error(id, "schedule_history", `Scope mismatch`);
 				}
-				if (command.scope === "workspace" && command.workspaceId !== schedulerWorkspaceId) {
-					return error(id, "schedule_history", `Workspace mismatch`);
+				if (command.scope === "workspace") {
+					const provided = command.workspaceId ? canonicalWorkspaceId(command.workspaceId) : undefined;
+					if (provided !== schedulerWorkspaceId) {
+						return error(id, "schedule_history", `Workspace mismatch`);
+					}
 				}
 				const runs = scheduler.history(command.taskId, command.limit ?? 50);
 				return success(id, "schedule_history", { runs });

@@ -30,6 +30,9 @@ import type {
 	RpcSkillInfo,
 	ScheduledTaskSummary,
 	ScheduledTaskRun,
+	SessionTarget,
+	ConcurrencyPolicy,
+	SchedulerPolicy,
 } from "@pizza/protocol";
 
 import type { AgentMessage, ThinkingLevel } from "../../src/core/agent/types.js";

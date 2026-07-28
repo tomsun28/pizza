@@ -9,6 +9,7 @@ import {
 	listScheduledTasks,
 	reloadScheduledTasks,
 	runScheduledTaskNow,
+	subscribeEvents,
 	updateScheduledTask,
 } from "@/lib/transport";
 import { Badge, Button, EmptyState, ErrorBanner, PageHeader, Spinner } from "@/components/ui";
@@ -58,6 +59,36 @@ export default function SchedulesView({
 
 	useEffect(() => {
 		void refresh();
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [scope, workspaceId]);
+
+	// Live-update when a task fires or completes. The engine emits these
+	// over the rpc_event stream; we re-fetch the list so the nextRunAt field
+	// rolls forward and the history panel picks up the new run row.
+	useEffect(() => {
+		let cancelled = false;
+		let unsubscribe: (() => void) | null = null;
+		const onAny = () => {
+			if (cancelled) return;
+			void refresh();
+		};
+		(async () => {
+			const unsub = await subscribeEvents((event) => {
+				const type = (event as { type?: string }).type;
+				if (type === "SCHEDULED_TASK_FIRED" || type === "SCHEDULED_TASK_COMPLETED") {
+					onAny();
+				}
+			}).catch(() => { /* subscribe failed — rely on manual reload */ });
+			if (cancelled) {
+				unsub?.();
+				return;
+			}
+			unsubscribe = unsub;
+		})();
+		return () => {
+			cancelled = true;
+			unsubscribe?.();
+		};
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [scope, workspaceId]);
 

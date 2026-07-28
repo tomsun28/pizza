@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Calendar, Clock, Trash2 } from "lucide-react";
+import { Trash2 } from "lucide-react";
 import type { DayOfMonth, ScheduleSpec, ScheduledTaskSummary, TimeOfDay, Weekday } from "@/lib/types";
 import { Button, ErrorBanner, Field, Modal, Spinner } from "@/components/ui";
 import { ScheduleModePicker } from "@/components/ScheduleModePicker";
@@ -286,7 +286,7 @@ export function ScheduleDialog(props: ScheduleDialogProps) {
 							value={spec.cron?.expression ?? ""}
 							placeholder="0 9 * * *"
 							onChange={(e) => setSpec({ ...spec, cron: { expression: e.target.value, tz: spec.cron?.tz } })}
-							className="w-full rounded-md border border-border bg-surface px-2 py-1.5 font-mono text-sm text-fg outline-none focus:border-accent"
+							className="h-9 w-full rounded-md border border-border bg-surface px-3 font-mono text-sm text-fg outline-none focus:border-accent"
 						/>
 						{spec.cron?.tz !== undefined && (
 							<input
@@ -294,7 +294,7 @@ export function ScheduleDialog(props: ScheduleDialogProps) {
 								value={spec.cron.tz ?? ""}
 								placeholder="Asia/Shanghai (optional)"
 								onChange={(e) => setSpec({ ...spec, cron: { expression: spec.cron?.expression ?? "", tz: e.target.value } })}
-								className="mt-1 w-full rounded-md border border-border bg-surface px-2 py-1.5 text-xs text-fg outline-none focus:border-accent"
+								className="mt-1 h-9 w-full rounded-md border border-border bg-surface px-3 text-xs text-fg outline-none focus:border-accent"
 							/>
 						)}
 					</Field>
@@ -341,31 +341,46 @@ export function ScheduleDialog(props: ScheduleDialogProps) {
 						value={name}
 						placeholder={t("schedule.namePlaceholder")}
 						onChange={(e) => setName(e.target.value)}
-						className="w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-fg outline-none focus:border-accent"
+						className="w-full rounded-md border border-border bg-surface px-3 py-2.5 text-sm text-fg outline-none focus:border-accent"
 					/>
 				</Field>
 
-				<div className="grid grid-cols-2 gap-4">
-					<div>
-						<div className="mb-1.5 flex items-center gap-1.5 text-xs text-muted">
-							<Calendar className="h-3.5 w-3.5" />
-							{t("schedule.mode")}
-						</div>
-						<ScheduleModePicker
-							value={spec.mode}
-							onChange={(mode) => {
-								// Preserve relevant fields when switching modes
-								setSpec({ ...spec, mode });
-							}}
-						/>
-					</div>
-					<div className="space-y-3">
-						<div className="flex items-center gap-1.5 text-xs text-muted">
-							<Clock className="h-3.5 w-3.5" />
-							{t("schedule.details")}
-						</div>
-						{renderModeFields()}
-					</div>
+				<div className="grid grid-cols-1 gap-x-4 gap-y-2 sm:grid-cols-[180px_1fr] sm:items-center">
+					<span className="text-xs font-medium uppercase tracking-wider text-muted">{t("schedule.mode")}</span>
+					<ScheduleModePicker
+						value={spec.mode}
+						onChange={(mode) => {
+							// Switching mode resets the mode-specific fields so canSave()
+							// never gets stuck because the previous mode left an unrelated
+							// field undefined. Drop everyN / times / weekdays / daysOfMonth
+							// / cron first, then layer on sensible defaults for the new mode.
+							const base: ScheduleSpec = {
+								...spec,
+								mode,
+								everyN: undefined,
+								times: undefined,
+								weekdays: undefined,
+								daysOfMonth: undefined,
+								cron: undefined,
+							};
+							let next: ScheduleSpec = base;
+							if (mode === "every_n_minutes") {
+								next = { ...base, everyN: { n: 15, unit: "minute" } };
+							} else if (mode === "every_n_hours") {
+								next = { ...base, everyN: { n: 1, unit: "hour" } };
+							} else if (mode === "daily" || mode === "weekdays" || mode === "weekly" || mode === "monthly") {
+								next = { ...base, times: [{ hour: 9, minute: 0 }] };
+								if (mode === "weekdays") next = { ...next, weekdays: [1, 2, 3, 4, 5] };
+								if (mode === "weekly") next = { ...next, weekdays: [1, 3, 5] };
+								if (mode === "monthly") next = { ...next, daysOfMonth: [1] };
+							} else if (mode === "cron") {
+								next = { ...base, cron: { expression: "0 9 * * *" } };
+							}
+							setSpec(next);
+						}}
+					/>
+					<span className="self-start text-xs font-medium uppercase tracking-wider text-muted">{t("schedule.details")}</span>
+					<div>{renderModeFields()}</div>
 				</div>
 
 				<Field label={t("schedule.taskContent")} hint={t("schedule.taskContentHint")}>
@@ -374,7 +389,7 @@ export function ScheduleDialog(props: ScheduleDialogProps) {
 						placeholder={t("schedule.taskContentPlaceholder")}
 						onChange={(e) => setPrompt(e.target.value)}
 						rows={3}
-						className="w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-fg outline-none focus:border-accent"
+						className="w-full rounded-md border border-border bg-surface px-3 py-2.5 text-sm text-fg outline-none focus:border-accent"
 					/>
 				</Field>
 

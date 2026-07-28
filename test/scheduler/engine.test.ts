@@ -276,3 +276,77 @@ describe("detectScheduleIntent", () => {
 		expect(detectScheduleIntent("你好吗", NOW)).toBeNull();
 	});
 });
+describe("SchedulerEngine — session-level concurrency", () => {
+	it("skips the second task when concurrencyPolicy = skip and session is busy", async () => {
+		// Single engine, no recreate dance. Build a dispatcher that's a
+		// no-op for the regular task but blocks on A's id (which we capture
+		// after e2.create assigns it).
+		let releaseA: (v: { eventId?: string; error?: string }) => void = () => {};
+		const aPromise = new Promise<{ eventId?: string; error?: string }>((r) => { releaseA = r; });
+		let aId = "";
+		let bId = "";
+		const e2 = new SchedulerEngine({
+			scope: "main",
+			dispatcher: {
+				dispatch: async (task: ScheduledTask) => {
+					if (task.id === aId) return await aPromise;
+					return { eventId: `e-${task.id}` };
+				},
+			},
+		});
+		const a2 = e2.create({ name: "A", prompt: "a", schedule: { mode: "every_n_minutes", everyN: { n: 60, unit: "minute" } }, concurrencyPolicy: "skip" });
+		const b2 = e2.create({ name: "B", prompt: "b", schedule: { mode: "every_n_minutes", everyN: { n: 60, unit: "minute" } }, concurrencyPolicy: "skip" });
+		if (!a2.ok || !b2.ok) throw new Error("create failed");
+		aId = a2.task.id;
+		bId = b2.task.id;
+		const aRun = e2.runNow(a2.task.id);
+		await new Promise((r) => setTimeout(r, 20));
+		const bRun = e2.runNow(b2.task.id);
+		await Promise.all([aRun, bRun]);
+		await new Promise((r) => setTimeout(r, 50));
+		const histB = e2.history(b2.task.id);
+		expect(histB.length).toBe(1);
+		expect(histB[0]!.status).toBe("skipped");
+		expect(histB[0]!.reason).toMatch(/busy/);
+		releaseA({ eventId: "e-A" });
+		await new Promise((r) => setTimeout(r, 50));
+		e2.dispose();
+	});
+
+		it("queues the second task when concurrencyPolicy = queue and fires it after the first finishes", async () => {
+		const engine = new SchedulerEngine({
+			scope: "main",
+			dispatcher: { dispatch: async () => ({ eventId: "e" }) },
+		});
+		const a = engine.create({ name: "A", prompt: "a", schedule: { mode: "every_n_minutes", everyN: { n: 60, unit: "minute" } }, concurrencyPolicy: "queue" });
+		if (!a.ok) throw new Error("create failed");
+		const aId = a.task.id;
+		let releaseA: (v: { eventId?: string; error?: string }) => void = () => {};
+		const aPromise = new Promise<{ eventId?: string; error?: string }>((r) => { releaseA = r; });
+		const dispatched: string[] = [];
+		engine.dispose();
+		const e2 = new SchedulerEngine({
+			scope: "main",
+			dispatcher: {
+				dispatch: vi.fn(async (task: ScheduledTask) => {
+					dispatched.push(task.id);
+					if (task.id === aId) return await aPromise;
+					return { eventId: `e-${task.id}` };
+				}),
+			},
+		});
+		const a2 = e2.create({ name: "A", prompt: "a", schedule: { mode: "every_n_minutes", everyN: { n: 60, unit: "minute" } }, concurrencyPolicy: "queue" });
+		const b2 = e2.create({ name: "B", prompt: "b", schedule: { mode: "every_n_minutes", everyN: { n: 60, unit: "minute" } }, concurrencyPolicy: "queue" });
+		if (!a2.ok || !b2.ok) throw new Error("re-create failed");
+		await e2.runNow(a2.task.id);
+		await new Promise((r) => setTimeout(r, 20));
+		await e2.runNow(b2.task.id);
+		await new Promise((r) => setTimeout(r, 50));
+		releaseA({ eventId: "e-A" });
+		await new Promise((r) => setTimeout(r, 100));
+		expect(dispatched).toContain(a2.task.id);
+		expect(dispatched).toContain(b2.task.id);
+		expect(dispatched.indexOf(a2.task.id)).toBeLessThan(dispatched.indexOf(b2.task.id));
+		e2.dispose();
+	});
+});

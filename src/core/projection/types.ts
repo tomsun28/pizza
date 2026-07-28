@@ -25,7 +25,7 @@ export interface SessionDescriptor {
 	/** User-defined name */
 	name?: string;
 	/** Creation method */
-	created_by: "user_explicit" | "fork";
+	created_by: "user_explicit" | "fork" | "schedule";
 	/** Boundary inference reason */
 	boundary_reason?: "intent_shift" | "file_drift" | "user_explicit";
 	/** Parent session (fork source) */

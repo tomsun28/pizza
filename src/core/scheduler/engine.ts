@@ -26,7 +26,8 @@
  */
 
 import { EventEmitter } from "node:events";
-import type { ScheduledTask, ScheduledTaskSummary, ScheduledTaskRun } from "@pizza/protocol";
+import type { ConcurrencyPolicy, ScheduledTask, ScheduledTaskSummary, ScheduledTaskRun, SessionTarget } from "@pizza/protocol";
+import { SessionLockManager, type AcquireResult } from "./locks.js";
 import { cronNextRun } from "./cron.js";
 import { defaultTaskName, generateTaskId, validateScheduleSpec } from "./types.js";
 import { appendRun, readRuns, readTasks, writeTasks } from "./store.js";
@@ -167,9 +168,21 @@ export interface Dispatcher {
 	 * Dispatch the task's prompt to the agent. Implementations typically
 	 * call `facade.prompt(prompt)`. The returned promise resolves when the
 	 * turn is complete (or rejects on error). The eventId of the produced
-	 * USER_MESSAGE event (if any) should be returned via the second arg.
+	 * USER_MESSAGE event (if any) and the sessionId the prompt landed in
+	 * should be returned.
+	 *
+	 * The lock acquired on the session (if any) is held for the lifetime
+	 * of this promise. The engine calls release() once the promise settles.
 	 */
-	dispatch(task: ScheduledTask): Promise<{ eventId?: string; error?: string }>;
+	dispatch(task: ScheduledTask): Promise<{ eventId?: string; sessionId?: string; error?: string }>;
+	/**
+	 * Abort the in-flight turn for `taskId`. Called when the lock times
+	 * out or when a "preempt" policy is firing off the current holder.
+	 * The dispatcher should best-effort abort any active turn and resolve
+	 * promptly; the engine then releases the lock and records a failed
+	 * run with reason: "timeout".
+	 */
+	abort?(taskId: string): void;
 }
 
 export interface SchedulerEngineOptions {
@@ -190,6 +203,10 @@ export class SchedulerEngine {
 	private tasks: Map<string, ScheduledTask> = new Map();
 	private timers: Map<string, NodeJS.Timeout> = new Map();
 	private running: Set<string> = new Set();
+	/** Per-session mutex for scheduled tasks. */
+	private locks = new SessionLockManager();
+	/** Cached "active session id" from the dispatcher (for SessionTarget: current). */
+	private currentSessionId: string | undefined;
 	private emitter = new EventEmitter();
 	private stopped = false;
 	/** Tracks whether the engine has been disposed. */
@@ -201,6 +218,13 @@ export class SchedulerEngine {
 		this.dispatcher = opts.dispatcher;
 		this.listener = opts.listener;
 		this.now = opts.now ?? Date.now;
+		// When the lock times out (or is preempted), abort the in-flight turn
+		// and record a "timeout" run row. The actual lock release + record
+		// append happens in fireTask's finally block (or release() in the
+		// queue/preempt paths) so the bookkeeping is consistent.
+		this.locks.onTimeout = (taskId, sessionId) => {
+			this.handleTimeout(taskId, sessionId);
+		};
 	}
 
 	// --- lifecycle ---
@@ -214,21 +238,87 @@ export class SchedulerEngine {
 		this.scheduleAll();
 	}
 
+	/**
+	 * Force a re-read from disk. Returns the number of tasks now in memory.
+	 * Useful when an external process edits tasks.json (e.g. the desktop
+	 * bridge writing a task directly).
+	 */
+	reload(): number {
+		this.load();
+		return this.tasks.size;
+	}
+
 	/** Stop all timers; safe to call multiple times. */
 	dispose(): void {
 		if (this.disposed) return;
 		this.disposed = true;
 		this.stopped = true;
-		for (const [, t] of this.timers) clearTimeout(t);
+		for (const [, t] of this.timers) {
+			clearTimeout(t);
+		}
 		this.timers.clear();
+		this.locks.dispose();
 		this.emitter.removeAllListeners();
 	}
 
-	/** Force re-read from disk (e.g. after an external edit). */
-	reload(): number {
-		this.load();
-		return this.tasks.size;
+	/**
+	 * Resolve the target session id for a task. For SessionTarget: current
+	 * we use the cached currentSessionId (refreshed each time the dispatcher
+	 * returns). For SessionTarget: new, the dispatcher creates a new session
+	 * and reports its id back via dispatch().sessionId.
+	 */
+	private resolveTargetSessionId(task: ScheduledTask): string {
+		const target = task.sessionTarget ?? { kind: "current" };
+		switch (target.kind) {
+			case "current":
+				return this.currentSessionId ?? `current:${this.scope}:${this.workspaceId ?? "main"}`;
+			case "new":
+				// The dispatcher picks / creates the actual session id. We use a
+				// deterministic placeholder for the lock key; the real id replaces
+				// it after dispatch returns. This is fine because the lock is
+				// held for the entire dispatch promise.
+				return `pending:${task.id}`;
+		}
 	}
+
+	/**
+	 * Called by the lock manager when a task's timeout fires (or a preempt
+	 * overwrites the holder). Aborts the in-flight turn (if any) and
+	 * records a "timeout" run. The lock is released by the lock manager
+	 * immediately after, so queued tasks can proceed.
+	 */
+	private handleTimeout(taskId: string, _sessionId: string): void {
+		const task = this.tasks.get(taskId);
+		if (!task) return;
+		try {
+			this.dispatcher.abort?.(taskId);
+		} catch {
+			/* best-effort */
+		}
+		// Record the timeout run.
+		const at = this.now();
+		const run: ScheduledTaskRun = {
+			taskId,
+			at,
+			status: "failed",
+			reason: task.timeoutMinutes && task.timeoutMinutes > 0
+				? `timeout after ${task.timeoutMinutes}min`
+				: "preempted by another task",
+		};
+		appendRun(this.scope, this.workspaceId, run);
+		// Update the task's lastRun + runCount so the UI reflects reality.
+		this.tasks.set(taskId, {
+			...task,
+			lastRunAt: at,
+			lastRunStatus: "failed",
+			updatedAt: this.now(),
+			runCount: (task.runCount ?? 0) + 1,
+		});
+		this.persist();
+		this.emit({ type: "task.completed", payload: run });
+	}
+
+	// --- task CRUD ---
 
 	// --- task CRUD ---
 
@@ -254,6 +344,9 @@ export class SchedulerEngine {
 		sourceText?: string;
 		startAt?: number;
 		endAt?: number;
+		sessionTarget?: SessionTarget;
+		concurrencyPolicy?: ConcurrencyPolicy;
+		timeoutMinutes?: number;
 	}): { ok: true; task: ScheduledTaskSummary } | { ok: false; error: string } {
 		const validation = validateScheduleSpec(input.schedule);
 		if (validation) return { ok: false, error: validation };
@@ -272,6 +365,9 @@ export class SchedulerEngine {
 			createdBy: input.createdBy ?? "user",
 			sourceText: input.sourceText,
 			runCount: 0,
+			sessionTarget: input.sessionTarget,
+			concurrencyPolicy: input.concurrencyPolicy,
+			timeoutMinutes: input.timeoutMinutes,
 		};
 		// Persist schedule.endAt / startAt into the embedded schedule so the
 		// nextRunAt helper reads a consistent shape.
@@ -296,6 +392,9 @@ export class SchedulerEngine {
 			enabled?: boolean;
 			startAt?: number | null;
 			endAt?: number | null;
+			sessionTarget?: SessionTarget | null;
+			concurrencyPolicy?: ConcurrencyPolicy | null;
+			timeoutMinutes?: number | null;
 		},
 	): { ok: true; task: ScheduledTaskSummary } | { ok: false; error: string } {
 		const existing = this.tasks.get(id);
@@ -306,9 +405,16 @@ export class SchedulerEngine {
 			if (validation) return { ok: false, error: validation };
 		}
 
+		// Build the new task. Filter patch to drop nulls (which mean "clear")
+		// and apply the rest as overrides on top of existing.
+		const filtered: Partial<ScheduledTask> = {};
+		for (const [k, v] of Object.entries(patch)) {
+			if (v === null) continue;
+			(filtered as Record<string, unknown>)[k] = v;
+		}
 		const next: ScheduledTask = {
 			...existing,
-			...patch,
+			...filtered,
 			schedule: patch.schedule ?? existing.schedule,
 			updatedAt: this.now(),
 		};
@@ -316,6 +422,10 @@ export class SchedulerEngine {
 		else if (typeof patch.startAt === "number") next.schedule.startAt = patch.startAt;
 		if (patch.endAt === null) delete next.schedule.endAt;
 		else if (typeof patch.endAt === "number") next.schedule.endAt = patch.endAt;
+		// Explicit clears: null = remove the field entirely.
+		if (patch.sessionTarget === null) delete next.sessionTarget;
+		if (patch.concurrencyPolicy === null) delete next.concurrencyPolicy;
+		if (patch.timeoutMinutes === null) delete next.timeoutMinutes;
 
 		this.tasks.set(id, next);
 		this.persist();
@@ -337,10 +447,12 @@ export class SchedulerEngine {
 	async runNow(id: string): Promise<{ ok: true; taskId: string; at: number } | { ok: false; error: string }> {
 		const task = this.tasks.get(id);
 		if (!task) return { ok: false, error: `Task not found: ${id}` };
-		if (this.running.has(id)) return { ok: false, error: `Task ${id} is already running` };
+		// Use a fresh in-memory copy so sessionTarget / concurrencyPolicy /
+		// timeoutMinutes patches take effect on this run.
+		const fresh = { ...task, updatedAt: this.now() };
 		const at = this.now();
 		// Fire-and-forget — actual completion is signaled via events.
-		void this.fireTask(task, at, /*manual*/ true);
+		void this.fireTask(fresh, at, /*manual*/ true);
 		return { ok: true, taskId: id, at };
 	}
 
@@ -392,70 +504,122 @@ export class SchedulerEngine {
 		this.timers.set(task.id, timer);
 	}
 
+	/**
+	 * Run a task now (or at its scheduled fire time). The session-lock
+	 * machinery guarantees that no two tasks run in the same target session
+	 * concurrently, and the policy on the task decides what to do when
+	 * the session is busy: skip / queue / preempt.
+	 *
+	 * Returns synchronously; the dispatch promise runs in the background
+	 * and resolves when the agent turn completes (or errors / times out).
+	 */
 	private async fireTask(task: ScheduledTask, at: number, manual: boolean): Promise<void> {
-		if (this.running.has(task.id) || this.disposed) return;
-		this.running.add(task.id);
-		const startedAt = this.now();
+		if (this.disposed) return;
 		const current = this.tasks.get(task.id) ?? task;
-		let eventId: string | undefined;
-		let status: "ok" | "failed" | "skipped" = "ok";
-		let reason: string | undefined;
-		try {
-			// Emit the FIRED event BEFORE dispatching so the UI can immediately
-			// show the "⏰ 已触发" notice. Completion is signaled separately.
-			this.emit({ type: "task.fired", payload: { taskId: task.id, at } });
-			const result = await this.dispatcher.dispatch(current);
-			eventId = result.eventId;
-			if (result.error) {
-				status = "failed";
-				reason = result.error;
-			}
-		} catch (e) {
-			status = "failed";
-			reason = e instanceof Error ? e.message : String(e);
-		} finally {
-			this.running.delete(task.id);
-			const finishedAt = this.now();
+		const sessionId = this.resolveTargetSessionId(current);
+		const policy: ConcurrencyPolicy = current.concurrencyPolicy ?? "skip";
+
+		const result = this.locks.acquire(current, sessionId, policy);
+		if (result.kind === "skipped") {
+			// The session is busy and the policy says drop this tick. Record it
+			// and emit completion so the UI history reflects reality.
 			const run: ScheduledTaskRun = {
-				taskId: task.id,
+				taskId: current.id,
+				at,
+				status: "skipped",
+				reason: `session busy (held by ${result.holderTaskId})`,
+			};
+			appendRun(this.scope, this.workspaceId, run);
+			this.tasks.set(current.id, {
+				...current,
+				lastRunAt: at,
+				lastRunStatus: "skipped",
+				updatedAt: this.now(),
+				runCount: (current.runCount ?? 0) + 1,
+			});
+			this.persist();
+			this.emit({ type: "task.completed", payload: run });
+			// No nextRunAt change — a skipped tick is a no-op.
+			return;
+		}
+
+		if (result.kind === "queued") {
+			// The lock manager has enqueued us; it will call back via
+			// lock.release() → runQueuedTask() once the holder finishes.
+			return;
+		}
+
+		// result.kind === "acquired" — we hold the lock and get to dispatch.
+		const lockedSessionId = result.lockedSessionId;
+		this.emit({ type: "task.fired", payload: { taskId: current.id, at } });
+		this.running.add(current.id);
+		try {
+			const dispatchedTask = { ...current, updatedAt: this.now() };
+			const dispatched = await this.dispatcher.dispatch(dispatchedTask);
+			// Cache the session id the dispatcher used so subsequent
+			// SessionTarget: current tasks can reuse it.
+			if (dispatched.sessionId) this.currentSessionId = dispatched.sessionId;
+
+			const status: "ok" | "failed" = dispatched.error ? "failed" : "ok";
+			const reason = dispatched.error;
+
+			const run: ScheduledTaskRun = {
+				taskId: current.id,
 				at,
 				status,
-				eventId,
+				eventId: dispatched.eventId,
 				reason,
 			};
 			appendRun(this.scope, this.workspaceId, run);
-
-			// Update the task's lastRun fields.
-			const updated: ScheduledTask = {
+			this.tasks.set(current.id, {
 				...current,
 				lastRunAt: at,
 				lastRunStatus: status,
-				lastRunEventId: eventId,
+				lastRunEventId: dispatched.eventId,
 				runCount: (current.runCount ?? 0) + 1,
-				updatedAt: finishedAt,
-			};
-			this.tasks.set(task.id, updated);
+				updatedAt: this.now(),
+			});
 			this.persist();
-
 			this.emit({ type: "task.completed", payload: run });
 
-			// Re-arm if the task is still enabled and recurring.
+			const updated = this.tasks.get(current.id)!;
 			if (updated.enabled && !this.disposed) {
-				const stillValid = !updated.schedule.endAt || updated.schedule.endAt > finishedAt;
+				const stillValid = !updated.schedule.endAt || updated.schedule.endAt > this.now();
 				if (stillValid) this.scheduleOne(updated);
 				else if (manual === false) {
-					// Auto-disable after endAt so the list view reflects reality.
-					this.tasks.set(task.id, { ...updated, enabled: false });
+					this.tasks.set(updated.id, { ...updated, enabled: false });
 					this.persist();
 				}
 			}
-
-			// Sanity: startedAt should be ~ at. If we drifted, log a warning.
-			if (Math.abs(startedAt - at) > 5_000) {
-				console.warn(
-					`[scheduler] fire drift for ${task.id}: expected at ${at}, started at ${startedAt}`,
-				);
-			}
+		} catch (e) {
+			// Should not happen — dispatcher.dispatch itself is supposed to
+			// catch and return { error }. This is belt-and-suspenders.
+			const run: ScheduledTaskRun = {
+				taskId: current.id,
+				at,
+				status: "failed",
+				reason: e instanceof Error ? e.message : String(e),
+			};
+			appendRun(this.scope, this.workspaceId, run);
+			this.tasks.set(current.id, {
+				...current,
+				lastRunAt: at,
+				lastRunStatus: "failed",
+				updatedAt: this.now(),
+				runCount: (current.runCount ?? 0) + 1,
+			});
+			this.persist();
+			this.emit({ type: "task.completed", payload: run });
+		} finally {
+			this.running.delete(current.id);
+			// Release the lock. If something is queued, the manager will hand
+			// the lock off and call back via onDispatchNext, which kicks off
+			// the next fireTask in this same session.
+			this.locks.release(current.id, (next) => {
+				// Re-dispatch the queued task now. The lock manager has
+				// already acquired the lock on its behalf.
+				void this.fireTask(next, this.now(), /*manual*/ false);
+			});
 		}
 	}
 
