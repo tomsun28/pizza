@@ -1340,6 +1340,50 @@ pub async fn open_in_editor(cwd: String, file_path: String) -> Result<(), String
 	Ok(())
 }
 
+/// Reveal a file or directory in the system file manager (Finder on macOS,
+/// Explorer on Windows, etc.). When `sub_path` points to a file, the file's
+/// containing directory is opened with the file selected (macOS uses
+/// `open -R`); when it points to a directory, the directory itself is
+/// opened.
+#[tauri::command]
+pub async fn reveal_path(cwd: String, sub_path: String) -> Result<(), String> {
+	let full = resolve_workspace_path(&cwd, Some(&sub_path))?;
+	if !full.exists() {
+		return Err(format!("Path does not exist: {}", full.display()));
+	}
+
+	let path_str = full.to_string_lossy().to_string();
+
+	#[cfg(target_os = "macos")]
+	{
+		// `open -R <file>` reveals the file in Finder (selected). For a
+		// directory, fall back to `open <dir>` since `-R` requires an
+		// existing file.
+		if full.is_file() {
+			std::process::Command::new("open")
+				.arg("-R")
+				.arg(&path_str)
+				.spawn()
+				.map_err(|e| format!("Failed to reveal file: {e}"))?;
+			return Ok(());
+		}
+	}
+
+	#[cfg(target_os = "macos")]
+	let opener = "open";
+	#[cfg(target_os = "linux")]
+	let opener = "xdg-open";
+	#[cfg(target_os = "windows")]
+	let opener = "explorer";
+
+	std::process::Command::new(opener)
+		.arg(&path_str)
+		.spawn()
+		.map_err(|e| format!("Failed to open file manager: {e}"))?;
+
+	Ok(())
+}
+
 // --- File explorer (list_dir / read_file) ---
 
 /// Directories to skip when listing (to avoid huge / irrelevant trees).
