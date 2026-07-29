@@ -685,7 +685,7 @@ export async function createSessionFacade(
 		agentDir,
 		store,
 		sessionManager,
-		threadId: currentThreadId(),
+		threadId: currentThreadId,
 		toolRegistry: createToolRegistry(tools),
 		llmClient: llmClient as NonNullable<typeof llmClient>,
 		systemPrompt,

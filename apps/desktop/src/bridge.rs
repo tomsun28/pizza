@@ -266,7 +266,14 @@ pub fn kill_sidecar_for_window(state: &BridgeState, window_label: &str) {
 			active.values().any(|c| c == &cwd)
 		};
 		if !still_in_use {
-			kill_sidecar_for_cwd(state, &cwd);
+			if cwd_has_runnable_scheduled_tasks(&cwd) {
+				log_file(&format!(
+					"kill_sidecar_for_window: keeping scheduled sidecar for {}",
+					cwd
+				));
+			} else {
+				kill_sidecar_for_cwd(state, &cwd);
+			}
 		}
 	}
 }
@@ -313,6 +320,360 @@ fn broadcast_to_all_sidecars(state: &BridgeState, command_type: &str) {
 		"broadcast_to_all_sidecars: command={} sent_to={} failed={:?}",
 		command_type, sent, failed
 	));
+}
+
+fn home_dir() -> Option<PathBuf> {
+	std::env::var("HOME").ok().map(PathBuf::from)
+}
+
+fn normalize_path_for_compare(path: &str) -> String {
+	std::fs::canonicalize(path)
+		.unwrap_or_else(|_| PathBuf::from(path))
+		.to_string_lossy()
+		.replace('\\', "/")
+}
+
+fn persistent_chat_cwd() -> Option<String> {
+	home_dir().map(|home| {
+		home.join(".pizza")
+			.join("main")
+			.to_string_lossy()
+			.to_string()
+	})
+}
+
+fn is_persistent_chat_cwd(cwd: &str) -> bool {
+	persistent_chat_cwd()
+		.map(|main| normalize_path_for_compare(cwd) == normalize_path_for_compare(&main))
+		.unwrap_or(false)
+}
+
+fn workspace_meta_root() -> Option<PathBuf> {
+	home_dir().map(|home| home.join(".pizza").join("agent").join("workspaces"))
+}
+
+fn scheduler_tasks_path_for_workspace(workspace_id: &str) -> Option<PathBuf> {
+	home_dir().map(|home| {
+		home.join(".pizza")
+			.join("workspaces")
+			.join(workspace_id)
+			.join("scheduler")
+			.join("tasks.json")
+	})
+}
+
+fn scheduler_tasks_path_for_cwd(cwd: &str) -> Option<PathBuf> {
+	if is_persistent_chat_cwd(cwd) {
+		return home_dir().map(|home| {
+			home.join(".pizza")
+				.join("main")
+				.join("scheduler")
+				.join("tasks.json")
+		});
+	}
+	let target = normalize_path_for_compare(cwd);
+	let root = workspace_meta_root()?;
+	let entries = std::fs::read_dir(root).ok()?;
+	for entry in entries.flatten() {
+		let meta_path = entry.path().join("meta.json");
+		let raw = match std::fs::read_to_string(meta_path) {
+			Ok(raw) => raw,
+			Err(_) => continue,
+		};
+		let meta: Value = match serde_json::from_str(&raw) {
+			Ok(meta) => meta,
+			Err(_) => continue,
+		};
+		let Some(meta_cwd) = meta.get("cwd").and_then(|v| v.as_str()) else {
+			continue;
+		};
+		if normalize_path_for_compare(meta_cwd) != target {
+			continue;
+		}
+		let Some(workspace_id) = meta.get("workspace_id").and_then(|v| v.as_str()) else {
+			continue;
+		};
+		return scheduler_tasks_path_for_workspace(workspace_id);
+	}
+	None
+}
+
+fn task_target_is_supported(task: &Value) -> bool {
+	let target = match task.get("sessionTarget") {
+		Some(value) => value,
+		None => return false,
+	};
+	match target.get("kind").and_then(|v| v.as_str()) {
+		Some("new") => true,
+		Some("pinned") => target
+			.get("sessionId")
+			.and_then(|v| v.as_str())
+			.map(|s| !s.is_empty())
+			.unwrap_or(false),
+		_ => false,
+	}
+}
+
+fn tasks_file_has_runnable_enabled_task(path: &PathBuf) -> bool {
+	let raw = match std::fs::read_to_string(path) {
+		Ok(raw) => raw,
+		Err(_) => return false,
+	};
+	let parsed: Value = match serde_json::from_str(&raw) {
+		Ok(value) => value,
+		Err(_) => return false,
+	};
+	let tasks = parsed
+		.get("tasks")
+		.and_then(|v| v.as_array())
+		.or_else(|| parsed.as_array());
+	let Some(tasks) = tasks else {
+		return false;
+	};
+	tasks.iter().any(|task| {
+		task.get("enabled")
+			.and_then(|v| v.as_bool())
+			.unwrap_or(false)
+			&& task_target_is_supported(task)
+	})
+}
+
+fn cwd_has_runnable_scheduled_tasks(cwd: &str) -> bool {
+	scheduler_tasks_path_for_cwd(cwd)
+		.map(|path| tasks_file_has_runnable_enabled_task(&path))
+		.unwrap_or(false)
+}
+
+fn scheduled_cwds_to_keep_alive() -> Vec<String> {
+	let mut out = Vec::new();
+	if let Some(main_cwd) = persistent_chat_cwd() {
+		if cwd_has_runnable_scheduled_tasks(&main_cwd) {
+			out.push(main_cwd);
+		}
+	}
+	let Some(root) = workspace_meta_root() else {
+		return out;
+	};
+	let entries = match std::fs::read_dir(root) {
+		Ok(entries) => entries,
+		Err(_) => return out,
+	};
+	for entry in entries.flatten() {
+		let meta_path = entry.path().join("meta.json");
+		let raw = match std::fs::read_to_string(meta_path) {
+			Ok(raw) => raw,
+			Err(_) => continue,
+		};
+		let meta: Value = match serde_json::from_str(&raw) {
+			Ok(meta) => meta,
+			Err(_) => continue,
+		};
+		let Some(cwd) = meta.get("cwd").and_then(|v| v.as_str()) else {
+			continue;
+		};
+		let Some(workspace_id) = meta.get("workspace_id").and_then(|v| v.as_str()) else {
+			continue;
+		};
+		let Some(tasks_path) = scheduler_tasks_path_for_workspace(workspace_id) else {
+			continue;
+		};
+		if tasks_file_has_runnable_enabled_task(&tasks_path)
+			&& !out.iter().any(|existing| {
+				normalize_path_for_compare(existing) == normalize_path_for_compare(cwd)
+			}) {
+			out.push(cwd.to_string());
+		}
+	}
+	out
+}
+
+fn write_rpc_line(sidecar: &mut SidecarEntry, value: Value) -> Result<(), String> {
+	let line = serde_json::to_string(&value).map_err(|e| e.to_string())?;
+	sidecar
+		.stdin
+		.write_all(line.as_bytes())
+		.map_err(|e| format!("write: {e}"))?;
+	sidecar
+		.stdin
+		.write_all(b"\n")
+		.map_err(|e| format!("write nl: {e}"))?;
+	sidecar.stdin.flush().map_err(|e| format!("flush: {e}"))?;
+	Ok(())
+}
+
+fn spawn_background_sidecar(
+	app: AppHandle,
+	state: &BridgeState,
+	cwd: String,
+) -> Result<(), String> {
+	if !std::path::Path::new(&cwd).is_dir() {
+		return Err(format!("Directory does not exist: {}", cwd));
+	}
+	{
+		let mut sidecars = state.sidecars.lock().unwrap();
+		if let Some(sidecar) = sidecars.get_mut(&cwd) {
+			let _ = write_rpc_line(
+				sidecar,
+				serde_json::json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "get_state" }),
+			);
+			return Ok(());
+		}
+	}
+
+	let (program, mut args) = resolve_pizza_command(&app);
+	if is_persistent_chat_cwd(&cwd) {
+		args.push("--main".to_string());
+	}
+	let mut cmd = Command::new(&program);
+	cmd.args(&args);
+	cmd.current_dir(&cwd);
+	cmd.stdin(Stdio::piped());
+	cmd.stdout(Stdio::piped());
+	cmd.stderr(Stdio::piped());
+	cmd.env("PATH", resolve_shell_path());
+	log_file(&format!(
+		"scheduler_guard: spawning {} {:?} cwd={}",
+		program, args, cwd
+	));
+	let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn: {e}"))?;
+	let stdin = child.stdin.take().ok_or("no stdin")?;
+	let stdout = child.stdout.take().ok_or("no stdout")?;
+	let stderr = child.stderr.take().ok_or("no stderr")?;
+	let pid = child.id();
+
+	let stderr_cwd = cwd.clone();
+	thread::spawn(move || {
+		let mut reader = BufReader::new(stderr);
+		let mut bytes = Vec::new();
+		let _ = reader.read_to_end(&mut bytes);
+		let text = String::from_utf8_lossy(&bytes).trim().to_string();
+		if !text.is_empty() {
+			log_file(&format!(
+				"scheduler_guard stderr [cwd={}]: {}",
+				stderr_cwd, text
+			));
+		}
+	});
+
+	{
+		let mut sidecars = state.sidecars.lock().unwrap();
+		sidecars.insert(cwd.clone(), SidecarEntry { child, stdin });
+		if let Some(sidecar) = sidecars.get_mut(&cwd) {
+			let _ = write_rpc_line(
+				sidecar,
+				serde_json::json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "get_state" }),
+			);
+		}
+	}
+
+	let reader_cwd = cwd.clone();
+	std::thread::spawn(move || {
+		log_file(&format!(
+			"reader thread: started for scheduler cwd={}",
+			reader_cwd
+		));
+		let reader = BufReader::new(stdout);
+		for line in reader.lines() {
+			match line {
+				Ok(line) => {
+					let trimmed = line.trim();
+					if trimmed.is_empty() || !trimmed.starts_with('{') {
+						continue;
+					}
+					let mut parsed: Value = match serde_json::from_str(trimmed) {
+						Ok(v) => v,
+						Err(_) => continue,
+					};
+					log_file(&format!("sidecar stdout [cwd={}]: {}", reader_cwd, trimmed));
+					let app_ref = &app;
+					let active = app_ref.state::<BridgeState>();
+					let active_map = active.active.lock().unwrap();
+					let etype = parsed
+						.get("type")
+						.and_then(|t| t.as_str())
+						.unwrap_or("")
+						.to_string();
+					if etype == "response" {
+						if let Some(obj) = parsed.as_object_mut() {
+							obj.insert("_cwd".to_string(), Value::String(reader_cwd.clone()));
+						}
+					}
+					for (label, _ac_cwd) in active_map.iter() {
+						if let Some(win) = app_ref.get_webview_window(label) {
+							let mut tagged = parsed.clone();
+							if let Some(obj) = tagged.as_object_mut() {
+								obj.insert("_cwd".to_string(), Value::String(reader_cwd.clone()));
+							}
+							match etype.as_str() {
+								"response" => {
+									let _ = win.emit("rpc_response", tagged);
+								}
+								"extension_ui_request" => {
+									let _ = win.emit("extension_ui_request", tagged);
+								}
+								_ => {
+									let _ = win.emit("rpc_event", tagged);
+								}
+							}
+						}
+					}
+				}
+				Err(e) => {
+					log_file(&format!("reader error [cwd={}]: {e}", reader_cwd));
+					break;
+				}
+			}
+		}
+		log_file(&format!(
+			"reader thread: EOF for scheduler cwd={}",
+			reader_cwd
+		));
+		let state = app.state::<BridgeState>();
+		let mut sidecars = state.sidecars.lock().unwrap();
+		if let Some(mut entry) = sidecars.remove(&reader_cwd) {
+			drop(entry.stdin);
+			let _ = entry.child.wait();
+			log_file(&format!(
+				"reader thread: reaped scheduler sidecar pid={:?} cwd={}",
+				pid, reader_cwd
+			));
+		}
+	});
+
+	log_file(&format!(
+		"scheduler_guard: started sidecar pid={:?} cwd={}",
+		pid, cwd
+	));
+	Ok(())
+}
+
+pub fn start_scheduler_sidecar_guard(app: AppHandle) {
+	thread::spawn(move || loop {
+		let cwds = scheduled_cwds_to_keep_alive();
+		for cwd in cwds {
+			if let Some(main_cwd) = persistent_chat_cwd() {
+				if normalize_path_for_compare(&cwd) == normalize_path_for_compare(&main_cwd) {
+					continue;
+				}
+			}
+			let already_running = {
+				let state = app.state::<BridgeState>();
+				let sidecars = state.sidecars.lock().unwrap();
+				sidecars.contains_key(&cwd)
+			};
+			if already_running {
+				continue;
+			}
+			let state = app.state::<BridgeState>();
+			if let Err(e) = spawn_background_sidecar(app.clone(), state.inner(), cwd.clone()) {
+				log_file(&format!(
+					"scheduler_guard: failed to start cwd={}: {}",
+					cwd, e
+				));
+			}
+		}
+		thread::sleep(Duration::from_secs(15));
+	});
 }
 
 /// One-shot init: spawns sidecar for the calling window, sends get_state. Returns state JSON.

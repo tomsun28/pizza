@@ -109,10 +109,11 @@ export interface ScheduledTask {
 	sourceText?: string;
 	/**
 	 * Which session the task runs in at each fire time.
-	 *   - { kind: "current" }   → dispatch into the sidecar's current active session
-	 *   - { kind: "new", purpose } → each fire creates a fresh session whose first
-	 *                               user message is the task prompt
-	 * Optional for backwards compat: missing falls back to { kind: "current" }.
+	 *   - { kind: "pinned", sessionId } → dispatch into the saved logical session
+	 *   - { kind: "new", purpose }      → each fire creates a fresh session whose
+	 *                                     first user message is the task prompt
+	 * Optional only for backwards compat; legacy missing/current targets require
+	 * the user to edit the task and choose one of the supported targets.
 	 */
 	sessionTarget?: SessionTarget;
 	/**
@@ -132,6 +133,8 @@ export interface ScheduledTask {
  * Where a task runs when it fires.
  */
 export type SessionTarget =
+	| { kind: "pinned"; sessionId?: string; label?: string }
+	/** @deprecated kept only so old tasks can be migrated through the UI. */
 	| { kind: "current" }
 	| { kind: "new"; purpose: string };
 
@@ -165,6 +168,8 @@ export interface ScheduledTaskRun {
 	status: "ok" | "failed" | "skipped";
 	/** Event id of the produced USER_MESSAGE (if any). */
 	eventId?: string;
+	/** Session id that received the scheduled prompt (if known). */
+	sessionId?: string;
 	/** Optional error / skip reason. */
 	reason?: string;
 }
@@ -242,7 +247,7 @@ export type RpcCommand =
 	// Session
 	| { id?: string; type: "get_session_stats" }
 	| { id?: string; type: "export_html"; outputPath?: string }
-	| { id?: string; type: "switch_session"; sessionPath: string }
+	| { id?: string; type: "switch_session"; sessionPath: string; reason?: string }
 	| { id?: string; type: "fork"; entryId: string }
 	| { id?: string; type: "clone" }
 	| { id?: string; type: "get_fork_messages" }
@@ -257,6 +262,7 @@ export type RpcCommand =
 	// History tree / event forensics (web docks)
 	| { id?: string; type: "history_tree"; action: "list"; query?: string }
 	| { id?: string; type: "history_tree"; action: "view"; sessionId: string; maxMessages?: number }
+	| { id?: string; type: "history_tree"; action: "switch"; sessionId: string; reason?: string }
 	| { id?: string; type: "history_tree"; action: "jump"; sessionId: string; reason?: string }
 	| { id?: string; type: "history_tree"; action: "fork"; sessionId: string }
 	| { id?: string; type: "history_tree"; action: "rename"; sessionId: string; name: string }
@@ -276,6 +282,8 @@ export type RpcCommand =
 	// desktop bridge edits auth.json out-of-band, so a model switch picks up the
 	// new key instead of the stale in-memory cache or an env-var fallback).
 	| { id?: string; type: "reload_providers" }
+	| { id?: string; type: "get_scheduler_policy" }
+	| { id?: string; type: "set_scheduler_policy"; policy: SchedulerPolicy }
 
 	// Scheduled tasks
 	| { id?: string; type: "schedule_list"; scope: "main" | "workspace"; workspaceId?: string }
@@ -379,6 +387,7 @@ export interface RpcSessionState {
 	isCompacting: boolean;
 	sessionFile?: string;
 	sessionId: string;
+	threadId?: string;
 	autoCompactionEnabled: boolean;
 	messageCount: number;
 	pendingMessageCount: number;
@@ -452,7 +461,7 @@ export type RpcResponse =
 	// Session
 	| { id?: string; type: "response"; command: "get_session_stats"; success: true; data: unknown }
 	| { id?: string; type: "response"; command: "export_html"; success: true; data: { path: string } }
-	| { id?: string; type: "response"; command: "switch_session"; success: true; data: { cancelled: boolean } }
+	| { id?: string; type: "response"; command: "switch_session"; success: true; data: { cancelled: boolean; sessionId?: string } }
 	| { id?: string; type: "response"; command: "fork"; success: true; data: { text: string; cancelled: boolean } }
 	| { id?: string; type: "response"; command: "clone"; success: true; data: { cancelled: boolean } }
 	| { id?: string; type: "response"; command: "get_fork_messages"; success: true; data: { messages: Array<{ entryId: string; text: string }> } }
@@ -478,6 +487,8 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "install_extension"; success: true; data: { extensionId: string; ok: boolean; message: string; installed: boolean } }
 	| { id?: string; type: "response"; command: "uninstall_extension"; success: true; data: { extensionId: string; ok: boolean; message: string; installed: boolean } }
 	| { id?: string; type: "response"; command: "reload_providers"; success: true; data: { providers: string[] } }
+	| { id?: string; type: "response"; command: "get_scheduler_policy"; success: true; data: { policy: SchedulerPolicy } }
+	| { id?: string; type: "response"; command: "set_scheduler_policy"; success: true; data: { policy: SchedulerPolicy } }
 
 	// Scheduled tasks
 	| { id?: string; type: "response"; command: "schedule_list"; success: true; data: { tasks: ScheduledTaskSummary[] } }
@@ -507,6 +518,7 @@ export interface RpcHistoryTreeNode {
 	child_count: number;
 	is_active: boolean;
 	closed: boolean;
+	has_active_continuation?: boolean;
 	snippet?: string;
 	/** Event id the branch was forked at (present when it has a parent). */
 	fork_at_event_id?: string;
@@ -524,6 +536,7 @@ export interface RpcHistorySessionView {
 export type RpcHistoryTreeResult =
 	| { action: "list"; nodes: RpcHistoryTreeNode[] }
 	| { action: "view"; view: RpcHistorySessionView | null }
+	| { action: "switch"; session_id: string }
 	| { action: "jump"; session_id: string; reopened: boolean }
 	| { action: "fork"; session_id: string }
 	| { action: "rename"; ok: boolean };

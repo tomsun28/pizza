@@ -135,6 +135,44 @@ describe("SessionLockManager — preempt policy", () => {
 	});
 });
 
+describe("SessionLockManager — reassign (lock-key migration)", () => {
+	it("moves a holder from one session key to another", () => {
+		const m = new SessionLockManager();
+		m.acquire(makeTask({ id: "t1" }), "pending:t1", "skip");
+		expect(m.inspect("pending:t1").holder).toBe("t1");
+		m.reassign("pending:t1", "ws_real123");
+		expect(m.inspect("pending:t1").holder).toBeNull();
+		expect(m.inspect("ws_real123").holder).toBe("t1");
+		expect(m.holderOf("ws_real123")).toBe("t1");
+	});
+
+	it("no-op when old and new session ids are the same", () => {
+		const m = new SessionLockManager();
+		m.acquire(makeTask({ id: "t1" }), "pending:t1", "skip");
+		m.reassign("pending:t1", "pending:t1");
+		expect(m.inspect("pending:t1").holder).toBe("t1");
+	});
+
+	it("no-op when the old session id has no holder", () => {
+		const m = new SessionLockManager();
+		m.reassign("nonexistent", "ws_abc");
+		expect(m.inspect("ws_abc").holder).toBeNull();
+	});
+
+	it("reassigns queued tasks too", () => {
+		const m = new SessionLockManager();
+		m.acquire(makeTask({ id: "a" }), "pending:a", "queue");
+		m.acquire(makeTask({ id: "b" }), "pending:a", "queue");
+		m.acquire(makeTask({ id: "c" }), "pending:a", "queue");
+		expect(m.inspect("pending:a").queueLength).toBe(2);
+		m.reassign("pending:a", "ws_xyz");
+		expect(m.inspect("pending:a").queueLength).toBe(0);
+		expect(m.inspect("ws_xyz").queueLength).toBe(2);
+	});
+
+
+});
+
 describe("SessionLockManager — dispose", () => {
 	it("clears all holders and queues", () => {
 		const m = new SessionLockManager();

@@ -19,6 +19,29 @@ function blockToDataUrl(block: Record<string, unknown>): string | null {
 	return `data:${mime};base64,${data}`;
 }
 
+function isInternalContinuationSessionEvent(event: TypedEvent): boolean {
+	const payload = event.payload as Record<string, unknown> | undefined;
+	return Boolean(
+		payload?.background === true ||
+		(typeof payload?.context_parent_session_id === "string" && payload.context_parent_session_id),
+	);
+}
+
+const CHAT_RENDER_EVENT_TYPES = new Set<string>([
+	"USER_MESSAGE",
+	"USER_FOLLOWUP_QUEUED",
+	"AGENT_MESSAGE_START",
+	"AGENT_MESSAGE_CHUNK",
+	"AGENT_MESSAGE_END",
+	"AGENT_TURN_COMPLETED",
+	"INTENT_TOOL_CALL",
+	"TOOL_EXECUTION_START",
+	"TOOL_EXECUTION_UPDATE",
+	"TOOL_EXECUTION_END",
+	"SESSION_BOUNDARY_INFERRED",
+	"SCHEDULED_TASK_FIRED",
+]);
+
 /** Extract image data URLs from a message payload (content blocks + images array). */
 function messageImages(message: unknown): string[] {
 	if (!message || typeof message !== "object") return [];
@@ -195,7 +218,9 @@ export default function ChatView({
 	const seenIdsByWs = useRef<Map<string, Set<string>>>(new Map());
 	const activeAssistantByWs = useRef<Map<string, string | null>>(new Map());
 	const itemsRef = useRef<TimelineItem[]>([]);
+	const stateRef = useRef<RpcSessionState | null>(state);
 	itemsRef.current = items;
+	stateRef.current = state;
 	const prevWsRef = useRef<string | null>(null);
 
 	// Keep latest t in a ref so closures created in effects can read it
@@ -235,12 +260,13 @@ export default function ChatView({
 				const messages = (data?.messages as Array<Record<string, unknown>> | undefined) ?? [];
 				const history = buildTimelineFromMessages(messages, tRef.current);
 				if (!cancelled) setItems(history);
+				onRefreshState?.();
 			} catch {
 				// Silently ignore — the empty state will show.
 			}
 		})();
 		return () => { cancelled = true; };
-	}, [workspace]);
+	}, [workspace, onRefreshState]);
 
 	// Save/restore conversation on workspace switch.
 	useEffect(() => {
@@ -298,6 +324,32 @@ export default function ChatView({
 		const eventCwd = event._cwd ?? "";
 		const currentWs = workspace ?? "";
 		const isForCurrent = eventCwd === currentWs;
+		const activeState = stateRef.current;
+		const eventSessionId = typeof (event as unknown as { session_id?: unknown }).session_id === "string"
+			? (event as unknown as { session_id: string }).session_id
+			: undefined;
+		const eventThreadId = typeof event.thread_id === "string" ? event.thread_id : undefined;
+		const payloadSessionId = typeof (event.payload as Record<string, unknown> | undefined)?.sessionId === "string"
+			? (event.payload as Record<string, unknown>).sessionId as string
+			: undefined;
+		const isRenderEvent = CHAT_RENDER_EVENT_TYPES.has(event.type);
+		const isScheduledCompletionForCurrent =
+			event.type === "SCHEDULED_TASK_COMPLETED" &&
+			payloadSessionId === activeState?.sessionId;
+		const isScheduledFiredForCurrent =
+			event.type === "SCHEDULED_TASK_FIRED" &&
+			payloadSessionId === activeState?.sessionId;
+		const belongsToCurrentSession =
+			!isRenderEvent ||
+			isScheduledCompletionForCurrent ||
+			isScheduledFiredForCurrent ||
+			(eventSessionId && eventSessionId === activeState?.sessionId) ||
+			(payloadSessionId && payloadSessionId === activeState?.sessionId) ||
+			(!eventSessionId && eventThreadId && eventThreadId === activeState?.threadId) ||
+			(!eventSessionId && !eventThreadId && event.type !== "SCHEDULED_TASK_FIRED");
+		if (isForCurrent && !belongsToCurrentSession) {
+			return;
+		}
 
 		// Determine which seenIds and activeAssistant to use.
 		const seenRef = isForCurrent ? seenIdsRef : { current: seenIdsByWs.current.get(eventCwd) ?? new Set<string>() };
@@ -472,6 +524,7 @@ export default function ChatView({
 					// Render a non-intrusive system notice in the timeline so the user
 					// can see "your scheduled task just fired" inline. The follow-up
 					// USER_MESSAGE will arrive as a regular event right after.
+					if (!isForCurrent) break;
 					const payload = event.payload as Record<string, unknown> | undefined;
 					const taskId = (payload?.taskId as string) ?? "";
 					const firedAt = typeof payload?.at === "number" ? (payload.at as number) : Date.now();
@@ -486,6 +539,12 @@ export default function ChatView({
 							timestamp: firedAt,
 						},
 					]);
+					break;
+				}
+				case "SCHEDULED_TASK_COMPLETED": {
+					if (isScheduledCompletionForCurrent) {
+						reloadForSessionSwitch();
+					}
 					break;
 				}
 				case "AGENT_TURN_COMPLETED": {
@@ -617,6 +676,7 @@ export default function ChatView({
 			case "SESSION_CREATED":
 			case "SESSION_FORKED":
 			case "SESSION_JUMPED": {
+				if (isInternalContinuationSessionEvent(event)) break;
 				// The active session changed (user started a new session,
 				// jumped/forked from the BranchTreeExplorer, or replayed
 				// from the Timeline). Our current items belong to the OLD

@@ -136,6 +136,39 @@ export class SessionLockManager {
 		return this.holders.get(sessionId)?.taskId ?? null;
 	}
 
+	/**
+	 * Re-key an existing lock from `oldSessionId` to `newSessionId`. Used by
+	 * the engine to migrate the placeholder lock acquired for
+	 * SessionTarget: "new" tasks (which initially uses a `pending:${taskId}`
+	 * key) to the real session id the dispatcher reports back. This way,
+	 * two "new" tasks fired into different sessions don't falsely share
+	 * the same lock key, and a "new" task + a "current" task targeting
+	 * the same session DO block each other.
+	 *
+	 * If the new key is ALREADY held by a different task, we do nothing
+	 * (do not clobber). The caller should treat that as "another task beat
+	 * me to this session; the original lock will resolve itself".
+	 */
+	reassign(oldSessionId: string, newSessionId: string): void {
+		if (oldSessionId === newSessionId) return;
+		const h = this.holders.get(oldSessionId);
+		if (!h) return;
+		if (this.holders.has(newSessionId)) {
+			// Target session already held by another task. Don't overwrite.
+			return;
+		}
+		this.holders.delete(oldSessionId);
+		this.holders.set(newSessionId, h);
+		this.byTaskId.set(h.taskId, newSessionId);
+		// Migrate the queue too: any tasks queued behind this one for the
+		// same session should be re-keyed.
+		const q = this.queues.get(oldSessionId);
+		if (q && q.length > 0) {
+			this.queues.set(newSessionId, q);
+			this.queues.delete(oldSessionId);
+		}
+	}
+
 	/** Clear everything (used on dispose). */
 	dispose(): void {
 		for (const h of this.holders.values()) {

@@ -12,6 +12,8 @@
 
 import { describe, expect, it } from "vitest";
 import { SqliteEventStore } from "../src/core/event-store/sqlite-store.js";
+import type { EventAppendInput, EventQuery, EventStore, SubscribeOptions } from "../src/core/event-store/store.js";
+import type { EventBase } from "../src/core/event-store/types.js";
 import { SessionManager as ProjectionSessionManager } from "../src/core/projection/session-manager.js";
 import { buildHistoryTreeNodes, renderHistoryTreeText, buildSessionBreadcrumb } from "../src/core/projection/history-tree.js";
 import { EventStoreExtensionSessionManager } from "../src/core/extensions/session-context.js";
@@ -22,6 +24,80 @@ function makeStore(): { store: SqliteEventStore; sessionManager: ProjectionSessi
 	const store = new SqliteEventStore("test-ws", ":memory:");
 	const sessionManager = new ProjectionSessionManager(store, store);
 	return { store, sessionManager };
+}
+
+class MemoryEventStore implements EventStore {
+	readonly workspace_id = "test-ws";
+	private events: EventBase[] = [];
+	private subscribers: Array<{ handler: (event: EventBase) => void; options?: SubscribeOptions }> = [];
+
+	append(input: EventAppendInput): EventBase {
+		const event: EventBase = {
+			...input,
+			sequence: this.events.length + 1,
+			event_id: input.event_id ?? `evt_${String(this.events.length + 1).padStart(4, "0")}`,
+			workspace_id: this.workspace_id,
+			runtime_id: input.runtime_id ?? "test-runtime",
+			timestamp: input.timestamp ?? Date.now(),
+			schema_version: input.schema_version ?? 1,
+		};
+		this.events.push(event);
+		for (const subscriber of this.subscribers) {
+			if (!subscriber.options?.types?.length || subscriber.options.types.includes(event.type)) {
+				subscriber.handler(event);
+			}
+		}
+		return event;
+	}
+
+	appendBatch(events: EventAppendInput[]): EventBase[] {
+		return events.map((event) => this.append(event));
+	}
+
+	query(filter: EventQuery = {}): EventBase[] {
+		let result = this.events.filter((event) => {
+			if (filter.after && event.event_id <= filter.after) return false;
+			if (filter.before && event.event_id >= filter.before) return false;
+			if (filter.after_sequence !== undefined && event.sequence <= filter.after_sequence) return false;
+			if (filter.before_sequence !== undefined && event.sequence >= filter.before_sequence) return false;
+			if (filter.types?.length && !filter.types.includes(event.type)) return false;
+			if (filter.actor_ids?.length && !filter.actor_ids.includes(event.actor_id)) return false;
+			if (filter.thread_id && event.thread_id !== filter.thread_id) return false;
+			return true;
+		});
+		if (filter.reverse) result = [...result].reverse();
+		return filter.limit === undefined ? result : result.slice(0, filter.limit);
+	}
+
+	get(event_id: string): EventBase | undefined {
+		return this.events.find((event) => event.event_id === event_id);
+	}
+
+	latest(count: number): EventBase[] {
+		return this.events.slice(-count);
+	}
+
+	getCausalChain(event_id: string): EventBase[] {
+		const chain: EventBase[] = [];
+		let current = this.get(event_id);
+		while (current) {
+			chain.unshift(current);
+			current = current.caused_by ? this.get(current.caused_by) : undefined;
+		}
+		return chain;
+	}
+
+	subscribe(handler: (event: EventBase) => void, options?: SubscribeOptions): () => void {
+		const subscriber = { handler, options };
+		this.subscribers.push(subscriber);
+		return () => {
+			this.subscribers = this.subscribers.filter((entry) => entry !== subscriber);
+		};
+	}
+
+	get size(): number { return this.events.length; }
+	get head(): string | undefined { return this.events.at(-1)?.event_id; }
+	get head_sequence(): number { return this.events.at(-1)?.sequence ?? 0; }
 }
 
 function makeExtManager(
@@ -126,6 +202,39 @@ describe("history_tree", () => {
 			expect(() => sessionManager.jumpToSession("sess_missing")).toThrow("Session not found");
 			sessionManager.dispose();
 			store.close();
+		});
+	});
+
+	describe("SessionManager.resolveSwitchTargetSession", () => {
+		it("reuses a hidden open continuation when switching a visible historical session", () => {
+			const store = new MemoryEventStore();
+			const sessionManager = new ProjectionSessionManager(store);
+			const first = sessionManager.getActiveSession().getDescriptor();
+			store.append({ actor_id: "user", type: "USER_MESSAGE", payload: { content: "fixed target work" } });
+
+			const second = sessionManager.createSession("user_explicit", "second");
+			sessionManager.switchToExistingSession(first.session_id, "view historical session");
+			const continuation = sessionManager.ensureActiveSessionWritable("scheduled task")!;
+			expect(continuation.session_id).not.toBe(first.session_id);
+			expect(continuation.context_parent_session_id).toBe(first.session_id);
+
+			sessionManager.switchToExistingSession(second.session_id, "look elsewhere");
+			const resolved = sessionManager.resolveSwitchTargetSession(first.session_id);
+			expect(resolved.session_id).toBe(continuation.session_id);
+
+			const switched = sessionManager.switchToExistingSession(resolved.session_id, "history tree switch");
+			expect(switched.session_id).toBe(continuation.session_id);
+			expect(sessionManager.getActiveSessionId()).toBe(continuation.session_id);
+
+			const nodes = buildHistoryTreeNodes(
+				sessionManager.listSessions(),
+				sessionManager.getActiveSessionId(),
+				store,
+			);
+			expect(nodes.some((node) => node.session_id === continuation.session_id)).toBe(false);
+			expect(nodes.find((node) => node.session_id === first.session_id)?.is_active).toBe(true);
+
+			sessionManager.dispose();
 		});
 	});
 

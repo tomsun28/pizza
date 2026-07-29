@@ -18,6 +18,8 @@ import { EventSourcedRuntime } from "../src/core/runtime/runtime.js";
 import { SqliteEventStore } from "../src/core/event-store/sqlite-store.js";
 import { IntentClassifier } from "../src/core/intent/classifier.js";
 import { Reactor } from "../src/core/runtime/reactor.js";
+import { SessionManager } from "../src/core/projection/session-manager.js";
+import { buildSessionBreadcrumb } from "../src/core/projection/history-tree.js";
 import type { LLMClient, LLMResponse } from "../src/core/runtime/llm-types.js";
 import type { ToolExecutor, ToolRegistry } from "../src/core/intent/types.js";
 import type { ContentBlock } from "../src/core/event-store/types.js";
@@ -137,6 +139,54 @@ describe("Reactor (event-driven core)", () => {
 
 		const completed = runtime.store.query({ types: ["AGENT_TURN_COMPLETED"] })[0];
 		expect((completed.payload as { reason: string }).reason).toBe("stop");
+
+		runtime.dispose();
+	});
+
+	it("refreshes the session breadcrumb before prompting after an out-of-band session switch", async () => {
+		const cwd = makeTempDir();
+		const store = new SqliteEventStore(`runtime-refresh-${Date.now()}`, join(cwd, "events.sqlite"));
+		const sessionManager = new SessionManager(store, store);
+		const root = sessionManager.createSession("user_explicit", "old root");
+		const stale = sessionManager.createSession("fork", "old branch", { parentSessionId: root.session_id });
+		const basePrompt = "test system";
+		const stalePrompt = `${basePrompt}\n${buildSessionBreadcrumb(sessionManager.listSessions(), stale.session_id)}`;
+		let capturedPrompt = "";
+		const client: LLMClient = {
+			async complete(request): Promise<LLMResponse> {
+				capturedPrompt = request.systemPrompt ?? "";
+				return {
+					content: [{ type: "text", text: "done" } as ContentBlock],
+					provider: "test",
+					model: "test",
+					usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, cost: 0 },
+					stopReason: "stop",
+				};
+			},
+		};
+		const runtime = new EventSourcedRuntime({
+			cwd,
+			agentDir: cwd,
+			store,
+			sessionManager,
+			toolRegistry: makeRegistry(),
+			llmClient: client,
+			systemPrompt: stalePrompt,
+			model: { provider: "test", model_id: "test" },
+			tools: [],
+			refreshSystemPrompt: () => {
+				const breadcrumb = buildSessionBreadcrumb(sessionManager.listSessions(), sessionManager.getActiveSessionId());
+				return breadcrumb ? `${basePrompt}\n${breadcrumb}` : basePrompt;
+			},
+		});
+
+		const fresh = sessionManager.createSession("user_explicit", "fresh root");
+		await runtime.prompt("what did I ask in this session?");
+
+		expect(fresh.parent_session_id).toBeUndefined();
+		expect(fresh.context_parent_session_id).toBeUndefined();
+		expect(capturedPrompt).toBe(basePrompt);
+		expect(capturedPrompt).not.toContain(stale.session_id);
 
 		runtime.dispose();
 	});

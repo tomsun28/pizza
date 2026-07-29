@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { ArrowLeft, Calendar, Pencil, Play, Plus, RefreshCw } from "lucide-react";
+import { ArrowLeft, Calendar, Pencil, Play, Plus, RefreshCw, Trash2 } from "lucide-react";
 import type { ScheduledTaskSummary } from "@/lib/types";
 import {
 	deleteScheduledTask,
@@ -12,7 +12,7 @@ import {
 	subscribeEvents,
 	updateScheduledTask,
 } from "@/lib/transport";
-import { Badge, Button, EmptyState, ErrorBanner, PageHeader, Spinner } from "@/components/ui";
+import { Badge, Button, EmptyState, ErrorBanner, Modal, PageHeader, Spinner } from "@/components/ui";
 import {
 	DeleteTaskButton,
 	ScheduleDialog,
@@ -25,6 +25,16 @@ import { specToCronText } from "@/lib/schedule-preview";
 import { cn } from "@/lib/utils";
 
 type Scope = "main" | "workspace";
+
+function taskNeedsSessionMigration(task: ScheduledTaskSummary): boolean {
+	return !task.sessionTarget || task.sessionTarget.kind === "current" || (task.sessionTarget.kind === "pinned" && !task.sessionTarget.sessionId);
+}
+
+function describeSessionTarget(task: ScheduledTaskSummary, t: ReturnType<typeof useTranslation>["t"]): string {
+	if (taskNeedsSessionMigration(task)) return t("schedule.sessionNeedsMigration");
+	if (task.sessionTarget?.kind === "new") return t("schedule.sessionNew");
+	return t("schedule.sessionPinned");
+}
 
 export default function SchedulesView({
 	scope,
@@ -41,6 +51,8 @@ export default function SchedulesView({
 	const [selectedId, setSelectedId] = useState<string | null>(null);
 	const [dialogOpen, setDialogOpen] = useState(false);
 	const [editingTask, setEditingTask] = useState<ScheduledTaskSummary | null>(null);
+	const [pendingDeleteTask, setPendingDeleteTask] = useState<ScheduledTaskSummary | null>(null);
+	const [deletingId, setDeletingId] = useState<string | null>(null);
 	const [history, setHistory] = useState<Awaited<ReturnType<typeof getScheduledTaskHistory>>>([]);
 
 	const refresh = useCallback(async () => {
@@ -130,8 +142,14 @@ export default function SchedulesView({
 		setEditingTask(null);
 	};
 
-	const handleDelete = async (task: ScheduledTaskSummary) => {
-		if (!confirm(t("schedule.confirmDelete", { name: task.name }))) return;
+	const requestDelete = (task: ScheduledTaskSummary) => {
+		setPendingDeleteTask(task);
+	};
+
+	const confirmDelete = async () => {
+		const task = pendingDeleteTask;
+		if (!task) return;
+		setDeletingId(task.id);
 		try {
 			await deleteScheduledTask(task.id, scope, workspaceId);
 			setTasks((prev) => prev.filter((t) => t.id !== task.id));
@@ -139,8 +157,11 @@ export default function SchedulesView({
 				const remaining = tasks.filter((t) => t.id !== task.id);
 				setSelectedId(remaining[0]?.id ?? null);
 			}
+			setPendingDeleteTask(null);
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
+		} finally {
+			setDeletingId(null);
 		}
 	};
 
@@ -258,7 +279,7 @@ export default function SchedulesView({
 								setEditingTask(selected);
 								setDialogOpen(true);
 							}}
-							onDelete={() => handleDelete(selected)}
+							onDelete={() => requestDelete(selected)}
 							onToggleEnabled={() => handleToggleEnabled(selected)}
 							onRunNow={() => handleRunNow(selected)}
 						/>
@@ -281,6 +302,38 @@ export default function SchedulesView({
 				existing={editingTask}
 				onSaved={handleSaved}
 			/>
+
+			<Modal
+				open={!!pendingDeleteTask}
+				onClose={() => {
+					if (!deletingId) setPendingDeleteTask(null);
+				}}
+				title={t("schedule.confirmDeleteTitle")}
+				footer={
+					<div className="flex justify-end gap-2">
+						<Button
+							tone="neutral"
+							variant="ghost"
+							onClick={() => setPendingDeleteTask(null)}
+							disabled={!!deletingId}
+						>
+							{t("schedule.cancel")}
+						</Button>
+						<Button
+							tone="danger"
+							iconLeft={<Trash2 className="h-3.5 w-3.5" />}
+							onClick={confirmDelete}
+							loading={!!deletingId}
+						>
+							{t("schedule.delete")}
+						</Button>
+					</div>
+				}
+			>
+				<p className="text-sm text-fg">
+					{t("schedule.confirmDeleteDescription", { name: pendingDeleteTask?.name ?? "" })}
+				</p>
+			</Modal>
 		</div>
 	);
 }
@@ -316,10 +369,8 @@ function TaskListItem({
 				{describeSchedule(task)}
 			</div>
 			<div className="mt-0.5 flex flex-wrap items-center gap-1 truncate text-[10px] text-muted">
-				<span>
-					{!task.sessionTarget || task.sessionTarget.kind === "current"
-						? t("schedule.sessionCurrent")
-						: t("schedule.sessionNew")}
+					<span>
+					{describeSessionTarget(task, t)}
 				</span>
 				<span>·</span>
 				<span>{t(`schedule.policy_${task.concurrencyPolicy ?? "skip"}`)}</span>
@@ -354,11 +405,12 @@ function TaskDetail({
 }) {
 	const { t } = useTranslation();
 	const cron = specToCronText(task.schedule);
+	const needsMigration = taskNeedsSessionMigration(task);
 	return (
 		<div className="rounded-xl border border-border bg-surface p-4">
 			<div className="flex items-start justify-between gap-2">
-				<div className="min-w-0 flex-1">
-					<h3 className="truncate text-base font-medium text-fg">{task.name}</h3>
+					<div className="min-w-0 flex-1">
+						<h3 className="truncate text-base font-medium text-fg">{task.name}</h3>
 					<div className="mt-0.5 text-xs text-muted">
 						{t("schedule.createdBy")}: {task.createdBy === "intent" ? t("schedule.createdByIntent") : t("schedule.createdByUser")}
 						{task.runCount !== undefined && task.runCount > 0 && (
@@ -367,25 +419,26 @@ function TaskDetail({
 								{t("schedule.runCount", { count: task.runCount })}
 							</>
 						)}
+						</div>
 					</div>
-				</div>
-				<div className="flex items-center gap-1">
-					<Button tone="accent" size="sm" iconLeft={<Play className="h-3.5 w-3.5" />} onClick={onRunNow}>
-						{t("schedule.runNow")}
-					</Button>
-					<Button tone="neutral" variant="ghost" size="sm" iconLeft={<Pencil className="h-3.5 w-3.5" />} onClick={onEdit}>
-						{t("schedule.edit")}
-					</Button>
+					<div className="flex items-center gap-1">
+						<Button tone="accent" size="sm" iconLeft={<Play className="h-3.5 w-3.5" />} onClick={onRunNow} disabled={needsMigration}>
+							{t("schedule.runNow")}
+						</Button>
+						<Button tone="neutral" variant="ghost" size="sm" iconLeft={<Pencil className="h-3.5 w-3.5" />} onClick={onEdit}>
+							{t("schedule.edit")}
+						</Button>
 					<DeleteTaskButton onClick={onDelete} />
 				</div>
 			</div>
 
-			<div className="mt-3 grid grid-cols-2 gap-3 text-xs">
-				<Field2 label={t("schedule.mode")} value={t(`schedule.modes.${task.schedule.mode}`)} />
-				<Field2 label={t("schedule.nextRun")} value={formatNextRun(task.nextRunAt)} />
-				<Field2
-					label={t("schedule.time")}
-					value={formatTimes(task.schedule.times)}
+				<div className="mt-3 grid grid-cols-2 gap-3 text-xs">
+					<Field2 label={t("schedule.mode")} value={t(`schedule.modes.${task.schedule.mode}`)} />
+					<Field2 label={t("schedule.nextRun")} value={formatNextRun(task.nextRunAt)} />
+					<Field2 label={t("schedule.sessionTargetShort")} value={describeSessionTarget(task, t)} />
+					<Field2
+						label={t("schedule.time")}
+						value={formatTimes(task.schedule.times)}
 				/>
 				{task.schedule.mode === "weekly" && (
 					<Field2
@@ -426,12 +479,18 @@ function TaskDetail({
 
 			{cron && (
 				<div className="mt-3 rounded-md border border-border bg-surface-2 px-3 py-2 text-xs">
-					<span className="text-muted">{t("schedule.cronEquivalent")}: </span>
-					<span className="font-mono text-fg">{cron}</span>
-				</div>
-			)}
+						<span className="text-muted">{t("schedule.cronEquivalent")}: </span>
+						<span className="font-mono text-fg">{cron}</span>
+					</div>
+				)}
 
-			<div className="mt-3">
+				{needsMigration && (
+					<div className="mt-3 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger">
+						{t("schedule.sessionNeedsMigrationHint")}
+					</div>
+				)}
+
+				<div className="mt-3">
 				<div className="mb-1 text-xs text-muted">{t("schedule.taskContent")}</div>
 				<div className="whitespace-pre-wrap rounded-md border border-border bg-surface-2 px-3 py-2 text-sm text-fg">
 					{task.prompt}

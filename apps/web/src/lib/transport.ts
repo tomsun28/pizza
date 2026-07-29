@@ -8,6 +8,7 @@
 
 import type {
 	WorkspaceMeta,
+	RpcSessionState,
 	RpcHistoryTreeNode,
 	RpcHistorySessionView,
 	RpcForensicEvent,
@@ -157,6 +158,11 @@ export async function initSidecar(cwd?: string): Promise<Record<string, unknown>
 	}
 }
 
+export async function getSessionState(timeoutMs = 5000): Promise<RpcSessionState | null> {
+	const r = await sendCommandAwait<RpcSessionState>({ type: "get_state" }, timeoutMs);
+	return r.data ?? null;
+}
+
 // --- New workspace (Tauri only) ---
 
 export async function newWorkspace(): Promise<void> {
@@ -184,6 +190,11 @@ export async function historyTreeList(query?: string): Promise<RpcHistoryTreeNod
 export async function historyTreeView(sessionId: string, maxMessages?: number): Promise<RpcHistorySessionView | null> {
 	const r = await sendCommandAwait<{ action: "view"; view: RpcHistorySessionView | null }>({ type: "history_tree", action: "view", sessionId, maxMessages });
 	return r.data?.view ?? null;
+}
+
+export async function historyTreeSwitch(sessionId: string, reason?: string): Promise<{ session_id: string }> {
+	const r = await sendCommandAwait<{ action: "switch"; session_id: string }>({ type: "history_tree", action: "switch", sessionId, reason });
+	return { session_id: r.data?.session_id ?? sessionId };
 }
 
 export async function historyTreeJump(sessionId: string, reason?: string): Promise<{ session_id: string; reopened: boolean }> {
@@ -558,6 +569,25 @@ export async function reloadScheduledTasks(): Promise<number> {
 	return r.data?.reloaded ?? 0;
 }
 
+
+
+// --- Scheduler policy (per-scope defaults) -----------------------------
+
+export async function getSchedulerPolicy(): Promise<import("./types.js").SchedulerPolicy> {
+	const r = await sendCommandAwait<{ policy: import("./types.js").SchedulerPolicy }>(
+		{ type: "get_scheduler_policy" },
+		5000,
+	);
+	return r.data?.policy ?? { concurrency: "skip", timeoutMinutes: 0, defaultSessionTarget: { kind: "pinned" } };
+}
+
+export async function setSchedulerPolicy(policy: import("./types.js").SchedulerPolicy): Promise<import("./types.js").SchedulerPolicy> {
+	const r = await sendCommandAwait<{ policy: import("./types.js").SchedulerPolicy }>(
+		{ type: "set_scheduler_policy", policy },
+		5000,
+	);
+	return r.data?.policy ?? policy;
+}
 export async function getScheduledTaskHistory(
 	taskId: string,
 	scope: "main" | "workspace",

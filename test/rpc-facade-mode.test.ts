@@ -280,6 +280,112 @@ describe("runRpcModeWithFacade", () => {
 		facade.dispose();
 	});
 
+	it("keeps pinned scheduled tasks on the resolved continuation instead of the visible session", async () => {
+		const facade = createFacade();
+		void runRpcModeWithFacade(facade);
+		await vi.waitFor(() => expect(rpcIo.lineHandler).toBeDefined());
+
+		const manager = facade.runtime.sessionManager!;
+		const sessionA = manager.getActiveSessionId()!;
+		const workspaceId = facade.getProjection().getDescriptor().workspace_id;
+
+		rpcIo.outputLines = [];
+		rpcIo.lineHandler!(JSON.stringify({ id: "new-b", type: "new_session" }));
+		await vi.waitFor(() => {
+			expect(parseOutputLines()).toContainEqual(
+				expect.objectContaining({
+					id: "new-b",
+					type: "response",
+					command: "new_session",
+					success: true,
+				}),
+			);
+		});
+		const sessionB = manager.getActiveSessionId()!;
+		expect(sessionB).not.toBe(sessionA);
+
+		rpcIo.outputLines = [];
+		rpcIo.lineHandler!(JSON.stringify({
+			id: "create-fixed",
+			type: "schedule_create",
+			task: {
+				name: "fixed A",
+				prompt: "scheduled ping",
+				scope: "workspace",
+				workspaceId,
+				schedule: { mode: "every_n_minutes", everyN: { n: 60, unit: "minute" } },
+				enabled: false,
+				sessionTarget: { kind: "pinned", sessionId: sessionA },
+				concurrencyPolicy: "skip",
+				timeoutMinutes: 0,
+			},
+		}));
+		let taskId = "";
+		await vi.waitFor(() => {
+			const createResponse = parseOutputLines().find((record) => record.id === "create-fixed" && record.command === "schedule_create");
+			expect(createResponse).toEqual(expect.objectContaining({ success: true }));
+			const data = createResponse?.data as { task?: { id?: string } } | undefined;
+			taskId = data?.task?.id ?? "";
+			expect(taskId).toMatch(/^st_/);
+		});
+
+		rpcIo.outputLines = [];
+		rpcIo.lineHandler!(JSON.stringify({
+			id: "run-fixed",
+			type: "schedule_run_now",
+			scope: "workspace",
+			workspaceId,
+			taskId,
+		}));
+		await vi.waitFor(() => {
+			expect(parseOutputLines()).toContainEqual(
+				expect.objectContaining({
+					id: "run-fixed",
+					type: "response",
+					command: "schedule_run_now",
+					success: true,
+				}),
+			);
+		});
+
+		rpcIo.outputLines = [];
+		await vi.waitFor(() => {
+			rpcIo.lineHandler!(JSON.stringify({
+				id: "list-fixed",
+				type: "schedule_list",
+				scope: "workspace",
+				workspaceId,
+			}));
+			const listResponse = parseOutputLines().find((record) => record.id === "list-fixed" && record.command === "schedule_list");
+			const tasks = (listResponse?.data as { tasks?: Array<{ id: string; runCount?: number; sessionTarget?: { kind: string; sessionId?: string } }> } | undefined)?.tasks ?? [];
+			const task = tasks.find((candidate) => candidate.id === taskId);
+			expect(task?.runCount).toBe(1);
+			expect(task?.sessionTarget).toEqual({ kind: "pinned", sessionId: expect.any(String) });
+			expect(task?.sessionTarget?.sessionId).not.toBe(sessionA);
+			expect(task?.sessionTarget?.sessionId).not.toBe(sessionB);
+		});
+
+		rpcIo.outputLines = [];
+		rpcIo.lineHandler!(JSON.stringify({
+			id: "hist-fixed",
+			type: "schedule_history",
+			scope: "workspace",
+			workspaceId,
+			taskId,
+		}));
+		await vi.waitFor(() => {
+			const historyResponse = parseOutputLines().find((record) => record.id === "hist-fixed" && record.command === "schedule_history");
+			const runs = (historyResponse?.data as { runs?: Array<{ status: string; sessionId?: string }> } | undefined)?.runs ?? [];
+			expect(runs[0]?.status).toBe("ok");
+			expect(runs[0]?.sessionId).toBeDefined();
+			expect(runs[0]?.sessionId).not.toBe(sessionA);
+			expect(runs[0]?.sessionId).not.toBe(sessionB);
+		});
+
+		expect(manager.getActiveSessionId()).toBe(sessionB);
+		facade.dispose();
+	});
+
 	it("cycles models through the facade model registry", async () => {
 		const models = [
 			{ provider: "test", id: "test-model", name: "Test Model" },

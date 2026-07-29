@@ -198,7 +198,15 @@ function AppInner() {
 				// turn starts (isStreaming → true) or completes (isStreaming → false).
 				// Skip intermediate AGENT_TURN_END/REQUESTED during multi-tool turns
 				// to avoid flooding get_state requests that time out.
-				if (typed.type === "MODEL_CHANGED" || typed.type === "THINKING_LEVEL_CHANGED" || typed.type === "AGENT_TURN_COMPLETED" || typed.type === "AGENT_TURN_START") {
+				if (
+					typed.type === "MODEL_CHANGED" ||
+					typed.type === "THINKING_LEVEL_CHANGED" ||
+					typed.type === "AGENT_TURN_COMPLETED" ||
+					typed.type === "AGENT_TURN_START" ||
+					typed.type === "SESSION_CREATED" ||
+					typed.type === "SESSION_FORKED" ||
+					typed.type === "SESSION_JUMPED"
+				) {
 					void sendCommandAwait<RpcSessionState>({ type: "get_state" }, 5000)
 						.then((r) => setState(r.data ?? null))
 						.catch(() => {});

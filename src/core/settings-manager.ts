@@ -4,6 +4,7 @@ import { homedir } from "os";
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.js";
+import type { SchedulerPolicy } from "@pizza/protocol";
 
 export interface CompactionSettings {
 	enabled?: boolean; // default: true
@@ -93,6 +94,7 @@ export interface Settings {
 	doubleEscapeAction?: "fork" | "tree" | "none"; // Action for double-escape with empty editor (default: "tree")
 	treeFilterMode?: "default" | "no-tools" | "user-only" | "labeled-only" | "all"; // Default filter when opening /tree
 	thinkingBudgets?: ThinkingBudgetsSettings; // Custom token budgets for thinking levels
+	scheduler?: SchedulerPolicy; // Defaults applied to newly-created scheduled tasks
 	editorPaddingX?: number; // Horizontal padding for input editor (default: 0)
 	autocompleteMaxVisible?: number; // Max visible items in autocomplete dropdown (default: 5)
 	showHardwareCursor?: boolean; // Show terminal cursor while still positioning it for IME
@@ -670,6 +672,25 @@ export class SettingsManager {
 	setSafeMode(enabled: boolean): void {
 		this.globalSettings.safeMode = enabled;
 		this.markModified("safeMode");
+		this.save();
+	}
+
+	/**
+	 * Scheduler defaults applied to newly-created scheduled tasks. Tasks
+	 * can still override per-task; this is the fallback when a task does
+	 * not specify concurrencyPolicy / timeoutMinutes / sessionTarget.
+	 */
+	getSchedulerPolicy(): SchedulerPolicy {
+		return this.globalSettings.scheduler ?? {
+			concurrency: "skip",
+			timeoutMinutes: 0,
+			defaultSessionTarget: { kind: "pinned" },
+		};
+	}
+
+	setSchedulerPolicy(policy: SchedulerPolicy): void {
+		this.globalSettings.scheduler = policy;
+		this.markModified("scheduler");
 		this.save();
 	}
 

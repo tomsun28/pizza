@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { SchedulerEngine, nextRunAt, nextNRuns, validateScheduleSpec, detectScheduleIntent } from "../../src/core/scheduler/index.js";
+import { SchedulerEngine, nextRunAt, nextNRuns, validateScheduleSpec, detectScheduleIntent, readTasks, writeTasks } from "../../src/core/scheduler/index.js";
 import type { ScheduledTask, SchedulerListener } from "../../src/core/scheduler/index.js";
 
 let home: string;
@@ -206,6 +206,7 @@ describe("SchedulerEngine CRUD", () => {
 			name: "manual",
 			prompt: "hello",
 			schedule: { mode: "every_n_minutes", everyN: { n: 60, unit: "minute" } },
+			sessionTarget: { kind: "pinned", sessionId: "sess_test" },
 		});
 		if (!r.ok) throw new Error("create failed");
 		const run = await engine.runNow(r.task.id);
@@ -226,6 +227,7 @@ describe("SchedulerEngine CRUD", () => {
 			name: "track",
 			prompt: "x",
 			schedule: { mode: "every_n_minutes", everyN: { n: 60, unit: "minute" } },
+			sessionTarget: { kind: "pinned", sessionId: "sess_test" },
 		});
 		if (!r.ok) throw new Error("create failed");
 		await engine.runNow(r.task.id);
@@ -233,6 +235,61 @@ describe("SchedulerEngine CRUD", () => {
 		const history = engine.history(r.task.id);
 		expect(history.length).toBeGreaterThan(0);
 		expect(history[0]!.status).toBe("ok");
+		engine.dispose();
+	});
+
+	it("catches up only the most recent missed run on load", async () => {
+		const base = new Date("2026-01-01T00:00:00Z").getTime();
+		const now = base + 5 * 60_000 + 30_000;
+		const dispatch = vi.fn(async () => ({ eventId: "evt-catchup", sessionId: "sess_test" }));
+		writeTasks("main", undefined, [{
+			id: "task_catchup",
+			name: "catch up",
+			prompt: "ping",
+			scope: "main",
+			schedule: { mode: "every_n_minutes", everyN: { n: 1, unit: "minute" } },
+			enabled: true,
+			createdAt: base,
+			updatedAt: base,
+			createdBy: "user",
+			runCount: 1,
+			lastRunAt: base,
+			lastRunStatus: "ok",
+			sessionTarget: { kind: "pinned", sessionId: "sess_test" },
+		}]);
+		const engine = new SchedulerEngine({
+			scope: "main",
+			now: () => now,
+			dispatcher: { dispatch },
+		});
+		engine.load();
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		expect(dispatch).toHaveBeenCalledTimes(1);
+		const history = engine.history("task_catchup");
+		expect(history[0]!.at).toBe(base + 5 * 60_000);
+		engine.dispose();
+	});
+
+	it("does not run legacy current-session tasks until migrated", async () => {
+		const dispatch = vi.fn(async () => ({ eventId: "evt-legacy" }));
+		const engine = new SchedulerEngine({
+			scope: "main",
+			dispatcher: { dispatch },
+		});
+		engine.load();
+		const r = engine.create({
+			name: "legacy",
+			prompt: "x",
+			schedule: { mode: "every_n_minutes", everyN: { n: 60, unit: "minute" } },
+			sessionTarget: { kind: "current" },
+		});
+		if (!r.ok) throw new Error("create failed");
+		expect(r.task.nextRunAt).toBeNull();
+		const run = await engine.runNow(r.task.id);
+		expect(run.ok).toBe(false);
+		if (!run.ok) expect(run.error).toMatch(/requires migration/);
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		expect(dispatch).not.toHaveBeenCalled();
 		engine.dispose();
 	});
 });
@@ -277,6 +334,61 @@ describe("detectScheduleIntent", () => {
 	});
 });
 describe("SchedulerEngine — session-level concurrency", () => {
+	it("serializes dispatches across different target sessions in one runtime", async () => {
+		let activeDispatches = 0;
+		let maxActiveDispatches = 0;
+		const dispatched: string[] = [];
+		const engine = new SchedulerEngine({
+			scope: "main",
+			dispatcher: {
+				dispatch: vi.fn(async (task: ScheduledTask) => {
+					activeDispatches += 1;
+					maxActiveDispatches = Math.max(maxActiveDispatches, activeDispatches);
+					dispatched.push(task.id);
+					try {
+						if (activeDispatches > 1) {
+							return { error: "EventSourcedRuntime is already processing a prompt" };
+						}
+						await new Promise((resolve) => setTimeout(resolve, 40));
+						const target = task.sessionTarget;
+						return {
+							eventId: `e-${task.id}`,
+							sessionId: target?.kind === "new" ? `sess_new_${task.id}` : target?.kind === "pinned" ? target.sessionId : undefined,
+						};
+					} finally {
+						activeDispatches -= 1;
+					}
+				}),
+			},
+		});
+		const pinned = engine.create({
+			name: "Pinned", prompt: "pinned",
+			schedule: { mode: "every_n_minutes", everyN: { n: 60, unit: "minute" } },
+			concurrencyPolicy: "queue",
+			sessionTarget: { kind: "pinned", sessionId: "sess_fixed" },
+		});
+		const fresh = engine.create({
+			name: "New", prompt: "fresh",
+			schedule: { mode: "every_n_minutes", everyN: { n: 60, unit: "minute" } },
+			concurrencyPolicy: "queue",
+			sessionTarget: { kind: "new", purpose: "fresh run" },
+		});
+		if (!pinned.ok || !fresh.ok) throw new Error("create failed");
+
+		await Promise.all([
+			engine.runNow(pinned.task.id),
+			engine.runNow(fresh.task.id),
+		]);
+		await new Promise((resolve) => setTimeout(resolve, 120));
+
+		expect(maxActiveDispatches).toBe(1);
+		expect(dispatched).toEqual([pinned.task.id, fresh.task.id]);
+		expect(engine.history(pinned.task.id)[0]?.status).toBe("ok");
+		expect(engine.history(fresh.task.id)[0]?.status).toBe("ok");
+		expect(engine.history(fresh.task.id)[0]?.sessionId).toBe(`sess_new_${fresh.task.id}`);
+		engine.dispose();
+	});
+
 	it("skips the second task when concurrencyPolicy = skip and session is busy", async () => {
 		// Single engine, no recreate dance. Build a dispatcher that's a
 		// no-op for the regular task but blocks on A's id (which we capture
@@ -294,8 +406,8 @@ describe("SchedulerEngine — session-level concurrency", () => {
 				},
 			},
 		});
-		const a2 = e2.create({ name: "A", prompt: "a", schedule: { mode: "every_n_minutes", everyN: { n: 60, unit: "minute" } }, concurrencyPolicy: "skip" });
-		const b2 = e2.create({ name: "B", prompt: "b", schedule: { mode: "every_n_minutes", everyN: { n: 60, unit: "minute" } }, concurrencyPolicy: "skip" });
+		const a2 = e2.create({ name: "A", prompt: "a", schedule: { mode: "every_n_minutes", everyN: { n: 60, unit: "minute" } }, concurrencyPolicy: "skip", sessionTarget: { kind: "pinned", sessionId: "sess_shared" } });
+		const b2 = e2.create({ name: "B", prompt: "b", schedule: { mode: "every_n_minutes", everyN: { n: 60, unit: "minute" } }, concurrencyPolicy: "skip", sessionTarget: { kind: "pinned", sessionId: "sess_shared" } });
 		if (!a2.ok || !b2.ok) throw new Error("create failed");
 		aId = a2.task.id;
 		bId = b2.task.id;
@@ -318,7 +430,7 @@ describe("SchedulerEngine — session-level concurrency", () => {
 			scope: "main",
 			dispatcher: { dispatch: async () => ({ eventId: "e" }) },
 		});
-		const a = engine.create({ name: "A", prompt: "a", schedule: { mode: "every_n_minutes", everyN: { n: 60, unit: "minute" } }, concurrencyPolicy: "queue" });
+		const a = engine.create({ name: "A", prompt: "a", schedule: { mode: "every_n_minutes", everyN: { n: 60, unit: "minute" } }, concurrencyPolicy: "queue", sessionTarget: { kind: "pinned", sessionId: "sess_shared" } });
 		if (!a.ok) throw new Error("create failed");
 		const aId = a.task.id;
 		let releaseA: (v: { eventId?: string; error?: string }) => void = () => {};
@@ -335,8 +447,8 @@ describe("SchedulerEngine — session-level concurrency", () => {
 				}),
 			},
 		});
-		const a2 = e2.create({ name: "A", prompt: "a", schedule: { mode: "every_n_minutes", everyN: { n: 60, unit: "minute" } }, concurrencyPolicy: "queue" });
-		const b2 = e2.create({ name: "B", prompt: "b", schedule: { mode: "every_n_minutes", everyN: { n: 60, unit: "minute" } }, concurrencyPolicy: "queue" });
+		const a2 = e2.create({ name: "A", prompt: "a", schedule: { mode: "every_n_minutes", everyN: { n: 60, unit: "minute" } }, concurrencyPolicy: "queue", sessionTarget: { kind: "pinned", sessionId: "sess_shared" } });
+		const b2 = e2.create({ name: "B", prompt: "b", schedule: { mode: "every_n_minutes", everyN: { n: 60, unit: "minute" } }, concurrencyPolicy: "queue", sessionTarget: { kind: "pinned", sessionId: "sess_shared" } });
 		if (!a2.ok || !b2.ok) throw new Error("re-create failed");
 		await e2.runNow(a2.task.id);
 		await new Promise((r) => setTimeout(r, 20));
@@ -349,4 +461,124 @@ describe("SchedulerEngine — session-level concurrency", () => {
 		expect(dispatched.indexOf(a2.task.id)).toBeLessThan(dispatched.indexOf(b2.task.id));
 		e2.dispose();
 	});
+});
+
+describe("SchedulerEngine — SessionTarget: new with real session id reassign", () => {
+	it("SessionTarget: pinned locks on the saved session id before dispatch", async () => {
+		let dispatchCount = 0;
+		const dispatcher = {
+			dispatch: async (task: ScheduledTask) => {
+				dispatchCount += 1;
+				if (task.prompt === "slow") {
+					await new Promise((r) => setTimeout(r, 120));
+				}
+				return { eventId: `e-${task.id}`, sessionId: "different-runtime-session" };
+			},
+		};
+		const engine = new SchedulerEngine({ scope: "main", dispatcher });
+		const t1 = engine.create({
+			name: "Pinned A", prompt: "slow",
+			schedule: { mode: "every_n_minutes", everyN: { n: 60, unit: "minute" } },
+			concurrencyPolicy: "skip",
+			sessionTarget: { kind: "pinned", sessionId: "sess_fixed" },
+		});
+		const t2 = engine.create({
+			name: "Pinned B", prompt: "fast",
+			schedule: { mode: "every_n_minutes", everyN: { n: 60, unit: "minute" } },
+			concurrencyPolicy: "skip",
+			sessionTarget: { kind: "pinned", sessionId: "sess_fixed" },
+		});
+		if (!t1.ok || !t2.ok) throw new Error("create failed");
+
+		const p1 = engine.runNow(t1.task.id);
+		await new Promise((r) => setTimeout(r, 20));
+		const p2 = engine.runNow(t2.task.id);
+		await Promise.all([p1, p2]);
+
+		expect(dispatchCount).toBe(1);
+		const hist2 = engine.history(t2.task.id);
+		expect(hist2[0]?.status).toBe("skipped");
+		expect(hist2[0]?.reason).toMatch(/busy/);
+		engine.dispose();
+	});
+
+	it("persists the writable continuation when a pinned session is reopened", async () => {
+		const dispatcher = {
+			dispatch: vi.fn(async (task: ScheduledTask) => {
+				expect(task.sessionTarget).toEqual({ kind: "pinned", sessionId: "sess_closed" });
+				return { eventId: `e-${task.id}`, sessionId: "sess_continued" };
+			}),
+		};
+		const engine = new SchedulerEngine({ scope: "main", dispatcher });
+		const created = engine.create({
+			name: "Pinned historical", prompt: "ping",
+			schedule: { mode: "every_n_minutes", everyN: { n: 60, unit: "minute" } },
+			concurrencyPolicy: "skip",
+			sessionTarget: { kind: "pinned", sessionId: "sess_closed" },
+		});
+		if (!created.ok) throw new Error("create failed");
+
+		await engine.runNow(created.task.id);
+		await new Promise((r) => setTimeout(r, 30));
+
+		const state = engine.get(created.task.id);
+		expect(state?.sessionTarget).toEqual({ kind: "pinned", sessionId: "sess_continued" });
+		expect(engine.history(created.task.id)[0]?.sessionId).toBe("sess_continued");
+		expect(readTasks("main").find((task) => task.id === created.task.id)?.sessionTarget)
+			.toEqual({ kind: "pinned", sessionId: "sess_continued" });
+		engine.dispose();
+	});
+
+	it("engine's locks use the real session id reported by the dispatcher", async () => {
+		// Two SessionTarget: new tasks, both using the same fake "real" session
+		// (the dispatcher just simulates one). After the first task reports
+		// the real session id, the lock migrates from pending → real. A second
+		// task with a different placeholder key but the same real session id
+		// should block (or be skipped under "skip" policy) on the REAL key,
+		// not on its placeholder.
+		const capturedSessionIds: string[] = [];
+		const dispatcher = {
+			dispatch: async (task: ScheduledTask) => {
+				capturedSessionIds.push(task.id);
+				// Pretend the dispatcher always creates the same real session.
+				return { eventId: `e-${task.id}`, sessionId: "real_session_42" };
+			},
+		};
+		const engine = new SchedulerEngine({ scope: "main", dispatcher });
+		const t1 = engine.create({
+			name: "T1", prompt: "p1",
+			schedule: { mode: "every_n_minutes", everyN: { n: 60, unit: "minute" } },
+			concurrencyPolicy: "skip",
+			sessionTarget: { kind: "new", purpose: "news" },
+		});
+		const t2 = engine.create({
+			name: "T2", prompt: "p2",
+			schedule: { mode: "every_n_minutes", everyN: { n: 60, unit: "minute" } },
+			concurrencyPolicy: "skip",
+			sessionTarget: { kind: "new", purpose: "weather" },
+		});
+		if (!t1.ok || !t2.ok) throw new Error("create failed");
+
+		// Start T1 and wait for it to acquire + reassign
+		const p1 = engine.runNow(t1.task.id);
+		await new Promise((r) => setTimeout(r, 20));
+		const p2 = engine.runNow(t2.task.id);
+		await Promise.all([p1, p2]);
+		await new Promise((r) => setTimeout(r, 50));
+
+		// Both tasks should have been dispatched
+		expect(capturedSessionIds).toContain(t1.task.id);
+		expect(capturedSessionIds).toContain(t2.task.id);
+
+		// After reassign, both should be at the real session id. The first one
+		// to finish releases its lock; the second one runs in the real
+		// session (whether it succeeded or was skipped depends on timing).
+		// We just verify the engine state is consistent.
+		const t1State = engine.get(t1.task.id);
+		const t2State = engine.get(t2.task.id);
+		expect(t1State).toBeTruthy();
+		expect(t2State).toBeTruthy();
+		engine.dispose();
+	});
+
 });

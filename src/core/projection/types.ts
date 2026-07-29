@@ -30,6 +30,8 @@ export interface SessionDescriptor {
 	boundary_reason?: "intent_shift" | "file_drift" | "user_explicit";
 	/** Parent session (fork source) */
 	parent_session_id?: string;
+	/** Session whose closed history should be prepended when building context. */
+	context_parent_session_id?: string;
 	/** Creation timestamp */
 	created_at: number;
 }
@@ -85,4 +87,3 @@ export interface BuiltContext {
 	/** Session descriptor */
 	descriptor: SessionDescriptor;
 }
-
