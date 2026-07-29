@@ -11,11 +11,30 @@
  *
  * Whitespace outside quotes separates words.
  */
+
+export interface SplitShellWordsMeta {
+	/**
+	 * Number of quote *delimiter* characters the splitter consumed as quoting
+	 * (i.e. a " or ' that opened/closed a quoted region), as opposed to a
+	 * literal quote kept in the output. When a positional command argument is
+	 * reconstructed by joining several words AND quote delimiters were consumed,
+	 * the caller almost certainly meant the quote characters literally (e.g.
+	 * `secret("X", "Y")`) but the splitter treated them as quoting and silently
+	 * dropped them — that is the "quote stripping" corruption we detect.
+	 */
+	quoteDelimitersConsumed: number;
+}
+
 export function splitShellWords(input: string): string[] {
+	return splitShellWordsWithMeta(input).words;
+}
+
+export function splitShellWordsWithMeta(input: string): { words: string[]; meta: SplitShellWordsMeta } {
 	const words: string[] = [];
 	let current = "";
 	// Active quote context: undefined (unquoted), "'" (single), or '"' (double).
 	let quote: "'" | '"' | undefined;
+	let quoteDelimitersConsumed = 0;
 
 	// Inside double quotes a backslash only escapes these characters; before
 	// any other char the backslash itself is kept literally. (String.fromCharCode
@@ -30,6 +49,7 @@ export function splitShellWords(input: string): string[] {
 			// Single quote: everything is literal until the closing quote.
 			if (char === "'") {
 				quote = undefined;
+				quoteDelimitersConsumed++;
 			} else {
 				current += char;
 			}
@@ -43,6 +63,7 @@ export function splitShellWords(input: string): string[] {
 				i++;
 			} else if (char === '"') {
 				quote = undefined;
+				quoteDelimitersConsumed++;
 			} else {
 				current += char;
 			}
@@ -62,6 +83,7 @@ export function splitShellWords(input: string): string[] {
 		}
 		if (char === "'" || char === '"') {
 			quote = char;
+			quoteDelimitersConsumed++;
 			continue;
 		}
 		if (/\s/.test(char)) {
@@ -79,5 +101,5 @@ export function splitShellWords(input: string): string[] {
 	if (current.length > 0) {
 		words.push(current);
 	}
-	return words;
+	return { words, meta: { quoteDelimitersConsumed } };
 }

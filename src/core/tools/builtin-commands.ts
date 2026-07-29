@@ -21,7 +21,7 @@ import {
 } from "./edit-diff.js";
 import { annotateTextWithLineAnchors } from "./line-anchors.js";
 import { truncateHead } from "./truncate.js";
-import { splitShellWords } from "../shell-words.js";
+import { splitShellWords, splitShellWordsWithMeta } from "../shell-words.js";
 
 export interface BuiltinCommandResult {
 	stdout: string;
@@ -37,6 +37,14 @@ export interface ParsedBuiltinCommand {
 	command: string;
 	args: string[];
 	heredoc?: string;
+	/**
+	 * How many " / ' characters the shell-word splitter consumed as QUOTING
+	 * (rather than kept literally) while tokenizing `args`. Used to detect the
+	 * "quote stripping" footgun: when a positional value is reconstructed from
+	 * multiple words AND quotes were consumed, the caller almost certainly meant
+	 * the quote characters literally but they were silently dropped.
+	 */
+	quoteDelimitersConsumed?: number;
 }
 
 export type ParsedBuiltinToolInput =
@@ -111,12 +119,13 @@ export function parseBuiltinCommandWithHeredoc(input: string): ParsedBuiltinComm
 	}
 	
 	const [, prefix, , , content] = heredocMatch;
-	const parts = splitShellWords(prefix.trim());
-	
+	const { words: parts, meta } = splitShellWordsWithMeta(prefix.trim());
+
 	return {
 		command: parts[0],
 		args: parts.slice(1),
 		heredoc: content,
+		quoteDelimitersConsumed: meta.quoteDelimitersConsumed,
 	};
 }
 
@@ -125,17 +134,30 @@ export function parseBuiltinCommand(input: string): ParsedBuiltinCommand {
 	if (parsedHeredoc) {
 		return parsedHeredoc;
 	}
-	const parts = splitShellWords(input.trim());
+	const { words: parts, meta } = splitShellWordsWithMeta(input.trim());
 	return {
 		command: parts[0] ?? "",
 		args: parts.slice(1),
+		quoteDelimitersConsumed: meta.quoteDelimitersConsumed,
 	};
+}
+
+interface ParseBuiltinToolInputOptions {
+	/**
+	 * Quote-delimiter count from the shell-word splitter (see ParsedBuiltinCommand).
+	 * When set, edit/write reject a positional value that was reconstructed from
+	 * MULTIPLE words while quotes were consumed — that pattern silently strips the
+	 * quote characters the caller meant literally (the classic LLM footgun:
+	 * `secret("X", "Y")` → `secret(X, Y)`).
+	 */
+	quoteDelimitersConsumed?: number;
 }
 
 export function parseBuiltinToolInput(
 	command: string,
 	args: string[],
 	heredoc?: string,
+	options?: ParseBuiltinToolInputOptions,
 ): ParsedBuiltinToolInput | null {
 	const id = builtinTokenToId(command);
 	if (!id) return null;
@@ -143,9 +165,9 @@ export function parseBuiltinToolInput(
 		case "read":
 			return { command: "read", input: parseReadInput(args) };
 		case "write":
-			return { command: "write", input: parseWriteInput(args, heredoc) };
+			return { command: "write", input: parseWriteInput(args, heredoc, options) };
 		case "edit":
-			return { command: "edit", input: parseEditInput(args) };
+			return { command: "edit", input: parseEditInput(args, options) };
 		case "session_split":
 			return { command: "session_split", input: parseSessionSplitInput(args) };
 		case "history_tree":
@@ -154,6 +176,43 @@ export function parseBuiltinToolInput(
 			return { command: "delegate_agent", input: parseDelegateAgentInput(args, heredoc) };
 		default:
 			return null;
+	}
+}
+
+/**
+ * Detect the "positional value got its quotes silently stripped" corruption.
+ *
+ * The shell-word splitter treats `"` / `'` as QUOTING. So a positional argument
+ * written WITHOUT an enclosing pair of quotes — e.g. the `new` text
+ * `secret("SESSION_TOKEN", "dev")` — has its inner quotes consumed as quoting
+ * and dropped, and the surviving fragments get rejoined into a WRONG value.
+ *
+ * We can't know intent perfectly, but the reliable signature of this exact
+ * failure is: the positional value was reconstructed from MORE THAN ONE word,
+ * AND the splitter consumed at least one quote delimiter somewhere in the args.
+ * A correctly-quoted value (`"hello world"`) yields a single word, so this
+ * never fires on well-formed input.
+ *
+ * Throws a guided error so the caller retries with `--new`, `--edits` JSON,
+ * or a heredoc — all of which preserve quotes/whitespace verbatim.
+ */
+function assertPositionalValueNotQuoteStripped(
+	reconstructedFromWordCount: number,
+	quoteDelimitersConsumed: number | undefined,
+	kind: "new" | "content",
+): void {
+	if (reconstructedFromWordCount > 1 && (quoteDelimitersConsumed ?? 0) > 0) {
+		// Give a concrete, copy-pasteable rewrite so the caller doesn't have to
+		// re-derive the verbatim form (and risk the same escaping mistake again).
+		const fix = kind === "new"
+			? "_edit <path> --edits '[{\"op\":\"replace\",\"range\":\"<range>\",\"new\":\"<value with quotes kept as \\\">\"}]'  (or --new '<value>')"
+			: "_write <path> --content '<value>'  (or a <<EOF heredoc)";
+		throw new Error(
+			`edit/write: the positional ${kind} value looks quote-stripped — its inner " or ' were ` +
+				`treated as shell quoting and dropped (reconstructed from ${reconstructedFromWordCount} words). ` +
+				`Values with quotes/spaces/newlines are ambiguous in positional form. ` +
+				`Re-issue through a verbatim channel, e.g.:\n  ${fix}`,
+		);
 	}
 }
 
@@ -191,7 +250,11 @@ function parseReadInput(args: string[]): { path: string; offset?: number; limit?
 	return { path, offset, limit, anchors };
 }
 
-function parseWriteInput(args: string[], heredoc?: string): { path: string; content: string } {
+function parseWriteInput(
+	args: string[],
+	heredoc?: string,
+	options?: ParseBuiltinToolInputOptions,
+): { path: string; content: string } {
 	let path = "";
 	let content: string | undefined = heredoc;
 	const positionalContent: string[] = [];
@@ -210,6 +273,13 @@ function parseWriteInput(args: string[], heredoc?: string): { path: string; cont
 	}
 
 	if (content === undefined) {
+		// Positional content reconstructed from multiple words — guard against
+		// the quote-stripping footgun before joining.
+		assertPositionalValueNotQuoteStripped(
+			positionalContent.length,
+			options?.quoteDelimitersConsumed,
+			"content",
+		);
 		content = positionalContent.join(" ");
 	}
 
@@ -361,7 +431,10 @@ function parseDelegateAgentInput(args: string[], heredoc?: string): {
 	return { action, cwd, task, timeout };
 }
 
-function parseEditInput(args: string[]): { path: string; edits: Edit[] } {
+function parseEditInput(
+	args: string[],
+	options?: ParseBuiltinToolInputOptions,
+): { path: string; edits: Edit[] } {
 	let path = "";
 	let editsJson: string | undefined;
 	const edits: Edit[] = [];
@@ -411,6 +484,13 @@ function parseEditInput(args: string[]): { path: string; edits: Edit[] } {
 			edits.push(buildEditFromParts(op, range, newValue));
 		} else if (positional.length >= 2) {
 			const parsedOp = parseEditOp(positional[0] ?? "");
+			// The positional new value is the words after op+range/old, rejoined.
+			// Guard against quote-stripping before we join them.
+			assertPositionalValueNotQuoteStripped(
+				positional.slice(2).length,
+				options?.quoteDelimitersConsumed,
+				"new",
+			);
 			if (parsedOp === "search") {
 				edits.push(buildSearchEdit(positional[1], positional.slice(2).join(" ")));
 			} else {
@@ -534,7 +614,8 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"  content           Complete file content to write.",
 				"  --path, -p        Target file path.",
 				"  --content, -c     Complete file content to write.",
-				"  <<EOF             Heredoc form for multi-line content.",
+				"  <<EOF             Heredoc form for multi-line content (PREFER this or -c for any",
+				"                    value with quotes, multiple spaces, or newlines).",
 				"  -h, --help        Show this help.",
 				"",
 				"Examples:",
@@ -568,7 +649,9 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"  --range, -r       Line anchor or range from read output.",
 				"  --old, -o         Text to search for (only for op=search).",
 				"  --new, -n         New text for replace, insert, and search operations.",
-				"  --edits, -e       JSON array of edit objects.",
+				"  --edits, -e       JSON array of edit objects. PREFER this for any value that contains",
+				"                    quotes, multiple spaces, or newlines — positional `new` silently drops",
+				"                    unquoted inner \" or ' and is rejected when it looks stripped.",
 				"  -h, --help        Show this help.",
 				"",
 				"Examples:",
