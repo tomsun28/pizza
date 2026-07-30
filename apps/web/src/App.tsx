@@ -355,7 +355,6 @@ function AppInner() {
 						/>
 					} />
 					<Route path="*" element={<Navigate to="/" replace />} />
-						<Route path="*" element={<Navigate to="/" replace />} />
 					</Route>
 			</Routes>
 		</PxlKitSurfaceProvider>

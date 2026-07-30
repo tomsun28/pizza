@@ -52,6 +52,11 @@ describe("validateCron", () => {
 	});
 });
 
+	it("specToCron throws on an invalid cron expression", () => {
+		expect(() => specToCron({ mode: "cron", cron: { expression: "not a cron" } })).toThrow();
+		expect(() => specToCron({ mode: "cron", cron: { expression: "60 9 * * *" } })).toThrow();
+	});
+
 describe("specToCron ↔ cronToSpec round-trip", () => {
 	const cases = [
 		{ mode: "every_n_minutes" as const, everyN: { n: 15, unit: "minute" as const } },
@@ -108,10 +113,12 @@ describe("cronNextRun", () => {
 	});
 
 	it("returns null for impossible schedules (Feb 31)", () => {
-		const next = cronNextRun("0 0 31 2 *", NOW, { maxYearsAhead: 4 });
-		expect(next).not.toBeNull();
-		// Verify the resulting month is not February.
-		expect(new Date(next!).getUTCMonth()).not.toBe(1);
+		// Anchor `from` to a known UTC date so the test is timezone-deterministic
+		// regardless of where CI runs. `0 0 31 2 *` asks for Feb 31, which does
+		// not exist in any year, so cronNextRun must return null within the
+		// horizon we allow.
+		const next = cronNextRun("0 0 31 2 *", NOW, { maxYearsAhead: 4, tzOffsetMinutes: 0 });
+		expect(next).toBeNull();
 	});
 
 	it("honors weekday field", () => {
@@ -119,5 +126,27 @@ describe("cronNextRun", () => {
 		const wd = new Date(next!).getUTCDay();
 		expect(wd).toBeGreaterThanOrEqual(1);
 		expect(wd).toBeLessThanOrEqual(5);
+	});
+
+	it("applies Vixie DOM/DOW semantics: OR only when both are restricted", () => {
+		// `0 0 1 * 1` means "every Monday" because day-of-month is `*` — the
+		// unrestricted day field disables the OR rule and weekday alone decides.
+		// The next match from NOW (2026-01-01T12:00Z = Thursday) must therefore
+		// be the following Monday, not the 1st of the next month.
+		const next = cronNextRun("0 0 1 * 1", NOW, { tzOffsetMinutes: 0 });
+		expect(next).not.toBeNull();
+		const d = new Date(next!);
+		expect(d.getUTCDay()).toBe(1);
+		expect(d.getUTCDate()).not.toBe(1);
+	});
+
+	it("does not let * weekday override a restricted DOM", () => {
+		// `0 0 15 * *` = "day 15 of every month". Without proper Vixie semantics,
+		// `*` weekday would make the expression match every day, returning a
+		// value outside day 15.
+		const next = cronNextRun("0 0 15 * *", NOW, { maxYearsAhead: 2, tzOffsetMinutes: 0 });
+		expect(next).not.toBeNull();
+		const d = new Date(next!);
+		expect(d.getUTCDate()).toBe(15);
 	});
 });

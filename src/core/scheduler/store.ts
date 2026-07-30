@@ -18,8 +18,10 @@ import {
 	mkdirSync,
 	readFileSync,
 	renameSync,
+	unlinkSync,
 	writeFileSync,
 } from "node:fs";
+
 import { join } from "node:path";
 import type { ScheduledTask, ScheduledTaskRun } from "@pizza/protocol";
 
@@ -67,6 +69,20 @@ function atomicWriteJson(path: string, data: unknown): void {
 	const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
 	const json = JSON.stringify(data, null, 2);
 	writeFileSync(tmp, json, "utf-8");
+	// Best-effort cross-platform atomic replace: POSIX rename(2) replaces the
+	// target atomically, but historical Node versions on Windows would throw
+	// EEXIST when the target already exists. Unlink the stale target first
+	// when we know it exists so the rename below is a true replace on every
+	// supported platform. If the unlink fails we still attempt the rename so
+	// we don't introduce new failure modes on POSIX.
+	if (existsSync(path)) {
+		try {
+			unlinkSync(path);
+		} catch {
+			// Stale target may be locked or otherwise unremovable; renameSync
+			// below will surface the real error if the rename cannot proceed.
+		}
+	}
 	renameSync(tmp, path);
 }
 

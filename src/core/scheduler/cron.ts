@@ -17,9 +17,10 @@
  *   *\/n     every n (step)
  *   n-m/s    every s in [n, m]
  *
- * Day-of-month and day-of-week use OR semantics in standard cron — when both
- * are restricted, the trigger fires when EITHER matches. We preserve that
- * behavior in our parser.
+ * Day-of-month and day-of-week follow Vixie cron semantics: when both fields
+ * are restricted, the trigger fires when EITHER matches (OR); when one is `*`
+ * the other alone decides; when both are `*` every day matches. See
+ * `dayMatchesVixie` below.
  *
  * The parser is intentionally minimal (no L, W, #, ? extensions) so the
  * surface area stays small and predictable.
@@ -155,6 +156,24 @@ export function parseCron(expression: string): ParsedCron {
 }
 
 /**
+ * Vixie cron day-of-month / day-of-week semantics:
+ *   - both `*`                              → match every day
+ *   - day `*`, weekday restricted           → match by weekday only
+ *   - day restricted, weekday `*`           → match by day-of-month only
+ *   - both restricted                       → match if EITHER matches (OR)
+ *
+ * The plain "OR" rule in standard cron docs only applies to the last case;
+ * the first three are "AND with the unrestricted field disabled". Our
+ * parser already records `star` per field so we can dispatch on it here.
+ */
+function dayMatchesVixie(day: CronField, weekday: CronField, localDay: number, localWeekday: number): boolean {
+	if (day.star && weekday.star) return true;
+	if (day.star) return weekday.values.includes(localWeekday);
+	if (weekday.star) return day.values.includes(localDay);
+	return day.values.includes(localDay) || weekday.values.includes(localWeekday);
+}
+
+/**
  * Validate a cron expression without throwing. Returns null on success or
  * a human-readable error message on failure.
  */
@@ -174,7 +193,9 @@ export function validateCron(expression: string): string | null {
  * cron expression. Returns null if no match is found within `maxYearsAhead`.
  * Iterative: starts at `from` and advances at least one second per loop.
  *
- * Standard cron day/weekday semantics are OR (not AND), matching Vixie cron.
+ * Day-of-month / day-of-week use Vixie cron semantics (see `dayMatchesVixie`):
+ * when both fields are restricted, either matches; when one is `*` the other
+ * alone decides. Plain OR semantics (as in some cron libraries) are NOT used.
  */
 export function cronNextRun(
 	expression: string,
@@ -230,7 +251,7 @@ export function cronNextRun(
 				candidate = firstOfNextMonthUtc(candidate, tzOffsetMin);
 				continue;
 			}
-			if (!parsed.day.values.includes(localDay) && !parsed.weekday.values.includes(localWeekday)) {
+			if (!dayMatchesVixie(parsed.day, parsed.weekday, localDay, localWeekday)) {
 				// Skip to next midnight (local).
 				candidate = nextLocalMidnightUtc(candidate, tzOffsetMin);
 				continue;
@@ -240,7 +261,7 @@ export function cronNextRun(
 		if (
 			parsed.minute.values.includes(localMinute) &&
 			parsed.hour.values.includes(localHour) &&
-			(parsed.day.values.includes(localDay) || parsed.weekday.values.includes(localWeekday))
+			dayMatchesVixie(parsed.day, parsed.weekday, localDay, localWeekday)
 		) {
 			return candidate;
 		}
@@ -356,8 +377,10 @@ export function specToCron(spec: ScheduleSpec): string {
 		}
 		case "cron": {
 			if (!spec.cron?.expression) throw new Error("cron.expression is required");
-			// Re-validate to surface typos.
-			validateCron(spec.cron.expression);
+			// Re-validate to surface typos. validateCron() returns a non-null
+			// error message instead of throwing, so we must propagate it.
+			const err = validateCron(spec.cron.expression);
+			if (err) throw new Error(`invalid cron expression: ${err}`);
 			return spec.cron.expression;
 		}
 		default: {

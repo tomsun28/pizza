@@ -141,7 +141,7 @@ function nextForDateAnchored(
 
 export function nextRunsFromSpec(spec: ScheduleSpec, n: number, from: number = Date.now()): number[] {
 	const out: number[] = [];
-	let cursor = from;
+	let cursor = Math.max(from, spec.startAt ?? 0);
 	for (let i = 0; i < n; i++) {
 		let next: number | null = null;
 		switch (spec.mode) {
@@ -149,14 +149,16 @@ export function nextRunsFromSpec(spec: ScheduleSpec, n: number, from: number = D
 				const nMin = spec.everyN?.n ?? 1;
 				const interval = (spec.everyN?.unit === "hour" ? nMin * 60 : nMin) * 60_000;
 				const c = Math.ceil(cursor / interval) * interval;
-				next = c > cursor ? c : c + interval;
+				next = c >= cursor ? c : c + interval;
+				if (typeof spec.endAt === "number" && next > spec.endAt) next = null;
 				break;
 			}
 			case "every_n_hours": {
 				const nH = spec.everyN?.n ?? 1;
 				const interval = nH * 3600_000;
 				const c = Math.ceil(cursor / interval) * interval;
-				next = c > cursor ? c : c + interval;
+				next = c >= cursor ? c : c + interval;
+				if (typeof spec.endAt === "number" && next > spec.endAt) next = null;
 				break;
 			}
 			case "daily":

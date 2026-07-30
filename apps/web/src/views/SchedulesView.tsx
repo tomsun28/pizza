@@ -513,10 +513,10 @@ function TaskDetail({
 								<span
 									className={cn(
 										"inline-flex h-4 w-4 items-center justify-center rounded-full text-[10px]",
-										run.status === "ok" ? "bg-success/15 text-success" : "bg-danger/15 text-danger",
+										run.status === "ok" ? "bg-success/15 text-success" : run.status === "skipped" ? "bg-warning/15 text-warning" : "bg-danger/15 text-danger",
 									)}
 								>
-									{run.status === "ok" ? "✓" : "✗"}
+								{run.status === "ok" ? "✓" : run.status === "skipped" ? "↷" : "✗"}
 								</span>
 								<span className="text-fg">{new Date(run.at).toLocaleString()}</span>
 								{run.reason && <span className="text-muted">— {run.reason}</span>}
