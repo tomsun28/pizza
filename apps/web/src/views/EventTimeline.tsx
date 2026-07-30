@@ -114,7 +114,7 @@ export default function EventTimeline({ workspace }: { workspace?: string | null
 	const load = useCallback(async () => {
 		try {
 			setError("");
-			setEvents(await getEvents({ limit: 2000 }));
+			setEvents(await getEvents({ limit: 2000, sessionScoped: true }));
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		} finally {
