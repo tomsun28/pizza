@@ -7,7 +7,7 @@
  */
 
 import type { Model } from "@earendil-works/pi-ai/compat";
-import type { EventBase, ImageContent } from "./event-store/types.js";
+import type { EventBase, ImageContent, FileAttachment } from "./event-store/types.js";
 import type { SubscribeOptions } from "./event-store/store.js";
 import type { ExtensionRunner } from "./extensions/runner.js";
 import type { ModelRegistry } from "./model-registry.js";
@@ -52,16 +52,16 @@ export class SessionFacade {
 		return this.runtime.subscribe(listener, options);
 	}
 
-	prompt(text: string, images?: ImageContent[]): Promise<void> {
-		return this.runtime.prompt(text, images);
+	prompt(text: string, images?: ImageContent[], files?: FileAttachment[]): Promise<void> {
+		return this.runtime.prompt(text, images, files);
 	}
 
-	steer(text: string, images?: ImageContent[]): void {
-		this.runtime.steer(text, images);
+	steer(text: string, images?: ImageContent[], files?: FileAttachment[]): void {
+		this.runtime.steer(text, images, files);
 	}
 
-	followUp(text: string, images?: ImageContent[]): void {
-		this.runtime.followUp(text, images);
+	followUp(text: string, images?: ImageContent[], files?: FileAttachment[]): void {
+		this.runtime.followUp(text, images, files);
 	}
 
 	abort(): void {

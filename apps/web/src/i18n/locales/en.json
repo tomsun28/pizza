@@ -3,6 +3,7 @@
     "you": "You",
     "pizza": "Pizza",
     "remove": "Remove",
+    "dismiss": "Dismiss",
     "delete": "Delete",
     "copy": "Copy",
     "settings": "Settings",
@@ -76,7 +77,13 @@
     "newSession": "New session",
     "newSessionHint": "Start a fresh conversation",
     "attachImageHint": "Attach an image to your message",
-    "skills": "Skills"
+    "attachFiles": "Attach files",
+    "attachFilesHint": "Attach any file to your message",
+    "skills": "Skills",
+    "revealInFinder": "Show in file manager",
+    "dropFiles": "Drop files to attach",
+    "rejectedFiles_one": "1 file was skipped",
+    "rejectedFiles_other": "{{count}} files were skipped"
   },
   "conversation": {
     "showLess": "Show less",

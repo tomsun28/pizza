@@ -35,9 +35,9 @@ export interface ModelInfo {
 
 export type RpcCommand =
 	// Prompting
-	| { id?: string; type: "prompt"; message: string; images?: unknown[]; streamingBehavior?: "steer" | "followUp" }
-	| { id?: string; type: "steer"; message: string; images?: unknown[] }
-	| { id?: string; type: "follow_up"; message: string; images?: unknown[] }
+	| { id?: string; type: "prompt"; message: string; images?: unknown[]; files?: unknown[]; streamingBehavior?: "steer" | "followUp" }
+	| { id?: string; type: "steer"; message: string; images?: unknown[]; files?: unknown[] }
+	| { id?: string; type: "follow_up"; message: string; images?: unknown[]; files?: unknown[] }
 	| { id?: string; type: "abort" }
 	| { id?: string; type: "rewind"; targetEventId?: string }
 

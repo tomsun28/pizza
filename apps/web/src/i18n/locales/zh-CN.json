@@ -3,6 +3,7 @@
     "you": "你",
     "pizza": "Pizza",
     "remove": "移除",
+    "dismiss": "关闭",
     "delete": "删除",
     "copy": "复制",
     "settings": "设置",
@@ -76,7 +77,13 @@
     "newSession": "新会话",
     "newSessionHint": "开启全新的对话",
     "attachImageHint": "在消息中附加图片",
-    "skills": "技能"
+    "attachFiles": "附加文件",
+    "attachFilesHint": "在消息中附加任意文件",
+    "skills": "技能",
+    "revealInFinder": "在文件管理器中显示",
+    "dropFiles": "拖入文件以附加",
+    "rejectedFiles_one": "已跳过 1 个文件",
+    "rejectedFiles_other": "已跳过 {{count}} 个文件"
   },
   "conversation": {
     "showLess": "收起",

@@ -6,7 +6,7 @@
  */
 
 import type { AgentMessage } from "../agent/types.js";
-import type { EventBase, ImageContent } from "../event-store/types.js";
+import type { EventBase, ImageContent, FileAttachment } from "../event-store/types.js";
 import type { EventStore, SubscribeOptions } from "../event-store/store.js";
 import type { SessionDescriptor } from "../projection/types.js";
 import type { ToolRegistry, ApprovalHandler } from "../intent/types.js";
@@ -143,9 +143,9 @@ export class EventSourcedRuntime {
 	}
 
 	/**
-	 * Process user input. Drives the reactor to completion (one turn cycle).
+				payload: { content: text, images, files },
 	 */
-	async prompt(text: string, images?: ImageContent[]): Promise<void> {
+	async prompt(text: string, images?: ImageContent[], files?: FileAttachment[]): Promise<void> {
 		if (this._isProcessing) {
 			throw new Error(
 				"EventSourcedRuntime is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion.",
@@ -264,19 +264,19 @@ export class EventSourcedRuntime {
 	 * Inject a steer message — interrupts the current turn and delivers the message
 	 * as a follow-up after the current turn settles.
 	 */
-	steer(text: string, images?: ImageContent[]): void {
+	steer(text: string, images?: ImageContent[], files?: FileAttachment[]): void {
 		if (!this._isProcessing) {
 			this.store.append({
 				actor_id: "user",
 				type: "USER_MESSAGE",
-				payload: { content: text, images },
+				payload: { content: text, images, files },
 			});
 			return;
 		}
 		this.store.append({
 			actor_id: "user",
 			type: "USER_INTERRUPT",
-			payload: { content: text, images, reason: "steer" },
+			payload: { content: text, images, files, reason: "steer" },
 		});
 	}
 
@@ -284,11 +284,11 @@ export class EventSourcedRuntime {
 	 * Queue a follow-up message — delivered after the current turn naturally completes.
 	 * If the runtime is not processing, queues it for the next prompt.
 	 */
-	followUp(text: string, images?: ImageContent[]): void {
+	followUp(text: string, images?: ImageContent[], files?: FileAttachment[]): void {
 		this.store.append({
 			actor_id: "user",
 			type: "USER_FOLLOWUP_QUEUED",
-			payload: { content: text, images },
+			payload: { content: text, images, files },
 		});
 	}
 
