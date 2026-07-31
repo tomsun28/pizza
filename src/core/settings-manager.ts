@@ -63,11 +63,32 @@ export type PackageSource =
 			themes?: string[];
 	  };
 
+/**
+ * The thinking levels that can be persisted to settings.json. This is a strict
+ * subset of the runtime `ThinkingLevel` (pi-ai adds e.g. "max", and the runtime
+ * itself accepts arbitrary strings), so callers must narrow with
+ * {@link isPersistableThinkingLevel} before writing.
+ */
+export type PersistableThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+
+const PERSISTABLE_THINKING_LEVELS: readonly PersistableThinkingLevel[] = [
+	"off",
+	"minimal",
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+];
+
+export function isPersistableThinkingLevel(level: string): level is PersistableThinkingLevel {
+	return (PERSISTABLE_THINKING_LEVELS as readonly string[]).includes(level);
+}
+
 export interface Settings {
 	lastChangelogVersion?: string;
 	defaultProvider?: string;
 	defaultModel?: string;
-	defaultThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+	defaultThinkingLevel?: PersistableThinkingLevel;
 	transport?: TransportSetting; // default: "sse"
 	theme?: string;
 	compaction?: CompactionSettings;
@@ -583,11 +604,11 @@ export class SettingsManager {
 		this.save();
 	}
 
-	getDefaultThinkingLevel(): "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | undefined {
+	getDefaultThinkingLevel(): PersistableThinkingLevel | undefined {
 		return this.settings.defaultThinkingLevel;
 	}
 
-	setDefaultThinkingLevel(level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh"): void {
+	setDefaultThinkingLevel(level: PersistableThinkingLevel): void {
 		this.globalSettings.defaultThinkingLevel = level;
 		this.markModified("defaultThinkingLevel");
 		this.save();

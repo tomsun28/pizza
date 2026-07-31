@@ -357,7 +357,11 @@ function applyCliThinkingClampToFacade(created: CreateSessionFacadeResult, cliTh
 		effectiveThinking = "high";
 	}
 	if (effectiveThinking !== created.thinkingLevel) {
-		created.facade.thinkingLevel = effectiveThinking;
+		// Capability clamp for THIS model only — go through the runtime rather
+		// than `facade.thinkingLevel`, which would persist the downgraded value
+		// as the user's global default. A model that can't do "xhigh" must not
+		// permanently rewrite a saved "xhigh" preference to "high".
+		created.facade.runtime.setThinkingLevel(effectiveThinking);
 	}
 }
 

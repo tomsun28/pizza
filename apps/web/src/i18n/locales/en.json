@@ -204,7 +204,13 @@
     "emptyDescription": "File tree for this workspace will appear here.",
     "noMatch": "No files match your search.",
     "closeFile": "Close file",
-    "openInEditor": "Open in editor"
+    "openInEditor": "Open in editor",
+    "toggleExpand": "Expand / collapse",
+    "view": "View",
+    "revealInFiles": "Reveal in file manager",
+    "revealInFilesDir": "Reveal containing folder",
+    "copyAbsolutePath": "Copy absolute path",
+    "copyFileName": "Copy file name"
   },
   "history": {
     "title": "History",

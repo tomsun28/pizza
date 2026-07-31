@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { PxlKitSurfaceProvider } from "@pxlkit/ui-kit";
 import Layout from "@/components/Layout";
@@ -17,6 +17,7 @@ function isTauri(): boolean {
 
 function AppInner() {
 	const navigate = useNavigate();
+	const location = useLocation();
 	const { t } = useTranslation();
 	const [state, setState] = useState<RpcSessionState | null>(null);
 	const [sidecarReady, setSidecarReady] = useState(false);
@@ -261,10 +262,27 @@ function AppInner() {
 		if (state.model !== undefined) return;
 		// Only redirect once per workspace, and only if the user isn't
 		// already on the setup settings page (avoid stealing the back button).
+		// Read the path off `window` rather than `useLocation` on purpose: we
+		// deliberately do NOT want this effect re-running on every navigation,
+		// otherwise an unconfigured user gets yanked back here the moment they
+		// try to visit /plugins or anywhere else.
 		if (!window.location.pathname.startsWith("/settings")) {
 			navigate("/settings?setup=true", { replace: true });
 		}
 	}, [sidecarReady, state, navigate]);
+
+	// After the user configures a key, the sidecar is restarted and a new
+	// state arrives with `state.model !== undefined`. Pull them back out of
+	// the setup-mode Settings page automatically. Doing it here (rather
+	// than inside SettingsView.handleConfigured) avoids a race where the
+	// local `setState` hasn't propagated before navigate fires, which
+	// would let the redirect-above re-trigger and bounce them back.
+	useEffect(() => {
+		if (!state || state.model === undefined) return;
+		if (!location.pathname.startsWith("/settings")) return;
+		if (new URLSearchParams(location.search).get("setup") !== "true") return;
+		navigate("/", { replace: true });
+	}, [state, navigate, location.pathname, location.search]);
 
 	if (initError) {
 		return (
@@ -338,12 +356,25 @@ function AppInner() {
 								state={state}
 								onRestartSidecar={async () => {
 									if (!workspace) return;
-									await restartSidecar(workspace);
-									// Rust kills the old sidecar and emits a sidecar_exit
-									// event; the existing auto-restart loop in App.tsx
-									// will respawn it. The new sidecar will pick up the
-									// freshly-written auth.json and report a real model
-									// in its first get_state response.
+									// restart_sidecar (Rust) returns the entire JSON-RPC
+									// response envelope `{id, type, command, success,
+									// data: {...}}` from the new sidecar's first
+									// get_state. Unwrap the `.data` payload before
+									// feeding it into `state`, otherwise state.model
+									// stays undefined and the navigate-back useEffect
+									// below never fires.
+									const newStateJson = await restartSidecar(workspace);
+									try {
+										const parsed = JSON.parse(newStateJson);
+										const data = parsed?.data ?? parsed;
+										if (data && typeof data === "object" && Object.keys(data).length > 0) {
+											setState(data as unknown as RpcSessionState);
+										}
+									} catch {
+										// Best-effort: if parsing fails, the sidecar's
+										// own MODEL_CHANGED event will still propagate a
+										// fresh state via subscribeEvents → get_state.
+									}
 								}}
 							/>
 						} />

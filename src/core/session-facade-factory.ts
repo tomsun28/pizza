@@ -39,7 +39,7 @@ import { buildLlmClientFromStreamFn, toModelConfig } from "./runtime/ai-client.j
 import { DefaultRetryPolicy } from "./runtime/policies.js";
 import { EventSourcedRuntime } from "./runtime/runtime.js";
 import { SessionFacade } from "./session-facade.js";
-import { SettingsManager } from "./settings-manager.js";
+import { isPersistableThinkingLevel, SettingsManager } from "./settings-manager.js";
 import { createSyntheticSourceInfo } from "./source-info.js";
 import { buildSystemPrompt } from "./system-prompt.js";
 import { allToolNames, createToolDefinition, DEFAULT_LLM_TOOLS, type ToolName } from "./tools/index.js";
@@ -607,12 +607,33 @@ export async function createSessionFacade(
 				if (!modelRegistry.hasConfiguredAuth(nextModel)) return false;
 				model = nextModel;
 				runtime?.setModel(nextModel.provider, nextModel.id);
+				// Persist as global default so the next sidecar launch picks it
+				// up. Best-effort: a settings-write failure must not break the
+				// in-progress turn (in-memory state is already updated above).
+				try {
+					settingsManager.setDefaultModelAndProvider(nextModel.provider, nextModel.id);
+				} catch (e) {
+					console.warn(
+						`[pizza] failed to persist model preference (${nextModel.provider}/${nextModel.id}): ${e instanceof Error ? e.message : String(e)}`,
+					);
+				}
 				return true;
 			},
 			getThinkingLevel: () => thinkingLevel,
 			setThinkingLevel: (level) => {
 				thinkingLevel = level;
 				runtime?.setThinkingLevel(level);
+				// Same best-effort persistence as setModel above. Levels that
+				// settings.json can't represent (e.g. pi-ai's "max") are skipped.
+				if (isPersistableThinkingLevel(level)) {
+					try {
+						settingsManager.setDefaultThinkingLevel(level);
+					} catch (e) {
+						console.warn(
+							`[pizza] failed to persist thinking-level preference (${level}): ${e instanceof Error ? e.message : String(e)}`,
+						);
+					}
+				}
 			},
 		},
 		{

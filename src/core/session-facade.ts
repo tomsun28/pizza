@@ -14,6 +14,7 @@ import type { ModelRegistry } from "./model-registry.js";
 import type { ResourceLoader } from "./resource-loader.js";
 import type { SessionProjection } from "./projection/session-projection.js";
 import type { SettingsManager } from "./settings-manager.js";
+import { isPersistableThinkingLevel } from "./settings-manager.js";
 import type { ModelConfig, ToolDefinition } from "./runtime/llm-types.js";
 import type { RuntimeCompactOptions } from "./runtime/runtime.js";
 import { EventSourcedRuntime } from "./runtime/runtime.js";

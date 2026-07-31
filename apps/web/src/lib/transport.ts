@@ -441,6 +441,12 @@ export async function openInEditor(cwd: string, filePath: string): Promise<void>
 	await core.invoke("open_in_editor", { cwd, filePath });
 }
 
+export async function revealPath(cwd: string, subPath: string): Promise<void> {
+	if (!isTauri()) return;
+	const core = await import("@tauri-apps/api/core");
+	await core.invoke("reveal_path", { cwd, subPath });
+}
+
 // --- Provider management (Tauri only) ---
 
 export interface ProviderInfo {
@@ -494,10 +500,14 @@ export async function removeProviderApiKey(provider: string): Promise<void> {
  * model list to refresh. No-op outside Tauri (web/preview builds don't have
  * a sidecar to restart).
  */
-export async function restartSidecar(cwd: string): Promise<void> {
-	if (!isTauri()) return;
+export async function restartSidecar(cwd: string): Promise<string> {
+	if (!isTauri()) return "";
+	// Tauri 2's `core.invoke` is generic; declaring `<string>` makes the
+	// Rust command's `Result<String, String>` Ok variant flow through as
+	// a real `string` instead of `void`. Without this the caller gets
+	// `unknown` and `JSON.parse(undefined)` blows up.
 	const core = await import("@tauri-apps/api/core");
-	await core.invoke("restart_sidecar", { cwd });
+	return await core.invoke<string>("restart_sidecar", { cwd });
 }
 
 
