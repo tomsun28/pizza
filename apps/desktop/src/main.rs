@@ -32,10 +32,11 @@ fn main() {
 			bridge::reveal_path,
 			bridge::fetch_skills_sh,
 		])
-		.setup(|_app| {
+		.setup(|app| {
+			bridge::start_scheduler_sidecar_guard(app.handle().clone());
 			#[cfg(debug_assertions)]
 			{
-				if let Some(window) = _app.get_webview_window("main") {
+				if let Some(window) = app.get_webview_window("main") {
 					window.open_devtools();
 				}
 			}

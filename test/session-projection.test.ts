@@ -284,6 +284,91 @@ describe("SessionManager", () => {
 		expect(mgr.getActiveSessionId()).toBe(s1.session_id);
 	});
 
+	it("should close the previous open session when switching directly", () => {
+		const mgr = new SessionManager(store, store);
+		const s1 = mgr.createSession("user_explicit", "Session 1");
+		store.append({
+			actor_id: "user",
+			type: "USER_MESSAGE",
+			payload: { content: "before switch" },
+			thread_id: s1.thread_id,
+		});
+		const s2 = mgr.createSession("user_explicit", "Session 2", { closeActive: false });
+
+		mgr.switchToExistingSession(s1.session_id, "return");
+		store.append({
+			actor_id: "user",
+			type: "USER_MESSAGE",
+			payload: { content: "after switch" },
+			thread_id: s1.thread_id,
+		});
+
+		expect(mgr.getSession(s2.session_id)?.event_range.end_event_id).not.toBe("HEAD");
+		const s2Messages = mgr.getSessionProjection(s2.session_id)!.buildContext().messages;
+		const s2Text = s2Messages.map((message) => ("content" in message ? message.content : undefined));
+		expect(s2Text).not.toContain("after switch");
+	});
+
+	it("should switch directly to closed sessions for viewing", () => {
+		const mgr = new SessionManager(store, store);
+		const s1 = mgr.createSession("user_explicit", "Session 1");
+		mgr.createSession("user_explicit", "Session 2");
+
+		const switched = mgr.switchToExistingSession(s1.session_id, "view historical session");
+		expect(switched.session_id).toBe(s1.session_id);
+		expect(mgr.getActiveSessionId()).toBe(s1.session_id);
+	});
+
+	it("should continue a closed active session with inherited context", () => {
+		const mgr = new SessionManager(store, store);
+		const s1 = mgr.createSession("user_explicit", "Session 1");
+		store.append({
+			actor_id: "user",
+			type: "USER_MESSAGE",
+			payload: { content: "old context" },
+			thread_id: s1.thread_id,
+		});
+		const s2 = mgr.createSession("user_explicit", "Session 2");
+		store.append({
+			actor_id: "user",
+			type: "USER_MESSAGE",
+			payload: { content: "other branch gap" },
+			thread_id: s2.thread_id,
+		});
+
+		mgr.switchToExistingSession(s1.session_id, "view historical session");
+		const continuation = mgr.ensureActiveSessionWritable("continue");
+		store.append({
+			actor_id: "user",
+			type: "USER_MESSAGE",
+			payload: { content: "new continuation" },
+			thread_id: continuation!.thread_id,
+		});
+
+		expect(continuation?.session_id).not.toBe(s1.session_id);
+		expect(continuation?.context_parent_session_id).toBe(s1.session_id);
+		expect(continuation?.thread_id).not.toBe(s1.thread_id);
+		const messages = mgr.getSessionProjection(continuation!.session_id)!.buildContext().messages;
+		const text = messages.map((message) => ("content" in message ? message.content : undefined));
+		expect(text).toContain("old context");
+		expect(text).toContain("new continuation");
+		expect(text).not.toContain("other branch gap");
+	});
+
+	it("should create scheduled sessions in isolated threads", () => {
+		const mgr = new SessionManager(store, store);
+		const user = mgr.createSession("user_explicit", "User");
+		const userThreadId = user.thread_id;
+
+		const scheduleThread = mgr.createThread("Scheduled task", "schedule");
+		const schedule = mgr.getSession(mgr.getActiveSessionId()!)!;
+
+		expect(schedule.created_by).toBe("schedule");
+		expect(schedule.thread_id).toBe(scheduleThread.thread_id);
+		expect(schedule.thread_id).not.toBe(userThreadId);
+		expect(mgr.getSession(user.session_id)?.event_range.end_event_id).toBe("HEAD");
+	});
+
 	it("should throw when switching to non-existent session", () => {
 		const mgr = new SessionManager(store, store);
 		mgr.createSession("user_explicit");

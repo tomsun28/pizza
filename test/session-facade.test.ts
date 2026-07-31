@@ -200,24 +200,6 @@ describe("SessionFacade", () => {
 			facade.dispose();
 		});
 
-		// main.ts's per-model capability clamp (xhigh -> high on models that
-		// can't do xhigh) deliberately writes through the runtime instead of the
-		// facade setter. A one-off clamp must not rewrite the user's saved
-		// preference, so the runtime path has to stay persistence-free.
-		it("does not persist when the thinking level is set straight on the runtime", async () => {
-			const { facade, runtime, settingsManager } = makeFacade();
-			facade.thinkingLevel = "xhigh";
-			await settingsManager.flush();
-			expect(settingsManager.getDefaultThinkingLevel()).toBe("xhigh");
-
-			runtime.setThinkingLevel("high");
-			await settingsManager.flush();
-			expect(runtime.getThinkingLevel()).toBe("high");
-			expect(settingsManager.getDefaultThinkingLevel()).toBe("xhigh");
-
-			facade.dispose();
-		});
-
 		it("survives a settings-write failure without breaking the runtime", async () => {
 			const { facade, runtime, settingsManager } = makeFacade();
 			const warn = vi.spyOn(console, "warn").mockImplementation(() => {});

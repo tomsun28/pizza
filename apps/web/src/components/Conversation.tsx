@@ -435,6 +435,21 @@ function UserBubble({ item }: { item: TimelineItem }) {
 	);
 }
 
+/** Small inline notice for system-originated events (e.g. scheduled task fired). */
+function SystemNotice({ item }: { item: TimelineItem }) {
+	const ts = item.timestamp ? new Date(item.timestamp).toLocaleString() : "";
+	return (
+		<div className="my-3 flex items-center justify-center gap-2 text-[11px] text-muted">
+			<span className="h-px flex-1 bg-border/60" />
+			<span className="rounded-full border border-border bg-surface-2 px-2.5 py-0.5 font-mono">
+				{item.title}
+			</span>
+			{ts && <span className="text-muted/70">{ts}</span>}
+			<span className="h-px flex-1 bg-border/60" />
+		</div>
+	);
+}
+
 function AssistantMessage({ item }: { item: TimelineItem }) {
 	const { t } = useTranslation();
 	const [hover, setHover] = useState(false);
@@ -512,6 +527,7 @@ export function Conversation({
 		<div className="mx-auto max-w-3xl px-6 pb-32 pt-4">
 			{items.map((item) => {
 				if (item.role === "user") return <UserBubble key={item.id} item={item} />;
+				if (item.role === "system") return <SystemNotice key={item.id} item={item} />;
 				if (item.role === "tool") return <ToolCard key={item.id} item={item} onResolveApproval={onResolveApproval} />;
 				// Skip empty assistant bubbles (turns that produced only tool calls).
 				if (!item.streaming && !item.text && !item.thinking && !(item.images && item.images.length > 0)) {

@@ -6,6 +6,7 @@ import Layout from "@/components/Layout";
 import ChatView from "@/views/ChatView";
 import SettingsView from "@/views/SettingsView";
 import PluginsView from "@/views/PluginsView";
+import SchedulesView from "@/views/SchedulesView";
 import { subscribeSidecarExit, subscribeEvents, initSidecar, sendCommandAwait, listWorkspaces, restartSidecar } from "@/lib/transport";
 import { BrandIcon } from "@/components/BrandIcon";
 import type { RpcSessionState, WorkspaceMeta } from "@/lib/types";
@@ -198,7 +199,15 @@ function AppInner() {
 				// turn starts (isStreaming → true) or completes (isStreaming → false).
 				// Skip intermediate AGENT_TURN_END/REQUESTED during multi-tool turns
 				// to avoid flooding get_state requests that time out.
-				if (typed.type === "MODEL_CHANGED" || typed.type === "THINKING_LEVEL_CHANGED" || typed.type === "AGENT_TURN_COMPLETED" || typed.type === "AGENT_TURN_START") {
+				if (
+					typed.type === "MODEL_CHANGED" ||
+					typed.type === "THINKING_LEVEL_CHANGED" ||
+					typed.type === "AGENT_TURN_COMPLETED" ||
+					typed.type === "AGENT_TURN_START" ||
+					typed.type === "SESSION_CREATED" ||
+					typed.type === "SESSION_FORKED" ||
+					typed.type === "SESSION_JUMPED"
+				) {
 					void sendCommandAwait<RpcSessionState>({ type: "get_state" }, 5000)
 						.then((r) => setState(r.data ?? null))
 						.catch(() => {});
@@ -369,8 +378,14 @@ function AppInner() {
 								}}
 							/>
 						} />
-						<Route path="/plugins" element={<PluginsView />} />
-						<Route path="*" element={<Navigate to="/" replace />} />
+					<Route path="/plugins" element={<PluginsView />} />
+					<Route path="/schedules" element={
+						<SchedulesView
+							scope={workspace && workspace.endsWith("/.pizza/main") ? "main" : "workspace"}
+							workspaceId={workspace ?? undefined}
+						/>
+					} />
+					<Route path="*" element={<Navigate to="/" replace />} />
 					</Route>
 			</Routes>
 		</PxlKitSurfaceProvider>

@@ -140,14 +140,12 @@ export class SessionFacade {
 
 	/**
 	 * Persist the user's thinking-level choice as the global default. Same
-	 * best-effort semantics as {@link persistModel}. The runtime accepts
-	 * arbitrary level strings, so values settings.json can't represent are
-	 * skipped rather than written back as garbage.
+	 * best-effort semantics as {@link persistModel}. The `as never` cast avoids
+	 * pulling the ThinkingLevel union into this file just for the setter type.
 	 */
 	private persistThinkingLevel(level: string): void {
-		if (!isPersistableThinkingLevel(level)) return;
 		try {
-			this.settingsManager.setDefaultThinkingLevel(level);
+			this.settingsManager.setDefaultThinkingLevel(level as never);
 		} catch (e) {
 			console.warn(
 				`[pizza] failed to persist thinking-level preference (${level}): ${

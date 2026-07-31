@@ -330,7 +330,7 @@ export interface SessionCreatedEvent extends EventBase {
 	payload: {
 		session_id: string;
 		name?: string;
-		created_by: "user_explicit" | "fork";
+		created_by: "user_explicit" | "fork" | "schedule";
 	};
 }
 

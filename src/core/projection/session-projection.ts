@@ -42,6 +42,7 @@ export class SessionProjection {
 	constructor(
 		private store: EventStore,
 		private descriptor: SessionDescriptor,
+		private resolveSession?: (sessionId: string) => SessionDescriptor | undefined,
 	) {}
 
 	/**
@@ -54,6 +55,7 @@ export class SessionProjection {
 	 * 4. Apply token budget truncation if needed
 	 */
 	buildContext(options?: BuildContextOptions): BuiltContext {
+		const parentContext = this._buildContextParent(options);
 		const { start, end } = this._getEventRange();
 		const rawEvents = this.store.query({
 			after: start,
@@ -62,7 +64,7 @@ export class SessionProjection {
 		}).filter((e) => !e.thread_id || e.thread_id === this.descriptor.thread_id);
 		const events = this._applyCompactionBoundary(rawEvents);
 
-		let messages = eventsToMessages(events);
+		let messages = [...(parentContext?.messages ?? []), ...eventsToMessages(events)];
 
 		// Inject compaction summary if present
 		if (this.descriptor.summary_event_id) {
@@ -88,7 +90,7 @@ export class SessionProjection {
 			messages = this._truncateByTokens(messages, options.max_tokens);
 		}
 
-		return { messages, events, descriptor: this.descriptor };
+		return { messages, events: [...(parentContext?.events ?? []), ...events], descriptor: this.descriptor };
 	}
 
 	/**
@@ -97,6 +99,10 @@ export class SessionProjection {
 	 * Returns all events in the session's event range, ordered by time.
 	 */
 	getTimeline(): TimelineEntry[] {
+		const parent = this._getContextParentDescriptor();
+		const parentTimeline = parent
+			? new SessionProjection(this.store, parent, this.resolveSession).getTimeline()
+			: [];
 		const { start, end } = this._getEventRange();
 		const events = this.store.query({
 			after: start,
@@ -104,14 +110,14 @@ export class SessionProjection {
 			reverse: false,
 		}).filter((e) => !e.thread_id || e.thread_id === this.descriptor.thread_id);
 
-		return events.map((e) => ({
+		return [...parentTimeline, ...events.map((e) => ({
 			event_id: e.event_id,
 			kind: this._eventTypeToKind(e.type),
 			actor_id: e.actor_id,
 			timestamp: e.timestamp,
 			summary: this._summarizeEvent(e),
 			caused_by: e.caused_by,
-		}));
+		}))];
 	}
 
 	/**
@@ -161,6 +167,22 @@ export class SessionProjection {
 		const start = this.descriptor.event_range.start_event_id === "ORIGIN" ? undefined : this.descriptor.event_range.start_event_id;
 		const end = this.descriptor.event_range.end_event_id === "HEAD" ? undefined : this.descriptor.event_range.end_event_id;
 		return { start, end };
+	}
+
+	private _getContextParentDescriptor(): SessionDescriptor | undefined {
+		const parentId = this.descriptor.context_parent_session_id;
+		if (!parentId || !this.resolveSession) return undefined;
+		if (parentId === this.descriptor.session_id) return undefined;
+		return this.resolveSession(parentId);
+	}
+
+	private _buildContextParent(options?: BuildContextOptions): BuiltContext | undefined {
+		const parent = this._getContextParentDescriptor();
+		if (!parent) return undefined;
+		return new SessionProjection(this.store, parent, this.resolveSession).buildContext({
+			...options,
+			max_tokens: undefined,
+		});
 	}
 
 	private _applyCompactionBoundary(events: EventBase[]): EventBase[] {
