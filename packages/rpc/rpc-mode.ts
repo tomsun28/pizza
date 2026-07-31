@@ -20,7 +20,7 @@ import type {
 	ExtensionWidgetOptions,
 	WorkingIndicatorOptions,
 } from "../../src/core/extensions/index.js";
-import type { EventBase, EventType, ImageContent as EventImageContent } from "../../src/core/event-store/types.js";
+import type { EventBase, EventType, ImageContent as EventImageContent, FileAttachment } from "../../src/core/event-store/types.js";
 import { takeOverStdout, writeRawStdout } from "../../src/core/output-guard.js";
 import type { SessionFacade } from "../../src/core/session-facade.js";
 import { makeSessionRef, parseSessionRef } from "../../src/core/session-ref.js";
@@ -67,6 +67,26 @@ function toEventImages(images?: unknown[]): EventImageContent[] | undefined {
 			type: "image",
 			data: img.data,
 			mime_type: img.mime_type ?? img.mimeType,
+		};
+	});
+}
+
+/**
+ * Normalise frontend file attachment records ({ absolutePath, mimeType, name, size })
+ * into the EventStore's FileAttachment shape. The sidecar's save_upload handler
+ * is responsible for sanitising the filename and writing to a safe directory
+ * under <cwd>/.pizza/uploads/<ws>/<session>/; we only validate structurally here.
+ */
+function toEventFiles(files?: unknown[]): FileAttachment[] | undefined {
+	if (!files) return undefined;
+	return files.map((file) => {
+		const f = file as FileAttachment;
+		return {
+			type: "file",
+			absolutePath: f.absolutePath,
+			mimeType: f.mimeType ?? "",
+			name: f.name,
+			size: f.size,
 		};
 	});
 }
@@ -663,17 +683,17 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 
 		switch (command.type) {
 			case "prompt":
-				void facade.prompt(command.message, toEventImages(command.images)).catch((e: unknown) => {
+				void facade.prompt(command.message, toEventImages(command.images), toEventFiles(command.files)).catch((e: unknown) => {
 					output(error(id, "prompt", e instanceof Error ? e.message : String(e)));
 				});
 				return success(id, "prompt");
 
 			case "steer":
-				facade.steer(command.message, toEventImages(command.images));
+				facade.steer(command.message, toEventImages(command.images), toEventFiles(command.files));
 				return success(id, "steer");
 
 			case "follow_up":
-				facade.followUp(command.message, toEventImages(command.images));
+				facade.followUp(command.message, toEventImages(command.images), toEventFiles(command.files));
 				return success(id, "follow_up");
 
 			case "abort":

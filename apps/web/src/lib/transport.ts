@@ -20,6 +20,22 @@ function isTauri(): boolean {
 
 // --- Command sending ---
 
+/**
+ * Invoke a Tauri command directly. Convenience wrapper around `@tauri-apps/api/core`
+ * that no-ops in the browser. Use for non-RPC commands like revealing files
+ * in the OS file manager.
+ */
+export async function invoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T | null> {
+	if (typeof window === "undefined") return null;
+	if (!isTauri()) return null;
+	try {
+		const mod = await import("@tauri-apps/api/core");
+		return await mod.invoke<T>(command, args);
+	} catch {
+		return null;
+	}
+}
+
 export async function sendCommandRaw(command: Record<string, unknown>): Promise<string> {
 	if (isTauri()) {
 		const { invoke } = await import("@tauri-apps/api/core");

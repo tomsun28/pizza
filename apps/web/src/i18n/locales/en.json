@@ -3,6 +3,7 @@
     "you": "You",
     "pizza": "Pizza",
     "remove": "Remove",
+    "dismiss": "Dismiss",
     "save": "Save",
     "delete": "Delete",
     "copy": "Copy",
@@ -77,6 +78,13 @@
     "newSession": "New session",
     "newSessionHint": "Start a fresh conversation",
     "attachImageHint": "Attach an image to your message",
+    "attachFiles": "Attach files",
+    "attachFilesHint": "Attach any file to your message",
+    "skills": "Skills",
+    "revealInFinder": "Show in file manager",
+    "dropFiles": "Drop files to attach",
+    "rejectedFiles_one": "1 file was skipped",
+    "rejectedFiles_other": "{{count}} files were skipped"
     "skills": "Skills",
     "scheduledTask": "Scheduled task",
     "scheduledTaskHint": "Run a task automatically at the right time"

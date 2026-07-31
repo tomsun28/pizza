@@ -19,6 +19,7 @@ fn main() {
 			bridge::list_workspaces,
 			bridge::delete_workspace,
 			bridge::reveal_workspace,
+			bridge::reveal_file,
 			bridge::list_providers,
 			bridge::set_provider_api_key,
 			bridge::remove_provider_api_key,

@@ -31,6 +31,9 @@ export interface TimelineItem {
 	isError?: boolean;
 	/** Attached images as data URLs (for user messages). */
 	images?: string[];
+
+	/** Attached file path references (for user messages). */
+	files?: Array<{ absolutePath: string; mimeType: string; name: string; size: number }>;
 	/** True for a follow-up message queued while the agent is still running. */
 	queued?: boolean;
 	/** Pending approval for a risky tool call (safe mode on). */
@@ -58,6 +61,15 @@ function formatMessageTime(ts?: number): string {
 	} catch {
 		return "";
 	}
+}
+
+/** Compact human-readable byte count (e.g. 1.2 kB, 3.4 MB). */
+function formatFileSize(bytes: number): string {
+	if (bytes <= 0) return "";
+	if (bytes < 1024) return `${bytes} B`;
+	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} kB`;
+	if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+	return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
 const COLLAPSE_LINES = 5;
@@ -360,6 +372,27 @@ function UserBubble({ item }: { item: TimelineItem }) {
 						))}
 					</div>
 				)}
+				{item.files && item.files.length > 0 && (
+					<div className="mb-2 flex flex-wrap gap-2">
+						{item.files.map((f, i) => (
+							<div
+								key={f.absolutePath}
+								className="flex h-9 w-48 items-center gap-2 overflow-hidden rounded-lg border border-border bg-surface-2 px-2.5 text-xs"
+								title={f.absolutePath}
+							>
+								<div className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-[10px] font-semibold uppercase tracking-wide bg-slate-500/15 text-slate-300">
+									{f.name.split(".").pop()?.toUpperCase().slice(0, 3) ?? "FILE"}
+								</div>
+								<div className="flex min-w-0 flex-1 flex-col">
+									<span className="truncate text-fg">{f.name}</span>
+									{f.size > 0 && (
+										<span className="truncate text-[10px] text-muted">{formatFileSize(f.size)}</span>
+									)}
+								</div>
+							</div>
+						))}
+					</div>
+				)}
 				{item.text && (
 					<div className="whitespace-pre-wrap break-words text-sm leading-relaxed text-fg">
 						{item.text}
@@ -437,6 +470,27 @@ function AssistantMessage({ item }: { item: TimelineItem }) {
 								alt={t("conversation.attachment")}
 								className="max-h-48 rounded-md border border-border object-contain"
 							/>
+						))}
+					</div>
+				)}
+				{item.files && item.files.length > 0 && (
+					<div className="mb-2 flex flex-wrap gap-2">
+						{item.files.map((f, i) => (
+							<div
+								key={f.absolutePath}
+								className="flex h-9 w-48 items-center gap-2 overflow-hidden rounded-lg border border-border bg-surface-2 px-2.5 text-xs"
+								title={f.absolutePath}
+							>
+								<div className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-[10px] font-semibold uppercase tracking-wide bg-slate-500/15 text-slate-300">
+									{f.name.split(".").pop()?.toUpperCase().slice(0, 3) ?? "FILE"}
+								</div>
+								<div className="flex min-w-0 flex-1 flex-col">
+									<span className="truncate text-fg">{f.name}</span>
+									{f.size > 0 && (
+										<span className="truncate text-[10px] text-muted">{formatFileSize(f.size)}</span>
+									)}
+								</div>
+							</div>
 						))}
 					</div>
 				)}

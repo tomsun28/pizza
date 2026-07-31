@@ -1279,6 +1279,50 @@ pub async fn delete_workspace(
 	Ok(())
 }
 
+
+/// Reveal an arbitrary file in the system file manager (Finder on macOS,
+/// Explorer on Windows, the desktop file manager on Linux). The path should
+/// be absolute — the sidecar places uploads under <cwd>/.pizza/uploads/...
+/// and the frontend surfaces them as <file path="..."/> references.
+#[tauri::command]
+pub async fn reveal_file(absolute_path: String) -> Result<(), String> {
+	let path = if absolute_path.starts_with("~") {
+		if let Ok(home) = std::env::var("HOME") {
+			format!("{}{}", home, &absolute_path[1..])
+		} else {
+			absolute_path.clone()
+		}
+	} else {
+		absolute_path.clone()
+	};
+
+	if !std::path::Path::new(&path).exists() {
+		return Err(format!("Path does not exist: {}", path));
+	}
+
+	#[cfg(target_os = "macos")]
+	let opener = "open";
+	#[cfg(target_os = "linux")]
+	let opener = "xdg-open";
+	#[cfg(target_os = "windows")]
+	let opener = "explorer";
+
+	std::process::Command::new(opener)
+		.arg(&path)
+		.spawn()
+		.map_err(|e| format!("Failed to open file manager: {e}"))?;
+
+	Ok(())
+}
+
+/// Wrap an absolute path so it can be passed to the shell quote-free.
+fn quote_arg(s: &str) -> String {
+	if s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | '~')) {
+		s.to_string()
+	} else {
+		format!("'{}'", s.replace('\'', "'\\''"))
+	}
+}
 /// Reveal a workspace's cwd in the system file manager (Finder on macOS).
 #[tauri::command]
 pub async fn reveal_workspace(cwd: String) -> Result<(), String> {

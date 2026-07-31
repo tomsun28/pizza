@@ -16,6 +16,8 @@ export interface UserMessageEvent extends EventBase {
 	payload: {
 		content: string | import("./types.js").ContentBlock[];
 		images?: import("./types.js").ImageContent[];
+		/** Path-referenced files the agent can read with its own file tools. */
+		files?: import("./types.js").FileAttachment[];
 		/** Raw input before expansion */
 		raw_input?: string;
 	};
@@ -46,6 +48,7 @@ export interface UserInterruptEvent extends EventBase {
 	payload: {
 		content?: string | import("./types.js").ContentBlock[];
 		images?: import("./types.js").ImageContent[];
+		files?: import("./types.js").FileAttachment[];
 		reason?: string;
 	};
 }
@@ -56,6 +59,7 @@ export interface UserFollowupQueuedEvent extends EventBase {
 	payload: {
 		content: string | import("./types.js").ContentBlock[];
 		images?: import("./types.js").ImageContent[];
+		files?: import("./types.js").FileAttachment[];
 	};
 }
 

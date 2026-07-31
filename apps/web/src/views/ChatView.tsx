@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { sendCommandAwait, subscribeEvents, subscribeSidecarExit } from "@/lib/transport";
 import type { RpcSessionState, TypedEvent } from "@/lib/types";
 import { Conversation, type TimelineItem } from "@/components/Conversation";
-import { Composer, type ComposerImage } from "@/components/Composer";
+import { Composer, type ComposerImage, type LoadedFileAttachment } from "@/components/Composer";
 import { EmptyState } from "@/components/ui";
 import { approveToolCall, rejectToolCall } from "@/lib/transport";
 import { cn } from "@/lib/utils";
@@ -68,6 +68,32 @@ interface ExtractedToolCall {
 	id: string;
 	name: string;
 	args: string;
+}
+
+/**
+ * Extract file attachments from a user message payload. The agent receives
+ * these as discrete `files` objects (not inlined into the text), so we
+ * surface them on the chat row so the user can see what was attached.
+ */
+function messageFiles(message: unknown): Array<{
+	absolutePath: string;
+	mimeType: string;
+	name: string;
+	size: number;
+}> {
+	if (!message || typeof message !== "object") return [];
+	const msg = message as Record<string, unknown>;
+	if (!Array.isArray(msg.files)) return [];
+	const out: Array<{ absolutePath: string; mimeType: string; name: string; size: number }> = [];
+	for (const f of msg.files as Array<Record<string, unknown>>) {
+		if (!f || typeof f !== "object") continue;
+		const absolutePath = typeof f.absolutePath === "string" ? f.absolutePath : "";
+		const name = typeof f.name === "string" ? f.name : absolutePath.split("/").pop() ?? "file";
+		const mimeType = typeof f.mimeType === "string" ? f.mimeType : "";
+		const size = typeof f.size === "number" ? f.size : 0;
+		if (absolutePath) out.push({ absolutePath, mimeType, name, size });
+	}
+	return out;
 }
 
 /** Extract toolCall blocks (id, name, JSON args) from an assistant message. */
@@ -149,7 +175,8 @@ function buildTimelineFromMessages(
 		if (role === "user") {
 			const text = messageText(msg);
 			const images = messageImages(msg);
-			history.push({ id: `hist-${history.length}`, role: "user", title: t("common.you"), text, status: "", images: images.length > 0 ? images : undefined, timestamp: ts });
+			const files = messageFiles(msg);
+			history.push({ id: `hist-${history.length}`, role: "user", title: t("common.you"), text, status: "", images: images.length > 0 ? images : undefined, files: files.length > 0 ? files : undefined, timestamp: ts });
 		} else if (role === "assistant") {
 			const text = messageText(msg);
 			const thinking = messageThinking(msg);
@@ -414,6 +441,7 @@ export default function ChatView({
 			case "USER_MESSAGE": {
 				const text = messageText(event.payload);
 				const images = messageImages(event.payload);
+				const files = messageFiles(event.payload);
 				// When a queued follow-up is drained, the reactor emits a real
 				// USER_MESSAGE whose caused_by points at the USER_FOLLOWUP_QUEUED
 				// event we already rendered as a (queued) user bubble. Promote
@@ -432,7 +460,7 @@ export default function ChatView({
 					}
 					return [
 						...prev,
-						{ id: event.event_id, role: "user", title: tRef.current("common.you"), text, status: "", images: images.length > 0 ? images : undefined, timestamp: ts },
+						{ id: event.event_id, role: "user", title: tRef.current("common.you"), text, status: "", images: images.length > 0 ? images : undefined, files: files.length > 0 ? files : undefined, timestamp: ts },
 					];
 				});
 				break;
@@ -445,10 +473,11 @@ export default function ChatView({
 				// arrives (matched via caused_by).
 				const text = messageText(event.payload);
 				const images = messageImages(event.payload);
+				const files = messageFiles(event.payload);
 				const ts = typeof event.timestamp === "number" ? event.timestamp : undefined;
 				updateItems((prev) => [
 					...prev,
-					{ id: event.event_id, role: "user", title: tRef.current("common.you"), text, status: "", images: images.length > 0 ? images : undefined, queued: true, timestamp: ts },
+					{ id: event.event_id, role: "user", title: tRef.current("common.you"), text, status: "", images: images.length > 0 ? images : undefined, files: files.length > 0 ? files : undefined, queued: true, timestamp: ts },
 				]);
 				break;
 			}
@@ -728,7 +757,7 @@ export default function ChatView({
 	}, []);
 
 	const handleSend = useCallback(
-		async (message: string, images?: ComposerImage[]) => {
+		async (message: string, images?: ComposerImage[], files?: LoadedFileAttachment[]) => {
 			setError("");
 			const payloadImages = images?.map((img) => ({ data: img.data, mimeType: img.mimeType }));
 			// prompt/follow_up responses only arrive after the entire agent turn
@@ -736,9 +765,15 @@ export default function ChatView({
 			// the event subscription independently, so we fire-and-forget the command
 			// and only catch immediate send errors (e.g. sidecar not running).
 			try {
+				const payloadFiles = files?.map((f) => ({
+					absolutePath: f.absolutePath,
+					mimeType: f.mimeType,
+					name: f.name,
+					size: f.size,
+				}));
 				const cmd = state?.isStreaming
-					? { type: "follow_up", message, images: payloadImages }
-					: { type: "prompt", message, images: payloadImages };
+					? { type: "follow_up", message, images: payloadImages, files: payloadFiles }
+					: { type: "prompt", message, images: payloadImages, files: payloadFiles };
 				sendCommandAwait(cmd, 600000).catch((e) => {
 					setError(e instanceof Error ? e.message : String(e));
 				});
