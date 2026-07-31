@@ -8,6 +8,7 @@
 
 import type {
 	WorkspaceMeta,
+	RpcSessionState,
 	RpcHistoryTreeNode,
 	RpcHistorySessionView,
 	RpcForensicEvent,
@@ -157,6 +158,11 @@ export async function initSidecar(cwd?: string): Promise<Record<string, unknown>
 	}
 }
 
+export async function getSessionState(timeoutMs = 5000): Promise<RpcSessionState | null> {
+	const r = await sendCommandAwait<RpcSessionState>({ type: "get_state" }, timeoutMs);
+	return r.data ?? null;
+}
+
 // --- New workspace (Tauri only) ---
 
 export async function newWorkspace(): Promise<void> {
@@ -184,6 +190,11 @@ export async function historyTreeList(query?: string): Promise<RpcHistoryTreeNod
 export async function historyTreeView(sessionId: string, maxMessages?: number): Promise<RpcHistorySessionView | null> {
 	const r = await sendCommandAwait<{ action: "view"; view: RpcHistorySessionView | null }>({ type: "history_tree", action: "view", sessionId, maxMessages });
 	return r.data?.view ?? null;
+}
+
+export async function historyTreeSwitch(sessionId: string, reason?: string): Promise<{ session_id: string }> {
+	const r = await sendCommandAwait<{ action: "switch"; session_id: string }>({ type: "history_tree", action: "switch", sessionId, reason });
+	return { session_id: r.data?.session_id ?? sessionId };
 }
 
 export async function historyTreeJump(sessionId: string, reason?: string): Promise<{ session_id: string; reopened: boolean }> {
@@ -497,6 +508,107 @@ export async function restartSidecar(cwd: string): Promise<string> {
 	// `unknown` and `JSON.parse(undefined)` blows up.
 	const core = await import("@tauri-apps/api/core");
 	return await core.invoke<string>("restart_sidecar", { cwd });
+}
+
+
+// --- Scheduled tasks ----------------------------------------------------------
+
+export async function listScheduledTasks(
+	scope: "main" | "workspace",
+	workspaceId?: string,
+): Promise<import("./types.js").ScheduledTaskSummary[]> {
+	const r = await sendCommandAwait<{ tasks: import("./types.js").ScheduledTaskSummary[] }>(
+		{ type: "schedule_list", scope, workspaceId },
+		10000,
+	);
+	return r.data?.tasks ?? [];
+}
+
+export async function createScheduledTask(
+	task: import("./types.js").ScheduledTaskCreateInput,
+): Promise<import("./types.js").ScheduledTaskSummary> {
+	const r = await sendCommandAwait<{ task: import("./types.js").ScheduledTaskSummary }>(
+		{ type: "schedule_create", task },
+		10000,
+	);
+	if (!r.data?.task) throw new Error("schedule_create returned no task");
+	return r.data.task;
+}
+
+export async function updateScheduledTask(
+	taskId: string,
+	patch: import("./types.js").ScheduledTaskPatch,
+	scope: "main" | "workspace",
+	workspaceId?: string,
+): Promise<import("./types.js").ScheduledTaskSummary> {
+	const r = await sendCommandAwait<{ task: import("./types.js").ScheduledTaskSummary }>(
+		{ type: "schedule_update", taskId, patch, scope, workspaceId },
+		10000,
+	);
+	if (!r.data?.task) throw new Error("schedule_update returned no task");
+	return r.data.task;
+}
+
+export async function deleteScheduledTask(
+	taskId: string,
+	scope: "main" | "workspace",
+	workspaceId?: string,
+): Promise<void> {
+	await sendCommandAwait(
+		{ type: "schedule_delete", taskId, scope, workspaceId },
+		5000,
+	);
+}
+
+export async function runScheduledTaskNow(
+	taskId: string,
+	scope: "main" | "workspace",
+	workspaceId?: string,
+): Promise<void> {
+	await sendCommandAwait(
+		{ type: "schedule_run_now", taskId, scope, workspaceId },
+		5000,
+	);
+}
+
+export async function reloadScheduledTasks(): Promise<number> {
+	const r = await sendCommandAwait<{ reloaded: number }>(
+		{ type: "schedule_reload" },
+		5000,
+	);
+	return r.data?.reloaded ?? 0;
+}
+
+
+
+// --- Scheduler policy (per-scope defaults) -----------------------------
+
+export async function getSchedulerPolicy(): Promise<import("./types.js").SchedulerPolicy> {
+	const r = await sendCommandAwait<{ policy: import("./types.js").SchedulerPolicy }>(
+		{ type: "get_scheduler_policy" },
+		5000,
+	);
+	return r.data?.policy ?? { concurrency: "skip", timeoutMinutes: 0, defaultSessionTarget: { kind: "pinned" } };
+}
+
+export async function setSchedulerPolicy(policy: import("./types.js").SchedulerPolicy): Promise<import("./types.js").SchedulerPolicy> {
+	const r = await sendCommandAwait<{ policy: import("./types.js").SchedulerPolicy }>(
+		{ type: "set_scheduler_policy", policy },
+		5000,
+	);
+	return r.data?.policy ?? policy;
+}
+export async function getScheduledTaskHistory(
+	taskId: string,
+	scope: "main" | "workspace",
+	workspaceId?: string,
+	limit = 50,
+): Promise<import("./types.js").ScheduledTaskRun[]> {
+	const r = await sendCommandAwait<{ runs: import("./types.js").ScheduledTaskRun[] }>(
+		{ type: "schedule_history", taskId, scope, workspaceId, limit },
+		5000,
+	);
+	return r.data?.runs ?? [];
 }
 
 // --- SSE implementation for browser mode ---

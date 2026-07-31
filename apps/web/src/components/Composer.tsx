@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowUp, Square, Mic, Plus, ChevronDown, Check, X, Loader2, Shield, ShieldCheck, ImagePlus, Sparkles, MessageSquarePlus } from "lucide-react";
+import { ArrowUp, Square, Mic, Plus, ChevronDown, Check, X, Loader2, Shield, ShieldCheck, ImagePlus, Sparkles, MessageSquarePlus, Clock } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { sendCommandAwait, setSafeMode, newSession, getSkills, type SkillInfo } from "@/lib/transport";
@@ -166,6 +166,8 @@ export function Composer({
 	onSend,
 	onAbort,
 	onRefreshState,
+	onOpenSchedules,
+	onCreateSchedule,
 }: {
 	sidecarReady: boolean;
 	isRunning: boolean;
@@ -174,6 +176,10 @@ export function Composer({
 	onSend: (message: string, images?: ComposerImage[]) => void;
 	onAbort: () => void;
 	onRefreshState?: () => void;
+	/** Open the Schedules view (full list). */
+	onOpenSchedules?: () => void;
+	/** Open the Schedule create dialog directly. */
+	onCreateSchedule?: () => void;
 }) {
 	const [input, setInput] = useState("");
 	const [images, setImages] = useState<ComposerImage[]>([]);
@@ -369,7 +375,8 @@ export function Composer({
 			// Put the slash command on its own line so it parses correctly,
 			// then the user can type arguments / context below it.
 			if (!prev.trim()) return insert;
-			return `${prev.trimEnd()}\n${insert}`;
+			return `${prev.trimEnd()}
+${insert}`;
 		});
 		// Refocus the textarea so the user can continue typing arguments.
 		requestAnimationFrame(() => textareaRef.current?.focus());
@@ -657,6 +664,23 @@ export function Composer({
 												<span className="block text-[10px] text-muted">{t("composer.attachImageHint")}</span>
 											</span>
 										</button>
+										{/* Scheduled tasks — opens the create dialog */}
+										{onCreateSchedule && (
+											<button
+												type="button"
+												onClick={() => {
+													setPlusMenuOpen(false);
+													onCreateSchedule();
+												}}
+												className="flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors hover:bg-surface-2"
+											>
+												<Clock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted" />
+												<span className="min-w-0 flex-1">
+													<span className="block text-fg">{t("composer.scheduledTask")}</span>
+													<span className="block text-[10px] text-muted">{t("composer.scheduledTaskHint")}</span>
+												</span>
+											</button>
+										)}
 										{skills.length > 0 && (
 											<>
 												<div className="my-1 border-t border-border/60" />
@@ -685,8 +709,20 @@ export function Composer({
 											</>
 										)}
 									</div>
-								)}
+							)}
 							</div>
+							{/* Scheduled task shortcut — opens the Schedules view */}
+							{onOpenSchedules && (
+								<button
+									type="button"
+									disabled={!sidecarReady}
+									onClick={onOpenSchedules}
+									className="flex h-8 w-8 items-center justify-center rounded-full text-muted transition-colors hover:bg-surface hover:text-fg disabled:opacity-40"
+									title={t("composer.scheduledTask")}
+								>
+									<Clock className="h-4 w-4" />
+								</button>
+							)}
 							{/* Approval policy selector — chooses safe mode for the current session */}
 							<div className="relative" ref={approvalMenuRef}>
 								<button

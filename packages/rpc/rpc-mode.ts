@@ -36,6 +36,8 @@ import { buildHistoryTreeNodes } from "../../src/core/projection/history-tree.js
 import { killTrackedDetachedChildren } from "../../src/utils/shell.js";
 import { startPtyServer, type PtyServer } from "../pty/pty-server.js";
 import { type Theme, theme } from "../../packages/tui/theme/theme.js";
+import { SchedulerEngine, type Dispatcher as SchedulerDispatcher } from "../../src/core/scheduler/index.js";
+import { SCHEDULED_TASK_FIRED, SCHEDULED_TASK_COMPLETED, type ScheduledTaskPatch, type SessionTarget } from "@pizza/protocol";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
 import type {
 	RpcCommand,
@@ -93,6 +95,28 @@ function extractMessageText(content: unknown): string {
 		.join("");
 }
 
+function fillPinnedSessionTarget(
+	target: SessionTarget | undefined,
+	getActiveSessionId: () => string | undefined,
+): SessionTarget | undefined {
+	if (!target || target.kind === "current") {
+		const activeSessionId = getActiveSessionId();
+		return activeSessionId ? { kind: "pinned", sessionId: activeSessionId } : { kind: "pinned" };
+	}
+	if (target.kind !== "pinned" || target.sessionId) return target;
+	const activeSessionId = getActiveSessionId();
+	return activeSessionId ? { ...target, sessionId: activeSessionId } : target;
+}
+
+function fillPinnedSessionTargetPatch(
+	patch: ScheduledTaskPatch,
+	getActiveSessionId: () => string | undefined,
+): ScheduledTaskPatch {
+	if (!patch.sessionTarget || patch.sessionTarget === null) return patch;
+	const sessionTarget = fillPinnedSessionTarget(patch.sessionTarget, getActiveSessionId);
+	return sessionTarget === patch.sessionTarget ? patch : { ...patch, sessionTarget };
+}
+
 function getFacadeSessionEvents(facade: SessionFacade, types?: EventType[]): EventBase[] {
 	const descriptor = facade.getProjection().getDescriptor();
 	return facade.runtime.store.query({
@@ -134,6 +158,18 @@ function extensionIdFromPath(extPath: string): string {
 	const base = extPath.replace(/\.ts$/, "").replace(/\.js$/, "");
 	const slash = Math.max(base.lastIndexOf("/"), base.lastIndexOf("\\"));
 	return slash >= 0 ? base.slice(slash + 1) : base;
+}
+
+/**
+ * Hash a workspace cwd to the same `ws_<12hex>` identifier used by the
+ * EventStore. Mirrors src/core/event-store/workspace.ts#deriveWorkspaceId
+ * so the RPC layer can accept the raw path from the frontend and compare
+ * it against `descriptor.workspace_id` (which is the hash).
+ */
+function canonicalWorkspaceId(cwd: string): string {
+	const { resolve } = require("node:path") as typeof import("node:path");
+	const canonical = resolve(cwd).replace(/\\/g, "/");
+	return `ws_${require("node:crypto").createHash("sha256").update(canonical).digest("hex").slice(0, 12)}`;
 }
 
 /** Map a loaded extension's sourceInfo/path to the RPC kind. */
@@ -375,6 +411,7 @@ function getFacadeSessionState(facade: SessionFacade, ptyPort?: number): RpcSess
 		isCompacting: false,
 		sessionFile: makeSessionRef(descriptor.workspace_id, descriptor.session_id),
 		sessionId: descriptor.session_id,
+		threadId: descriptor.thread_id,
 		autoCompactionEnabled: facade.settingsManager.getCompactionEnabled(),
 		messageCount: messages.length,
 		pendingMessageCount: 0,
@@ -413,6 +450,143 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 	try {
 		ptyServer = await startPtyServer({ cwd: process.cwd() });
 	} catch { /* PTY server unavailable; terminal pane degrades */ }
+
+	// ----------------------------------------------------------------------
+	// Scheduler — fires the user's saved tasks by dispatching them to the
+	// facade. One engine per RPC process; the engine reads/writes
+	// ~/.pizza/main/scheduler/tasks.json (or per-workspace when the sidecar
+	// was launched in a non-main workspace). Engine is disposed during
+	// shutdown so no orphan timers fire after the sidecar exits.
+	// ----------------------------------------------------------------------
+	// The SessionDescriptor only carries a hashed workspace_id, so we can't
+	// tell from the descriptor alone whether this sidecar is the persistent
+	// main agent. The CLI surfaces "--main" via process.argv, so we detect
+	// that here. The desktop Tauri bridge also passes --main when spawning
+	// the sidecar for the main agent.
+	const descriptor = facade.getProjection().getDescriptor();
+	const isMain = process.argv.includes("--main");
+	const schedulerScope: "main" | "workspace" = isMain ? "main" : "workspace";
+	const schedulerWorkspaceId = isMain ? undefined : descriptor.workspace_id;
+	const schedulerDispatcher: SchedulerDispatcher = {
+		dispatch: async (task): Promise<{ eventId?: string; sessionId?: string; error?: string }> => {
+			try {
+				let dispatchedUserMessageId: string | undefined;
+				let promptSessionId: string | undefined;
+				// For SessionTarget: new, spawn a fresh session before the prompt.
+				// For SessionTarget: pinned, temporarily switch to the saved
+				// logical session. In both cases we restore the user's previous
+				// active session in `finally` so scheduled tasks do not hijack
+				// their visible chat.
+				const target = task.sessionTarget ?? { kind: "current" };
+				const sessionManager = facade.runtime.sessionManager;
+				let previousActiveSessionId: string | undefined;
+				let taskTargetNewSessionId: string | undefined;
+				let taskTargetPinnedSessionId: string | undefined;
+				if (target.kind === "new") {
+					previousActiveSessionId = sessionManager?.getActiveSessionId();
+					try {
+						sessionManager?.createThread(target.purpose || undefined, "schedule");
+						const newSessionId = sessionManager?.getActiveSessionId();
+						if (!newSessionId) {
+							return { error: "sessionManager unavailable; cannot create new session" };
+						}
+						taskTargetNewSessionId = newSessionId;
+					} catch (e) {
+						return { error: `createSession failed: ${e instanceof Error ? e.message : String(e)}` };
+					}
+				} else if (target.kind === "pinned") {
+					if (!target.sessionId) {
+						return { error: "pinned session target is missing sessionId" };
+					}
+					if (!sessionManager) {
+						return { error: "sessionManager unavailable; cannot switch to pinned session" };
+					}
+					previousActiveSessionId = sessionManager.getActiveSessionId();
+					try {
+						sessionManager.switchToExistingSession(target.sessionId, "scheduled task", {
+							closePrevious: "never",
+							background: true,
+						});
+						facade.runtime.refreshSystemPromptForCurrentSession();
+						taskTargetPinnedSessionId = sessionManager.getActiveSessionId();
+					} catch (e) {
+						return { error: `switch pinned session failed: ${e instanceof Error ? e.message : String(e)}` };
+					}
+				}
+				// Subscribe BEFORE prompt so we capture the exact event id.
+				const beforeSequence = facade.runtime.store.head_sequence;
+				const unsub = facade.subscribe((event) => {
+					if (event.type === "USER_MESSAGE") {
+						const payload = event.payload as { content?: unknown };
+						if (event.sequence > beforeSequence && extractMessageText(payload.content) === task.prompt) {
+							dispatchedUserMessageId = event.event_id;
+						}
+					}
+				});
+				try {
+					await facade.prompt(task.prompt);
+					promptSessionId = sessionManager?.getActiveSessionId();
+				} finally {
+					unsub();
+					// Restore the user's previous active session so background
+					// schedule runs do not hijack their main chat.
+					if ((target.kind === "new" || target.kind === "pinned") && previousActiveSessionId && sessionManager) {
+						try {
+							sessionManager.switchToExistingSession(previousActiveSessionId, "schedule complete", {
+								closePrevious: target.kind === "new" ? "always" : "never",
+								background: true,
+							});
+							facade.runtime.refreshSystemPromptForCurrentSession();
+						} catch {
+							/* The previous session may have been removed; ignore. */
+						}
+					}
+				}
+				// Report the REAL session the task actually ran in. After the
+				// restore above, getActiveSessionId() is back to the previous
+				// session — but we need to remember which session the prompt
+				// landed in. The engine reads sessionId from the dispatch result.
+				const sessionId = promptSessionId ?? taskTargetNewSessionId ?? taskTargetPinnedSessionId ?? sessionManager?.getActiveSessionId();
+				return { eventId: dispatchedUserMessageId, sessionId };
+			} catch (e) {
+				return { error: e instanceof Error ? e.message : String(e) };
+			}
+		},
+		abort: (taskId) => {
+			// Best-effort abort. facade.abort() drops the in-flight turn and
+			// resolves any waiting settlement promises. The scheduler engine
+			// handles the post-abort bookkeeping (run record, lock release).
+			try {
+				facade.abort();
+			} catch {
+				/* ignore */
+			}
+		},
+	};
+	const scheduler = new SchedulerEngine({
+		scope: schedulerScope,
+		workspaceId: schedulerWorkspaceId,
+		dispatcher: schedulerDispatcher,
+		listener: (event) => {
+			// Forward scheduler lifecycle events over the rpc_event stream so
+			// the UI can render the "⏰ 已触发" notice + history in real time.
+			if (event.type === "task.fired") {
+				const p = event.payload as { taskId: string; at: number; sessionId?: string };
+				writeRawStdout(serializeJsonLine({
+					type: SCHEDULED_TASK_FIRED,
+					event_id: `evt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+					payload: { taskId: p.taskId, at: p.at, sessionId: p.sessionId, scope: schedulerScope, workspaceId: schedulerWorkspaceId },
+				}));
+			} else if (event.type === "task.completed") {
+				writeRawStdout(serializeJsonLine({
+					type: SCHEDULED_TASK_COMPLETED,
+					event_id: `evt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+					payload: event.payload,
+				}));
+			}
+		},
+	});
+	scheduler.load();
 
 	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
 		writeRawStdout(serializeJsonLine(obj));
@@ -476,6 +650,7 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 			cleanup();
 		}
 		unsubscribe?.();
+		scheduler.dispose();
 		await Promise.resolve(facade.dispose());
 		await ptyServer?.close().catch(() => {});
 		detachInput();
@@ -608,8 +783,9 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 				if (!sessionManager) {
 					return error(id, "switch_session", "Projection session manager is not available");
 				}
-				sessionManager.switchTo(resolveSessionId(facade, command.sessionPath));
-				return success(id, "switch_session", { cancelled: false });
+				const desc = sessionManager.switchToExistingSession(resolveSessionId(facade, command.sessionPath), command.reason);
+				facade.runtime.refreshSystemPromptForCurrentSession();
+				return success(id, "switch_session", { cancelled: false, sessionId: desc.session_id });
 			}
 
 			case "fork": {
@@ -699,8 +875,18 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 							},
 						});
 					}
+					case "switch": {
+						const target = sessionManager.resolveSwitchTargetSession(command.sessionId);
+						const desc = sessionManager.switchToExistingSession(target.session_id, command.reason);
+						facade.runtime.refreshSystemPromptForCurrentSession();
+						return success(id, "history_tree", {
+							action: "switch",
+							session_id: desc.session_id,
+						});
+					}
 					case "jump": {
 						const result = sessionManager.jumpToSession(command.sessionId, command.reason);
+						facade.runtime.refreshSystemPromptForCurrentSession();
 						return success(id, "history_tree", {
 							action: "jump",
 							session_id: result.descriptor.session_id,
@@ -709,6 +895,7 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 					}
 					case "fork": {
 						const desc = sessionManager.forkFromSession(command.sessionId, { preserveHistory: false });
+						facade.runtime.refreshSystemPromptForCurrentSession();
 						return success(id, "history_tree", { action: "fork", session_id: desc.session_id });
 					}
 					case "rename": {
@@ -785,8 +972,16 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 				facade.settingsManager.setSafeMode(enabled);
 				return success(id, "set_safe_mode", { safeMode: facade.runtime.isSafeMode });
 			}
+			case "get_scheduler_policy": {
+				return success(id, "get_scheduler_policy", { policy: facade.settingsManager.getSchedulerPolicy() });
+			}
+			case "set_scheduler_policy": {
+				const policy = (command as unknown as { policy: import("@pizza/protocol").SchedulerPolicy }).policy;
+				facade.settingsManager.setSchedulerPolicy(policy);
+				return success(id, "set_scheduler_policy", { policy: facade.settingsManager.getSchedulerPolicy() });
+			}
 		case "new_session": {
-			const desc = facade.runtime.sessionManager?.createSession("user_explicit");
+			const desc = facade.runtime.createSession();
 			const sessionId = desc?.session_id ?? facade.runtime.sessionManager?.getActiveSessionId() ?? "";
 			return success(id, "new_session", { sessionId });
 		}
@@ -862,6 +1057,110 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 				providers: registry?.authStorage?.list() ?? [],
 			});
 		}
+
+			case "schedule_list": {
+				return success(id, "schedule_list", { tasks: scheduler.list() });
+			}
+
+			case "schedule_create": {
+				const t = command.task;
+				// The scope on the wire wins, but we validate it matches the engine.
+				if (t.scope !== schedulerScope) {
+					return error(id, "schedule_create", `Scope mismatch: sidecar is ${schedulerScope}, task is ${t.scope}`);
+				}
+				if (t.scope === "workspace") {
+					const provided = t.workspaceId ? canonicalWorkspaceId(t.workspaceId) : undefined;
+					if (provided !== schedulerWorkspaceId) {
+						return error(id, "schedule_create", `Workspace mismatch: sidecar is ${schedulerWorkspaceId}, task is ${provided} (from ${t.workspaceId})`);
+					}
+				}
+				const policy = facade.settingsManager.getSchedulerPolicy();
+				const r = scheduler.create({
+					name: t.name,
+					prompt: t.prompt,
+					schedule: t.schedule,
+					enabled: t.enabled,
+					createdBy: t.createdBy ?? "user",
+					sourceText: t.sourceText,
+					startAt: t.startAt,
+					endAt: t.endAt,
+					sessionTarget: fillPinnedSessionTarget(
+						t.sessionTarget ?? policy.defaultSessionTarget,
+						() => facade.runtime.sessionManager?.getActiveSessionId(),
+					),
+					concurrencyPolicy: t.concurrencyPolicy ?? policy.concurrency,
+					timeoutMinutes: t.timeoutMinutes ?? policy.timeoutMinutes,
+				});
+				if (!r.ok) return error(id, "schedule_create", r.error);
+				return success(id, "schedule_create", { task: r.task });
+			}
+
+			case "schedule_update": {
+				if (command.scope !== schedulerScope) {
+					return error(id, "schedule_update", `Scope mismatch`);
+				}
+				if (command.scope === "workspace") {
+					const provided = command.workspaceId ? canonicalWorkspaceId(command.workspaceId) : undefined;
+					if (provided !== schedulerWorkspaceId) {
+						return error(id, "schedule_update", `Workspace mismatch`);
+					}
+				}
+				const r = scheduler.update(command.taskId, fillPinnedSessionTargetPatch(
+					command.patch,
+					() => facade.runtime.sessionManager?.getActiveSessionId(),
+				));
+				if (!r.ok) return error(id, "schedule_update", r.error);
+				return success(id, "schedule_update", { task: r.task });
+			}
+
+			case "schedule_delete": {
+				if (command.scope !== schedulerScope) {
+					return error(id, "schedule_delete", `Scope mismatch`);
+				}
+				if (command.scope === "workspace") {
+					const provided = command.workspaceId ? canonicalWorkspaceId(command.workspaceId) : undefined;
+					if (provided !== schedulerWorkspaceId) {
+						return error(id, "schedule_delete", `Workspace mismatch`);
+					}
+				}
+				const r = scheduler.delete(command.taskId);
+				if (!r.ok) return error(id, "schedule_delete", r.error);
+				return success(id, "schedule_delete", { ok: true, taskId: command.taskId });
+			}
+
+			case "schedule_run_now": {
+				if (command.scope !== schedulerScope) {
+					return error(id, "schedule_run_now", `Scope mismatch`);
+				}
+				if (command.scope === "workspace") {
+					const provided = command.workspaceId ? canonicalWorkspaceId(command.workspaceId) : undefined;
+					if (provided !== schedulerWorkspaceId) {
+						return error(id, "schedule_run_now", `Workspace mismatch`);
+					}
+				}
+				const r = await scheduler.runNow(command.taskId);
+				if (!r.ok) return error(id, "schedule_run_now", r.error);
+				return success(id, "schedule_run_now", { fired: true, taskId: r.taskId, at: r.at });
+			}
+
+			case "schedule_reload": {
+				const reloaded = scheduler.reload();
+				return success(id, "schedule_reload", { reloaded });
+			}
+
+			case "schedule_history": {
+				if (command.scope !== schedulerScope) {
+					return error(id, "schedule_history", `Scope mismatch`);
+				}
+				if (command.scope === "workspace") {
+					const provided = command.workspaceId ? canonicalWorkspaceId(command.workspaceId) : undefined;
+					if (provided !== schedulerWorkspaceId) {
+						return error(id, "schedule_history", `Workspace mismatch`);
+					}
+				}
+				const runs = scheduler.history(command.taskId, command.limit ?? 50);
+				return success(id, "schedule_history", { runs });
+			}
 
 			default: {
 				const unknownCommand = command as { type: string };

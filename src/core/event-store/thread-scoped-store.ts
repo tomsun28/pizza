@@ -16,19 +16,25 @@ import type { EventAppendInput, EventQuery, EventStore, SubscribeOptions } from 
 export class ThreadScopedStore implements EventStore {
 	constructor(
 		private readonly inner: EventStore,
-		private readonly threadId: string,
+		private readonly threadId: string | (() => string | undefined),
 	) {}
+
+	private _threadId(): string | undefined {
+		return typeof this.threadId === "function" ? this.threadId() : this.threadId;
+	}
 
 	get workspace_id(): string {
 		return this.inner.workspace_id;
 	}
 
 	append(event: EventAppendInput): EventBase {
-		return this.inner.append({ ...event, thread_id: this.threadId });
+		const threadId = this._threadId();
+		return this.inner.append(threadId ? { ...event, thread_id: threadId } : event);
 	}
 
 	appendBatch(events: EventAppendInput[]): EventBase[] {
-		return this.inner.appendBatch(events.map((e) => ({ ...e, thread_id: this.threadId })));
+		const threadId = this._threadId();
+		return this.inner.appendBatch(threadId ? events.map((e) => ({ ...e, thread_id: threadId })) : events);
 	}
 
 	query(filter: EventQuery): EventBase[] {

@@ -38,8 +38,8 @@ export interface EventSourcedRuntimeConfig {
 	storagePath?: string;
 	/** Pre-configured EventStore (optional, will create if not provided) */
 	store?: EventStore;
-	/** Thread ID for event isolation. When set, the runtime wraps its store so every appended event carries thread_id = threadId. */
-	threadId?: string;
+	/** Thread ID for event isolation. When set, every appended event carries the current thread id. */
+	threadId?: string | (() => string | undefined);
 	/** Pre-configured SessionManager (optional, will create if not provided) */
 	sessionManager?: SessionManager;
 	/** Classifier configuration */
@@ -155,6 +155,8 @@ export class EventSourcedRuntime {
 		this._isProcessing = true;
 
 		try {
+			this.sessionManager?.ensureActiveSessionWritable("prompt from historical session");
+			this.refreshSystemPromptForCurrentSession();
 			// Lazy-create the reactor and start it. Reactor lives only as long as the prompt cycle.
 			const projection = this.getProjection();
 
@@ -365,6 +367,7 @@ export class EventSourcedRuntime {
 
 	setSystemPrompt(prompt: string): void {
 		const old_value = this.config.systemPrompt;
+		if (old_value === prompt) return;
 		this.config.systemPrompt = prompt;
 		this.store.append({
 			actor_id: "user",
@@ -477,7 +480,9 @@ export class EventSourcedRuntime {
 	 * Fork session at a specific event.
 	 */
 	fork(eventId: string): SessionDescriptor {
-		return this.sessionManager?.forkAt(eventId) as any;
+		const desc = this.sessionManager?.forkAt(eventId) as any;
+		this.refreshSystemPromptForCurrentSession();
+		return desc;
 	}
 
 	/**
@@ -485,13 +490,26 @@ export class EventSourcedRuntime {
 	 */
 	switchSession(sessionId: string): void {
 		this.sessionManager?.switchTo(sessionId);
+		this.refreshSystemPromptForCurrentSession();
 	}
 
 	/**
 	 * Create a new session.
 	 */
 	createSession(name?: string): SessionDescriptor {
-		return this.sessionManager?.createSession("user_explicit", name) as any;
+		const desc = this.sessionManager?.createSession("user_explicit", name) as any;
+		this.refreshSystemPromptForCurrentSession();
+		return desc;
+	}
+
+	/**
+	 * Rebuild prompt fragments that depend on the active session. This keeps
+	 * session breadcrumbs fresh even when the UI changes sessions between turns.
+	 */
+	refreshSystemPromptForCurrentSession(): string {
+		if (!this.config.refreshSystemPrompt) return this.config.systemPrompt;
+		this.config.systemPrompt = this.config.refreshSystemPrompt();
+		return this.config.systemPrompt;
 	}
 
 	/**
@@ -590,5 +608,6 @@ export function createEventSourcedRuntime(
 		retryPolicy: config.retryPolicy,
 		compactionPolicy: config.compactionPolicy,
 		compactionEngineSettings: config.compactionEngineSettings,
+		refreshSystemPrompt: config.refreshSystemPrompt,
 	});
 }

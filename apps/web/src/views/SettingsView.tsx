@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useLocation, useOutletContext } from "react-router-dom";
+import { Save } from "lucide-react";
 import { PageHeader, Card, Badge, Button } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { PixelSelect, PixelCombobox } from "@pxlkit/ui-kit";
@@ -36,6 +37,24 @@ const THINKING_OPTIONS = THINKING_LEVELS.map((level) => ({ value: level, label: 
 function GeneralTab({ state }: { state: RpcSessionState | null }) {
 	const { t, i18n } = useTranslation();
 	const [thinkingLevel, setThinkingLevel] = useState<string>(state?.thinkingLevel ?? "off");
+	// Scheduler defaults — applied to new tasks. Loaded once on mount.
+	const [schedulerPolicy, setSchedulerPolicyState] = useState<import("@/lib/types").SchedulerPolicy>({
+		concurrency: "skip",
+		timeoutMinutes: 0,
+		defaultSessionTarget: { kind: "pinned" },
+	});
+	useEffect(() => {
+		import("@/lib/transport").then(({ getSchedulerPolicy }) => {
+			getSchedulerPolicy()
+				.then((policy) => setSchedulerPolicyState({
+					...policy,
+					defaultSessionTarget: policy.defaultSessionTarget.kind === "current"
+						? { kind: "pinned" }
+						: policy.defaultSessionTarget,
+				}))
+				.catch(() => {});
+		});
+	}, []);
 	const [language, setLanguage] = useState<AppLanguage>(
 		(SUPPORTED_LANGUAGES.includes(i18n.language as AppLanguage) ? i18n.language : DEFAULT_LANGUAGE) as AppLanguage,
 	);
@@ -97,6 +116,86 @@ function GeneralTab({ state }: { state: RpcSessionState | null }) {
 						/>
 					</div>
 				</Row>
+			</Card>
+
+			<Card>
+				<div className="mb-2 flex items-center justify-between">
+					<span className="text-sm font-medium text-fg">{t("settings.scheduler.title")}</span>
+					<Button
+						size="sm"
+						tone="accent"
+						iconLeft={<Save className="h-3.5 w-3.5" />}
+						onClick={async () => {
+							const { setSchedulerPolicy } = await import("@/lib/transport");
+							const saved = await setSchedulerPolicy(schedulerPolicy);
+							setSchedulerPolicyState(saved);
+						}}
+					>
+						{t("common.save")}
+					</Button>
+				</div>
+				<div className="mb-1 text-xs text-muted">{t("settings.scheduler.subtitle")}</div>
+				<div className="space-y-3">
+					<div>
+						<div className="mb-1 text-xs text-muted">{t("settings.scheduler.defaultSessionTarget")}</div>
+						<div className="grid gap-1.5">
+							{(["pinned", "new"] as const).map((k) => (
+								<button
+									key={k}
+									type="button"
+									onClick={() => setSchedulerPolicyState({
+										...schedulerPolicy,
+										defaultSessionTarget: k === "pinned"
+											? { kind: "pinned" }
+											: { kind: "new", purpose: schedulerPolicy.defaultSessionTarget.kind === "new" ? schedulerPolicy.defaultSessionTarget.purpose : "" },
+									})}
+									className={cn(
+										"flex w-full items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left text-sm transition-colors",
+										schedulerPolicy.defaultSessionTarget.kind === k
+											? "border-accent bg-accent/10 text-fg"
+											: "border-border bg-surface-2 text-muted hover:bg-surface hover:text-fg",
+									)}
+								>
+									<span>{t(`schedule.session${k === "pinned" ? "Pinned" : "New"}`)}</span>
+								</button>
+							))}
+						</div>
+					</div>
+					<div>
+						<div className="mb-1 text-xs text-muted">{t("settings.scheduler.defaultConcurrency")}</div>
+						<div className="grid gap-1.5">
+							{(["skip", "queue", "preempt"] as const).map((p) => (
+								<button
+									key={p}
+									type="button"
+									onClick={() => setSchedulerPolicyState({ ...schedulerPolicy, concurrency: p })}
+									className={cn(
+										"flex w-full items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left text-sm transition-colors",
+										schedulerPolicy.concurrency === p
+											? "border-accent bg-accent/10 text-fg"
+											: "border-border bg-surface-2 text-muted hover:bg-surface hover:text-fg",
+									)}
+								>
+									<span>{t(`schedule.concurrency_${p}`)}</span>
+								</button>
+							))}
+						</div>
+					</div>
+					<div>
+						<div className="mb-1 text-xs text-muted">{t("settings.scheduler.defaultTimeout")}</div>
+						<div className="flex items-center gap-2">
+							<input
+								type="number"
+								min={0}
+								max={1440}
+								value={schedulerPolicy.timeoutMinutes}
+								onChange={(e) => setSchedulerPolicyState({ ...schedulerPolicy, timeoutMinutes: Math.max(0, Number(e.target.value || 0)) })}
+								className="h-8 w-24 rounded-md border border-border bg-surface px-2 text-sm text-fg outline-none focus:border-accent"
+							/>
+							<span className="text-xs text-muted">{t("schedule.minute")} (0 = {t("schedule.timeoutNoLimit")})</span>
+						</div>
+					</div>
+				</div>
 			</Card>
 		</div>
 	);

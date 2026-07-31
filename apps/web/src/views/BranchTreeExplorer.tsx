@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { GitBranch, Search, RefreshCw, GitFork, CornerUpRight, Pencil, Copy } from "lucide-react";
+import { GitBranch, Search, RefreshCw, GitFork, CornerUpRight, Pencil, Copy, LogIn } from "lucide-react";
 import {
 	historyTreeList,
 	historyTreeFork,
 	historyTreeJump,
+	historyTreeSwitch,
 	historyTreeRename,
 	subscribeEvents,
 } from "@/lib/transport";
@@ -126,6 +127,31 @@ export default function BranchTreeExplorer({ workspace }: { workspace?: string |
 		catch (e) { setError(e instanceof Error ? e.message : String(e)); }
 	}, [load]);
 
+	const onSwitch = useCallback(async (node: RpcHistoryTreeNode) => {
+		setMenu(null);
+		setSelected(node.session_id);
+		if (node.is_active) return;
+		try {
+			const result = await historyTreeSwitch(node.session_id, "history tree switch");
+			setSelected(result.session_id);
+			await load();
+		}
+		catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+	}, [load]);
+
+	const onActivate = useCallback(async (node: RpcHistoryTreeNode) => {
+		setMenu(null);
+		setSelected(node.session_id);
+		if (node.is_active) return;
+		try {
+			const result = await historyTreeSwitch(node.session_id, "history tree row click");
+			setSelected(result.session_id);
+			await load();
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		}
+	}, [load]);
+
 	const onRename = useCallback(async (node: RpcHistoryTreeNode) => {
 		setMenu(null);
 		const name = window.prompt(t("history.renamePrompt"), node.name ?? "");
@@ -171,19 +197,19 @@ export default function BranchTreeExplorer({ workspace }: { workspace?: string |
 							description={query ? t("history.noMatch") : t("history.emptyDescription")}
 						/>
 					</div>
-				) : (
-					<ul className="font-mono text-xs">
-						{nodes.map((node) => (
-							<TreeRow
-								key={node.session_id}
-								node={node}
-								selected={selected === node.session_id}
-								onSelect={() => setSelected(node.session_id)}
-								onContextMenu={(x, y) => setMenu({ node, x, y })}
-							/>
-						))}
-					</ul>
-				)}
+					) : (
+						<ul className="font-mono text-xs">
+							{nodes.map((node) => (
+								<TreeRow
+									key={node.session_id}
+									node={node}
+									selected={selected === node.session_id}
+									onSelect={() => void onActivate(node)}
+									onContextMenu={(x, y) => setMenu({ node, x, y })}
+								/>
+							))}
+						</ul>
+					)}
 			</div>
 
 			{/* Breadcrumb */}
@@ -196,19 +222,49 @@ export default function BranchTreeExplorer({ workspace }: { workspace?: string |
 
 			{/* Context menu */}
 			{menu && (
-				<ContextMenu
-					x={menu.x}
-					y={menu.y}
-					onDismiss={() => setMenu(null)}
-					items={buildHistoryMenuItems(menu.node, t, {
-						onJump: () => void onJump(menu.node),
-						onFork: () => void onFork(menu.node),
-						onRename: () => void onRename(menu.node),
-						onCopyId: () => {
-							void navigator.clipboard?.writeText(menu.node.session_id);
-						},
-					})}
-				/>
+				<div
+					className="fixed z-50 min-w-52 rounded-md border border-border bg-surface-2 py-1 shadow-lg"
+					style={{ left: menu.x, top: menu.y }}
+					onMouseDown={(e) => e.stopPropagation()}
+				>
+					{/* Switch only moves the active pointer. Jump keeps the existing
+						"reopen closed branches by forking" behavior. */}
+					<MenuItem
+						icon={LogIn}
+						label={t("history.switchHere")}
+						hint={menu.node.closed ? t("history.switchClosedHint") : t("history.switchOpenHint")}
+						disabled={menu.node.is_active}
+						onClick={() => void onSwitch(menu.node)}
+					/>
+					<MenuItem
+						icon={CornerUpRight}
+						label={t("history.jumpHere")}
+						hint={
+							menu.node.is_active
+								? undefined
+								: menu.node.closed
+									? t("history.jumpClosedHint")
+									: t("history.jumpOpenHint")
+						}
+						disabled={menu.node.is_active}
+						onClick={() => void onJump(menu.node)}
+					/>
+					{/* Fork always creates a new child branch; if the source is open
+						and at HEAD, it gets frozen at the fork point. */}
+					<MenuItem
+						icon={GitFork}
+						label={t("history.forkFromHere")}
+						hint={t("history.forkHint")}
+						onClick={() => void onFork(menu.node)}
+					/>
+					<MenuItem icon={Pencil} label={t("history.rename")} onClick={() => void onRename(menu.node)} />
+					<div className="my-1 h-px bg-border" />
+					<MenuItem
+						icon={Copy}
+						label={t("history.copyId")}
+						onClick={() => { void navigator.clipboard?.writeText(menu.node.session_id); setMenu(null); }}
+					/>
+				</div>
 			)}
 		</div>
 	);

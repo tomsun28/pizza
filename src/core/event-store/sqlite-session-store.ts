@@ -47,8 +47,9 @@ export class SqliteSessionStore implements SessionStore {
 			const upsertSession = this.db.prepare(`
 				insert into sessions (
 					session_id, thread_id, workspace_id, start_event_id, end_event_id,
-					summary_event_id, name, created_by, boundary_reason, parent_session_id, created_at
-				) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+					summary_event_id, name, created_by, boundary_reason, parent_session_id,
+					context_parent_session_id, created_at
+				) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				on conflict(session_id) do update set
 					thread_id = excluded.thread_id,
 					start_event_id = excluded.start_event_id,
@@ -56,7 +57,8 @@ export class SqliteSessionStore implements SessionStore {
 					summary_event_id = excluded.summary_event_id,
 					name = excluded.name,
 					boundary_reason = excluded.boundary_reason,
-					parent_session_id = excluded.parent_session_id
+					parent_session_id = excluded.parent_session_id,
+					context_parent_session_id = excluded.context_parent_session_id
 			`);
 			for (const session of index.sessions) {
 				upsertSession.run(
@@ -70,6 +72,7 @@ export class SqliteSessionStore implements SessionStore {
 					session.created_by,
 					session.boundary_reason ?? null,
 					session.parent_session_id ?? null,
+					session.context_parent_session_id ?? null,
 					session.created_at,
 				);
 			}
@@ -116,6 +119,7 @@ export class SqliteSessionStore implements SessionStore {
 				created_by text not null,
 				boundary_reason text,
 				parent_session_id text,
+				context_parent_session_id text,
 				created_at integer not null
 			);
 
@@ -123,6 +127,14 @@ export class SqliteSessionStore implements SessionStore {
 			create index if not exists idx_sessions_workspace_id on sessions(workspace_id);
 			create index if not exists idx_sessions_parent_id on sessions(parent_session_id);
 		`);
+		this._ensureColumn("sessions", "context_parent_session_id", "text");
+		this.db.exec("create index if not exists idx_sessions_context_parent_id on sessions(context_parent_session_id)");
+	}
+
+	private _ensureColumn(table: string, column: string, type: string): void {
+		const rows = this.db.prepare(`pragma table_info(${table})`).all() as Array<{ name: string }>;
+		if (rows.some((row) => row.name === column)) return;
+		this.db.exec(`alter table ${table} add column ${column} ${type}`);
 	}
 
 	private _loadThreads(): ThreadDescriptor[] {
@@ -151,6 +163,7 @@ export class SqliteSessionStore implements SessionStore {
 			created_by: row.created_by as SessionDescriptor["created_by"],
 			boundary_reason: row.boundary_reason as SessionDescriptor["boundary_reason"] | undefined,
 			parent_session_id: row.parent_session_id ?? undefined,
+			context_parent_session_id: row.context_parent_session_id ?? undefined,
 			created_at: row.created_at,
 		}));
 	}
@@ -175,5 +188,6 @@ type SessionRow = {
 	created_by: string;
 	boundary_reason: string | null;
 	parent_session_id: string | null;
+	context_parent_session_id: string | null;
 	created_at: number;
 };
