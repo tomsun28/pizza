@@ -187,9 +187,16 @@ function extensionIdFromPath(extPath: string): string {
  * it against `descriptor.workspace_id` (which is the hash).
  */
 function canonicalWorkspaceId(cwd: string): string {
+	if (/^ws_[0-9a-f]{12}$/.test(cwd)) return cwd;
 	const { resolve } = require("node:path") as typeof import("node:path");
 	const canonical = resolve(cwd).replace(/\\/g, "/");
 	return `ws_${require("node:crypto").createHash("sha256").update(canonical).digest("hex").slice(0, 12)}`;
+}
+
+function workspaceIdMatches(provided: string | undefined, expected: string | undefined): boolean {
+	if (provided === expected) return true;
+	if (!provided || !expected) return false;
+	return canonicalWorkspaceId(provided) === canonicalWorkspaceId(expected);
 }
 
 /** Map a loaded extension's sourceInfo/path to the RPC kind. */
@@ -1089,9 +1096,8 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 					return error(id, "schedule_create", `Scope mismatch: sidecar is ${schedulerScope}, task is ${t.scope}`);
 				}
 				if (t.scope === "workspace") {
-					const provided = t.workspaceId ? canonicalWorkspaceId(t.workspaceId) : undefined;
-					if (provided !== schedulerWorkspaceId) {
-						return error(id, "schedule_create", `Workspace mismatch: sidecar is ${schedulerWorkspaceId}, task is ${provided} (from ${t.workspaceId})`);
+					if (!workspaceIdMatches(t.workspaceId, schedulerWorkspaceId)) {
+						return error(id, "schedule_create", `Workspace mismatch: sidecar is ${schedulerWorkspaceId}, task is ${t.workspaceId}`);
 					}
 				}
 				const policy = facade.settingsManager.getSchedulerPolicy();
@@ -1120,8 +1126,7 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 					return error(id, "schedule_update", `Scope mismatch`);
 				}
 				if (command.scope === "workspace") {
-					const provided = command.workspaceId ? canonicalWorkspaceId(command.workspaceId) : undefined;
-					if (provided !== schedulerWorkspaceId) {
+					if (!workspaceIdMatches(command.workspaceId, schedulerWorkspaceId)) {
 						return error(id, "schedule_update", `Workspace mismatch`);
 					}
 				}
@@ -1138,8 +1143,7 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 					return error(id, "schedule_delete", `Scope mismatch`);
 				}
 				if (command.scope === "workspace") {
-					const provided = command.workspaceId ? canonicalWorkspaceId(command.workspaceId) : undefined;
-					if (provided !== schedulerWorkspaceId) {
+					if (!workspaceIdMatches(command.workspaceId, schedulerWorkspaceId)) {
 						return error(id, "schedule_delete", `Workspace mismatch`);
 					}
 				}
@@ -1153,8 +1157,7 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 					return error(id, "schedule_run_now", `Scope mismatch`);
 				}
 				if (command.scope === "workspace") {
-					const provided = command.workspaceId ? canonicalWorkspaceId(command.workspaceId) : undefined;
-					if (provided !== schedulerWorkspaceId) {
+					if (!workspaceIdMatches(command.workspaceId, schedulerWorkspaceId)) {
 						return error(id, "schedule_run_now", `Workspace mismatch`);
 					}
 				}
@@ -1173,8 +1176,7 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 					return error(id, "schedule_history", `Scope mismatch`);
 				}
 				if (command.scope === "workspace") {
-					const provided = command.workspaceId ? canonicalWorkspaceId(command.workspaceId) : undefined;
-					if (provided !== schedulerWorkspaceId) {
+					if (!workspaceIdMatches(command.workspaceId, schedulerWorkspaceId)) {
 						return error(id, "schedule_history", `Workspace mismatch`);
 					}
 				}
