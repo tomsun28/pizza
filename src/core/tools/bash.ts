@@ -346,7 +346,7 @@ function parseBashBuiltinCommand(command: string): ParsedBuiltinToolInput | null
 	if (getBuiltinCommandHelpForArgs(builtinName, parsed.args)) {
 		return null;
 	}
-	return parseBuiltinToolInput(builtinName, parsed.args, parsed.heredoc);
+	return parseBuiltinToolInput(builtinName, parsed.args, parsed.heredoc, { quoteDelimitersConsumed: parsed.quoteDelimitersConsumed });
 }
 
 function hasShellControlSyntax(command: string): boolean {
@@ -500,7 +500,7 @@ export function createBashToolDefinition(
 	return {
 		name: "cli",
 		label: "cli",
-		description: `Execute a CLI command in the current working directory. Built-in commands are prefixed with an underscore and handled internally (they never fall back to the shell): _read, _write, _edit, _session_split, _history_tree, and (for the main agent) _delegate_agent. The underscore prefix avoids collisions with real shell commands (e.g. bash's own read/write builtins). IMPORTANT: built-in commands do NOT support shell operators — no pipes (|), redirects (> <), chaining (; & &&), command substitution, or newlines; issue each as a single pure command. To use a pipeline or redirection, run a plain shell command instead (grep, find, ls, cat, sed, git, npm, etc.). Output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB.`,
+		description: `Execute a CLI command in the current working directory. Built-in commands are prefixed with an underscore and handled internally (they never fall back to the shell): _read, _write, _edit, _session_split, _history_tree, and (for the main agent) _delegate_agent. The underscore prefix avoids collisions with real shell commands (e.g. bash's own read/write builtins). IMPORTANT: built-in commands do NOT support shell operators — no pipes (|), redirects (> <), chaining (; & &&), command substitution, or newlines; issue each as a single pure command. To use a pipeline or redirection, run a plain shell command instead (grep, find, ls, cat, sed, git, npm, etc.). For _edit/_write, a value containing quotes, multiple spaces, or newlines must go through a verbatim channel — _edit with --edits JSON (e.g. --edits '[{"op":"replace","range":"12#ab","new":"line1\nline2"}]'), _write with --content or a <<EOF heredoc, or wrap the whole value in quotes. Do NOT pass such a value as bare positional tokens — its inner quotes/spaces get silently mangled. Output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB.`,
 		promptSnippet: "Execute CLI commands: built-ins are prefixed with _ (_read/_write/_edit/_session_split/_history_tree/_delegate_agent) and are pure single commands with NO shell operators; use shell commands (grep, find, ls, cat, git, npm) for pipes/redirections",
 		parameters: bashSchema,
 		async execute(
@@ -538,15 +538,38 @@ export function createBashToolDefinition(
 								text:
 									firstWord +
 									" is a built-in cli command and does not support shell operators " +
-									"(|, >, <, ;, &, &&, command substitution, or newlines). " +
-									"Issue it as a single pure command. For pipelines or redirections, use a plain " +
-									"shell command instead — e.g. grep PATTERN FILE, cat FILE | ..., or sed ....",
+									"(|, >, <, ;, &, &&, command substitution, or newlines)." +
+									(["_edit", "edit", "_write", "write"].includes(firstWord)
+										? " For multi-line or special-character content, pass it through a channel that "
+										+ "preserves it verbatim: edit --edits '{\"op\":\"replace\",\"range\":\"12#ab\",\"new\":\"line1\\nline2\"}' "
+										+ "(JSON keeps quotes/spaces/newlines), a <<EOF heredoc, or wrap the whole value in quotes. "
+										+ "Do not split a value across bare positional tokens."
+									: " Issue it as a single pure command. For pipelines or redirections, use a plain "
+										+ "shell command instead — e.g. grep PATTERN FILE, cat FILE | ..., or sed ...."),
 							},
 						],
 						details: undefined,
 					};
 				}
-				const builtin = parseBuiltinToolInput(firstWord, parsedCommand.args, parsedCommand.heredoc);
+				let builtin: ParsedBuiltinToolInput | null;
+				try {
+					builtin = parseBuiltinToolInput(firstWord, parsedCommand.args, parsedCommand.heredoc, {
+						quoteDelimitersConsumed: parsedCommand.quoteDelimitersConsumed,
+					});
+				} catch (parseError) {
+					// Argument-parse errors (e.g. the positional quote-stripping guard,
+					// an unknown edit op) are user-facing guidance, not crashes — surface
+					// them as a clean text result so the caller can retry correctly.
+					return {
+						content: [
+							{
+								type: "text",
+								text: parseError instanceof Error ? parseError.message : String(parseError),
+							},
+						],
+						details: undefined,
+					};
+				}
 				if (builtin) {
 					switch (builtin.command) {
 						case "read": {
