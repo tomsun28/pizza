@@ -83,9 +83,8 @@
     "skills": "技能",
     "revealInFinder": "在文件管理器中显示",
     "dropFiles": "拖入文件以附加",
-    "rejectedFiles_one": "已跳过 1 个文件",
-    "rejectedFiles_other": "已跳过 {{count}} 个文件"
-    "skills": "技能",
+		"rejectedFiles_one": "已跳过 1 个文件",
+		"rejectedFiles_other": "已跳过 {{count}} 个文件",
     "scheduledTask": "定时任务",
     "scheduledTaskHint": "在指定时间自动执行任务"
   },

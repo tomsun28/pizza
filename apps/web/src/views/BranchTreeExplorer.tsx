@@ -222,49 +222,18 @@ export default function BranchTreeExplorer({ workspace }: { workspace?: string |
 
 			{/* Context menu */}
 			{menu && (
-				<div
-					className="fixed z-50 min-w-52 rounded-md border border-border bg-surface-2 py-1 shadow-lg"
-					style={{ left: menu.x, top: menu.y }}
-					onMouseDown={(e) => e.stopPropagation()}
-				>
-					{/* Switch only moves the active pointer. Jump keeps the existing
-						"reopen closed branches by forking" behavior. */}
-					<MenuItem
-						icon={LogIn}
-						label={t("history.switchHere")}
-						hint={menu.node.closed ? t("history.switchClosedHint") : t("history.switchOpenHint")}
-						disabled={menu.node.is_active}
-						onClick={() => void onSwitch(menu.node)}
-					/>
-					<MenuItem
-						icon={CornerUpRight}
-						label={t("history.jumpHere")}
-						hint={
-							menu.node.is_active
-								? undefined
-								: menu.node.closed
-									? t("history.jumpClosedHint")
-									: t("history.jumpOpenHint")
-						}
-						disabled={menu.node.is_active}
-						onClick={() => void onJump(menu.node)}
-					/>
-					{/* Fork always creates a new child branch; if the source is open
-						and at HEAD, it gets frozen at the fork point. */}
-					<MenuItem
-						icon={GitFork}
-						label={t("history.forkFromHere")}
-						hint={t("history.forkHint")}
-						onClick={() => void onFork(menu.node)}
-					/>
-					<MenuItem icon={Pencil} label={t("history.rename")} onClick={() => void onRename(menu.node)} />
-					<div className="my-1 h-px bg-border" />
-					<MenuItem
-						icon={Copy}
-						label={t("history.copyId")}
-						onClick={() => { void navigator.clipboard?.writeText(menu.node.session_id); setMenu(null); }}
-					/>
-				</div>
+				<ContextMenu
+					x={menu.x}
+					y={menu.y}
+					onDismiss={() => setMenu(null)}
+					items={buildHistoryMenuItems(menu.node, t, {
+						onSwitch: () => void onSwitch(menu.node),
+						onJump: () => void onJump(menu.node),
+						onFork: () => void onFork(menu.node),
+						onRename: () => void onRename(menu.node),
+						onCopyId: () => void navigator.clipboard?.writeText(menu.node.session_id),
+					})}
+				/>
 			)}
 		</div>
 	);
@@ -273,9 +242,16 @@ export default function BranchTreeExplorer({ workspace }: { workspace?: string |
 function buildHistoryMenuItems(
 	node: RpcHistoryTreeNode,
 	t: (k: string) => string,
-	handlers: { onJump: () => void; onFork: () => void; onRename: () => void; onCopyId: () => void },
+	handlers: { onSwitch: () => void; onJump: () => void; onFork: () => void; onRename: () => void; onCopyId: () => void },
 ): ContextMenuItem[] {
 	return [
+		{
+			icon: LogIn,
+			label: t("history.switchHere"),
+			hint: node.closed ? t("history.switchClosedHint") : t("history.switchOpenHint"),
+			disabled: node.is_active,
+			onClick: handlers.onSwitch,
+		},
 		{
 			icon: CornerUpRight,
 			label: t("history.jumpHere"),

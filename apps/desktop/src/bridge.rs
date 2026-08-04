@@ -1,3 +1,5 @@
+use base64::Engine;
+use serde::Serialize;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -25,7 +27,7 @@ fn read_api_key(provider: &str) -> Option<String> {
 	}
 }
 
-fn log_file(msg: &str) {
+pub(crate) fn log_file(msg: &str) {
 	use std::io::Write;
 	if let Ok(mut f) = std::fs::OpenOptions::new()
 		.create(true)
@@ -219,6 +221,17 @@ fn resolve_pizza_command(app: &AppHandle) -> (String, Vec<String>) {
 struct SidecarEntry {
 	child: Child,
 	stdin: ChildStdin,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileAttachmentInfo {
+	kind: &'static str,
+	absolute_path: String,
+	relative_path: String,
+	mime_type: String,
+	name: String,
+	size: u64,
 }
 
 pub struct BridgeState {
@@ -1313,6 +1326,136 @@ pub async fn reveal_file(absolute_path: String) -> Result<(), String> {
 		.map_err(|e| format!("Failed to open file manager: {e}"))?;
 
 	Ok(())
+}
+
+fn file_name_for_path(path: &std::path::Path) -> String {
+	path.file_name()
+		.and_then(|name| name.to_str())
+		.filter(|name| !name.is_empty())
+		.unwrap_or("untitled")
+		.to_string()
+}
+
+fn sanitize_upload_filename(filename: &str) -> String {
+	let cleaned: String = filename
+		.chars()
+		.map(|c| {
+			if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ' ') {
+				c
+			} else {
+				'_'
+			}
+		})
+		.collect();
+	let trimmed = cleaned.trim().trim_matches('.').to_string();
+	if trimmed.is_empty() {
+		"untitled".to_string()
+	} else {
+		trimmed
+	}
+}
+
+fn guess_mime_type(path: &std::path::Path, fallback: &str) -> String {
+	if !fallback.is_empty() && fallback != "application/octet-stream" {
+		return fallback.to_string();
+	}
+	let ext = path
+		.extension()
+		.and_then(|ext| ext.to_str())
+		.unwrap_or("")
+		.to_ascii_lowercase();
+	match ext.as_str() {
+		"jpg" | "jpeg" => "image/jpeg",
+		"png" => "image/png",
+		"gif" => "image/gif",
+		"webp" => "image/webp",
+		"svg" => "image/svg+xml",
+		"pdf" => "application/pdf",
+		"txt" | "log" => "text/plain",
+		"md" | "markdown" => "text/markdown",
+		"json" => "application/json",
+		"csv" => "text/csv",
+		"html" | "htm" => "text/html",
+		"css" => "text/css",
+		"js" | "mjs" | "cjs" => "text/javascript",
+		"ts" | "tsx" => "text/typescript",
+		"py" => "text/x-python",
+		"rs" => "text/rust",
+		"doc" => "application/msword",
+		"docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+		"xls" => "application/vnd.ms-excel",
+		"xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+		"ppt" => "application/vnd.ms-powerpoint",
+		"pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+		"zip" => "application/zip",
+		_ => fallback,
+	}
+	.to_string()
+}
+
+#[tauri::command]
+pub async fn describe_dropped_files(paths: Vec<String>) -> Result<Vec<FileAttachmentInfo>, String> {
+	let mut files = Vec::new();
+	for raw_path in paths {
+		let path = PathBuf::from(&raw_path);
+		let absolute = path.canonicalize().unwrap_or(path);
+		let metadata = std::fs::metadata(&absolute)
+			.map_err(|e| format!("Failed to read dropped path {}: {e}", absolute.display()))?;
+		let fallback = if metadata.is_dir() {
+			"application/x-directory"
+		} else {
+			"application/octet-stream"
+		};
+		files.push(FileAttachmentInfo {
+			kind: "file",
+			absolute_path: absolute.to_string_lossy().to_string(),
+			relative_path: absolute.to_string_lossy().to_string(),
+			mime_type: guess_mime_type(&absolute, fallback),
+			name: file_name_for_path(&absolute),
+			size: metadata.len(),
+		});
+	}
+	Ok(files)
+}
+
+#[tauri::command]
+pub async fn save_upload(
+	window: tauri::Window,
+	state: tauri::State<'_, BridgeState>,
+	filename: String,
+	mime_type: String,
+	data_b64: String,
+) -> Result<FileAttachmentInfo, String> {
+	let window_label = window.label().to_string();
+	let cwd = {
+		let active = state.active.lock().unwrap();
+		active
+			.get(&window_label)
+			.cloned()
+			.ok_or("No active workspace for this window")?
+	};
+	let safe_name = sanitize_upload_filename(&filename);
+	let upload_dir = PathBuf::from(&cwd).join(".pizza").join("uploads");
+	std::fs::create_dir_all(&upload_dir)
+		.map_err(|e| format!("Failed to create upload directory: {e}"))?;
+	let stored_name = format!("{}-{}", uuid::Uuid::new_v4(), safe_name);
+	let path = upload_dir.join(stored_name);
+	let bytes = base64::engine::general_purpose::STANDARD
+		.decode(data_b64)
+		.map_err(|e| format!("Invalid upload data: {e}"))?;
+	std::fs::write(&path, &bytes).map_err(|e| format!("Failed to save upload: {e}"))?;
+	let relative_path = path
+		.strip_prefix(&cwd)
+		.map(|p| p.to_string_lossy().to_string())
+		.unwrap_or_else(|_| path.to_string_lossy().to_string());
+	Ok(FileAttachmentInfo {
+		kind: "file",
+		absolute_path: path.to_string_lossy().to_string(),
+		relative_path,
+		mime_type: guess_mime_type(&path, &mime_type),
+		name: filename,
+		size: bytes.len() as u64,
+	})
 }
 
 /// Wrap an absolute path so it can be passed to the shell quote-free.

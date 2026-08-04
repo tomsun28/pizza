@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { Markdown } from "./Markdown";
 import { Button, Badge } from "@/components/ui";
+import { FileAttachmentIcon, formatFileSize } from "@/components/FileAttachmentIcon";
 import {
 	Terminal,
 	ChevronRight,
@@ -61,15 +62,6 @@ function formatMessageTime(ts?: number): string {
 	} catch {
 		return "";
 	}
-}
-
-/** Compact human-readable byte count (e.g. 1.2 kB, 3.4 MB). */
-function formatFileSize(bytes: number): string {
-	if (bytes <= 0) return "";
-	if (bytes < 1024) return `${bytes} B`;
-	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} kB`;
-	if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-	return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
 const COLLAPSE_LINES = 5;
@@ -380,9 +372,7 @@ function UserBubble({ item }: { item: TimelineItem }) {
 								className="flex h-9 w-48 items-center gap-2 overflow-hidden rounded-lg border border-border bg-surface-2 px-2.5 text-xs"
 								title={f.absolutePath}
 							>
-								<div className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-[10px] font-semibold uppercase tracking-wide bg-slate-500/15 text-slate-300">
-									{f.name.split(".").pop()?.toUpperCase().slice(0, 3) ?? "FILE"}
-								</div>
+								<FileAttachmentIcon name={f.name} mimeType={f.mimeType} />
 								<div className="flex min-w-0 flex-1 flex-col">
 									<span className="truncate text-fg">{f.name}</span>
 									{f.size > 0 && (
@@ -481,9 +471,7 @@ function AssistantMessage({ item }: { item: TimelineItem }) {
 								className="flex h-9 w-48 items-center gap-2 overflow-hidden rounded-lg border border-border bg-surface-2 px-2.5 text-xs"
 								title={f.absolutePath}
 							>
-								<div className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-[10px] font-semibold uppercase tracking-wide bg-slate-500/15 text-slate-300">
-									{f.name.split(".").pop()?.toUpperCase().slice(0, 3) ?? "FILE"}
-								</div>
+								<FileAttachmentIcon name={f.name} mimeType={f.mimeType} />
 								<div className="flex min-w-0 flex-1 flex-col">
 									<span className="truncate text-fg">{f.name}</span>
 									{f.size > 0 && (
