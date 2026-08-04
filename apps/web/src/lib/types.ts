@@ -21,10 +21,25 @@ export {
 	type RpcHistorySessionView,
 	type RpcHistoryTreeResult,
 	type RpcForensicEvent,
+	type ScheduleSpec,
+	type ScheduleMode,
+	type TimeOfDay,
+	type Weekday,
+	type DayOfMonth,
+	type ScheduledTask,
+	type ScheduledTaskSummary,
+	type ScheduledTaskRun,
+	type ScheduledTaskCreateInput,
+	type ScheduledTaskPatch,
+	type SessionTarget,
+	type ConcurrencyPolicy,
+	type SchedulerPolicy,
 	classifyLine,
 	PROTOCOL_VERSION,
+	SCHEDULED_TASK_FIRED,
+	SCHEDULED_TASK_COMPLETED,
+	SCHEDULE_INTENT_RESOLVED,
 } from "@pizza/protocol";
-
 // ---- AgentMessage (subset, for get_messages) ----
 export interface AgentMessage {
 	role: string;

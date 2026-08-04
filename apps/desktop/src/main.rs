@@ -3,7 +3,7 @@
 
 mod bridge;
 
-use tauri::{Manager, WindowEvent};
+use tauri::{DragDropEvent, Emitter, Manager, WindowEvent};
 
 fn main() {
 	env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
@@ -19,6 +19,9 @@ fn main() {
 			bridge::list_workspaces,
 			bridge::delete_workspace,
 			bridge::reveal_workspace,
+			bridge::reveal_file,
+			bridge::describe_dropped_files,
+			bridge::save_upload,
 			bridge::list_providers,
 			bridge::set_provider_api_key,
 			bridge::remove_provider_api_key,
@@ -31,22 +34,32 @@ fn main() {
 			bridge::reveal_path,
 			bridge::fetch_skills_sh,
 		])
-		.setup(|_app| {
+		.setup(|app| {
+			bridge::start_scheduler_sidecar_guard(app.handle().clone());
 			#[cfg(debug_assertions)]
 			{
-				if let Some(window) = _app.get_webview_window("main") {
+				if let Some(window) = app.get_webview_window("main") {
 					window.open_devtools();
 				}
 			}
 			Ok(())
 		})
-		.on_window_event(|window, event| {
-			if let WindowEvent::CloseRequested { .. } = event {
+		.on_window_event(|window, event| match event {
+			WindowEvent::CloseRequested { .. } => {
 				let label = window.label().to_string();
 				log::info!("window {} closed, stopping its sidecar", label);
 				let state = window.app_handle().state::<bridge::BridgeState>();
 				bridge::kill_sidecar_for_window(state.inner(), &label);
 			}
+			WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) => {
+				let paths: Vec<String> = paths
+					.iter()
+					.map(|path| path.to_string_lossy().to_string())
+					.collect();
+				bridge::log_file(&format!("native_file_drop: {:?}", paths));
+				let _ = window.emit("native_file_drop", serde_json::json!({ "paths": paths }));
+			}
+			_ => {}
 		})
 		.run(tauri::generate_context!())
 		.expect("error while running tauri application");

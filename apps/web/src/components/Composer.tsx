@@ -1,8 +1,18 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowUp, Square, Mic, Plus, ChevronDown, Check, X, Loader2, Shield, ShieldCheck, ImagePlus, Sparkles, MessageSquarePlus } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type DragEvent as ReactDragEvent } from "react";
+import { ArrowUp, Square, Mic, Plus, ChevronDown, Check, X, Loader2, Shield, ShieldCheck, Paperclip, Sparkles, MessageSquarePlus, FolderOpen, Clock } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
-import { sendCommandAwait, setSafeMode, newSession, getSkills, type SkillInfo } from "@/lib/transport";
+import {
+	loadFileAttachment,
+	loadPathAttachments,
+	type LoadedFileAttachment,
+	type RejectedAttachment,
+} from "@/lib/file-attachment";
+import { FileAttachmentIcon } from "@/components/FileAttachmentIcon";
+import { formatFileSize } from "@/lib/file-format";
+
+export type { LoadedFileAttachment } from "@/lib/file-attachment";
+import { sendCommandAwait, setSafeMode, newSession, getSkills, invoke, type SkillInfo } from "@/lib/transport";
 import type { RpcSessionState, RpcContextUsage, RpcTokenUsage, ModelInfo } from "@/lib/types";
 
 function isTauri(): boolean {
@@ -166,17 +176,32 @@ export function Composer({
 	onSend,
 	onAbort,
 	onRefreshState,
+	onOpenSchedules,
+	onCreateSchedule,
 }: {
 	sidecarReady: boolean;
 	isRunning: boolean;
 	state: RpcSessionState | null;
 	workspace?: string | null;
-	onSend: (message: string, images?: ComposerImage[]) => void;
+	/**
+	 * Send the composed message. `images` become base64 image attachments;
+	 * `files` become path references the agent can read with its own file tools.
+	 * Either may be omitted.
+	 */
+	onSend: (message: string, images?: ComposerImage[], files?: LoadedFileAttachment[]) => void;
 	onAbort: () => void;
 	onRefreshState?: () => void;
+	/** Open the Schedules view (full list). */
+	onOpenSchedules?: () => void;
+	/** Open the Schedule create dialog directly. */
+	onCreateSchedule?: () => void;
 }) {
 	const [input, setInput] = useState("");
 	const [images, setImages] = useState<ComposerImage[]>([]);
+	const [files, setFiles] = useState<LoadedFileAttachment[]>([]);
+	const [rejected, setRejected] = useState<RejectedAttachment[]>([]);
+	const [isDragOver, setIsDragOver] = useState(false);
+	const dragDepthRef = useRef(0);
 	// Per-workspace draft isolation. The Composer is a single component
 	// instance that does NOT remount when the user switches workspaces, so
 	// without this its input/images would bleed across workspaces. We save
@@ -369,7 +394,8 @@ export function Composer({
 			// Put the slash command on its own line so it parses correctly,
 			// then the user can type arguments / context below it.
 			if (!prev.trim()) return insert;
-			return `${prev.trimEnd()}\n${insert}`;
+			return `${prev.trimEnd()}
+${insert}`;
 		});
 		// Refocus the textarea so the user can continue typing arguments.
 		requestAnimationFrame(() => textareaRef.current?.focus());
@@ -494,36 +520,145 @@ export function Composer({
 	}, []);
 
 	const addFiles = useCallback(async (files: FileList | File[]) => {
-		const imageFiles = Array.from(files).filter((f) => f.type.startsWith("image/"));
-		const loaded = await Promise.all(
-			imageFiles.map(
-				(file) =>
-					new Promise<ComposerImage | null>((resolve) => {
-						const reader = new FileReader();
-						reader.onload = () => {
-							const result = reader.result;
-							if (typeof result !== "string") {
-								resolve(null);
-								return;
-							}
-							// result is a data URL: "data:<mime>;base64,<data>"
-							const comma = result.indexOf(",");
-							const data = comma >= 0 ? result.slice(comma + 1) : result;
-							resolve({
-								data,
-								mimeType: file.type || "image/png",
-								name: file.name,
-								preview: result,
-							});
-						};
-						reader.onerror = () => resolve(null);
-						reader.readAsDataURL(file);
-					}),
-			),
-		);
-		const valid = loaded.filter((i): i is ComposerImage => i !== null);
-		if (valid.length > 0) setImages((prev) => [...prev, ...valid]);
+		// Image attachments stay as base64 inline attachments; anything else
+		// becomes a path reference the agent can read back with its file tools.
+		const list = Array.from(files);
+		const results = await Promise.all(list.map(loadFileAttachment));
+		const nextImages: ComposerImage[] = [];
+		const nextFiles: LoadedFileAttachment[] = [];
+		const nextRejected: RejectedAttachment[] = [];
+		for (const r of results) {
+			if (r.kind === "image") {
+				nextImages.push({
+					data: r.data,
+					mimeType: r.mimeType,
+					name: r.name,
+					preview: r.preview,
+				});
+			} else if (r.kind === "file") {
+				nextFiles.push(r);
+			} else {
+				nextRejected.push(r);
+			}
+		}
+		if (nextImages.length > 0) setImages((prev) => [...prev, ...nextImages]);
+		if (nextFiles.length > 0) setFiles((prev) => [...prev, ...nextFiles]);
+		if (nextRejected.length > 0) setRejected((prev) => [...prev, ...nextRejected]);
 	}, []);
+
+	const addPathFiles = useCallback(async (paths: string[]) => {
+		const uniquePaths = Array.from(new Set(paths.filter(Boolean)));
+		if (uniquePaths.length === 0) return;
+		try {
+			const nextFiles = await loadPathAttachments(uniquePaths);
+			if (nextFiles.length > 0) {
+				setFiles((prev) => {
+					const seen = new Set(prev.map((file) => file.absolutePath));
+					return [
+						...prev,
+						...nextFiles.filter((file) => {
+							if (seen.has(file.absolutePath)) return false;
+							seen.add(file.absolutePath);
+							return true;
+						}),
+					];
+				});
+			}
+		} catch (e) {
+			setRejected((prev) => [
+				...prev,
+				{
+					kind: "rejected",
+					name: uniquePaths.length === 1 ? uniquePaths[0] : `${uniquePaths.length} files`,
+					size: 0,
+					mimeType: "",
+					reason: e instanceof Error ? e.message : String(e),
+				},
+			]);
+		}
+	}, []);
+
+	useEffect(() => {
+		if (!sidecarReady || !isTauri()) return;
+		let cancelled = false;
+		let unlisten: (() => void) | undefined;
+		let unlistenNative: (() => void) | undefined;
+		void (async () => {
+			const { listen } = await import("@tauri-apps/api/event");
+			unlistenNative = await listen<{ paths?: string[] }>("native_file_drop", (event) => {
+				if (cancelled) return;
+				setIsDragOver(false);
+				void addPathFiles(event.payload.paths ?? []);
+			});
+			const { getCurrentWebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+			unlisten = await getCurrentWebviewWindow().onDragDropEvent((event) => {
+				if (cancelled) return;
+				const payload = event.payload as { type?: string; paths?: string[] };
+				if (payload.type === "enter" || payload.type === "over") {
+					setIsDragOver(true);
+					return;
+				}
+				if (payload.type === "leave") {
+					setIsDragOver(false);
+					return;
+				}
+				if (payload.type === "drop") {
+					setIsDragOver(false);
+					void addPathFiles(payload.paths ?? []);
+				}
+			});
+		})().catch((e) => {
+			console.error("[composer] tauri drag-drop listener failed:", e);
+		});
+		return () => {
+			cancelled = true;
+			unlisten?.();
+			unlistenNative?.();
+		};
+	}, [sidecarReady, addPathFiles]);
+
+	// --- Drag-and-drop wiring ----------------------------------------------
+	// We listen on the outer composer wrapper (not the textarea) so users can
+	// drop files anywhere over the prompt area. The textarea still owns its
+	// own paste handler for clipboard images and direct file drops.
+	const onDragOver = useCallback((e: ReactDragEvent<HTMLDivElement>) => {
+		if (!sidecarReady) return;
+		if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+		e.preventDefault();
+		e.dataTransfer.dropEffect = "copy";
+	}, [sidecarReady]);
+
+	const onDragEnter = useCallback((e: ReactDragEvent<HTMLDivElement>) => {
+		if (!sidecarReady) return;
+		if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+		e.preventDefault();
+		// dragenter/dragleave fire on every descendant boundary, so we count
+		// depth to avoid flickering the overlay as the cursor crosses children.
+		dragDepthRef.current += 1;
+		if (dragDepthRef.current === 1) setIsDragOver(true);
+	}, [sidecarReady]);
+
+	const onDragLeave = useCallback((e: ReactDragEvent<HTMLDivElement>) => {
+		if (!sidecarReady) return;
+		e.preventDefault();
+		dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+		if (dragDepthRef.current === 0) setIsDragOver(false);
+	}, [sidecarReady]);
+
+	const onDrop = useCallback(
+		(e: ReactDragEvent<HTMLDivElement>) => {
+			if (!sidecarReady) return;
+			const dropped = e.dataTransfer?.files;
+			if (!dropped || dropped.length === 0) return;
+			e.preventDefault();
+			dragDepthRef.current = 0;
+			setIsDragOver(false);
+			void addFiles(dropped);
+		},
+		[sidecarReady, addFiles],
+	);
+
+
 
 	const handleFileChange = useCallback(
 		(e: React.ChangeEvent<HTMLInputElement>) => {
@@ -548,27 +683,72 @@ export function Composer({
 		setImages((prev) => prev.filter((_, i) => i !== index));
 	}, []);
 
+	const removeFile = useCallback((index: number) => {
+		setFiles((prev) => prev.filter((_, i) => i !== index));
+	}, []);
+
+	const dismissRejected = useCallback((index: number) => {
+		setRejected((prev) => prev.filter((_, i) => i !== index));
+	}, []);
+
+	const clearRejected = useCallback(() => {
+		setRejected([]);
+	}, []);
+
+	// Reveal a file in the OS file manager (Finder on macOS, Explorer on
+	// Windows, the desktop file manager on Linux). Calls into the Tauri
+	// bridge's reveal_file IPC command, which spawns the platform opener.
+	// No-op in the browser.
+	const revealInFinder = useCallback((absolutePath: string) => {
+		if (typeof window === "undefined") return;
+		const w = window as unknown as { __TAURI_INTERNALS__?: unknown };
+		if (!w.__TAURI_INTERNALS__) return;
+		void invoke("reveal_file", { absolutePath }).catch(() => {
+			/* swallow — path may not exist or opener may be unavailable */
+		});
+	}, []);
+
 	const handleSend = () => {
 		const message = input.trim();
-		if ((!message && images.length === 0) || !sidecarReady) return;
+		// Pass images and files through as separate RPC fields — the user
+		// message text is sent verbatim. Image attachments go through the
+		// dedicated `images` field; non-image files are path references
+		// the agent reads back with its own file tools (read, bash, etc.).
+		const outgoingImages = images.length > 0 ? images : undefined;
+		const outgoingFiles = files.length > 0 ? files : undefined;
+		if ((!message && !outgoingImages && !outgoingFiles) || !sidecarReady) return;
 		if (recording) stopRecording();
-		onSend(message, images.length > 0 ? images : undefined);
+		onSend(message, outgoingImages, outgoingFiles);
 		setInput("");
 		setImages([]);
+		setFiles([]);
 	};
 
-	const canSend = sidecarReady && (!!input.trim() || images.length > 0);
+	const canSend =
+		sidecarReady && (!!input.trim() || images.length > 0 || files.length > 0);
 
 	return (
 		<div className="bg-surface px-6 py-4">
 			<div className="mx-auto max-w-3xl">
 				<div
 					className={cn(
-						"rounded-3xl border border-border bg-surface-2 px-4 pt-3 pb-2 shadow-sm transition-colors focus-within:border-accent/60",
+						"relative rounded-3xl border border-border bg-surface-2 px-4 pt-3 pb-2 shadow-sm transition-colors focus-within:border-accent/60",
 						!sidecarReady && "opacity-60",
+						isDragOver && "border-accent ring-2 ring-accent/40",
 					)}
+					onDragEnter={onDragEnter}
+					onDragOver={onDragOver}
+					onDragLeave={onDragLeave}
+					onDrop={onDrop}
 				>
-					{images.length > 0 && (
+					{isDragOver && (
+						<div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-3xl bg-accent/10">
+							<div className="rounded-full border border-accent/40 bg-surface px-4 py-2 text-xs font-medium text-accent shadow-md">
+								{t("composer.dropFiles")}
+							</div>
+						</div>
+					)}
+					{(images.length > 0 || files.length > 0) && (
 						<div className="mb-2 flex flex-wrap gap-2">
 							{images.map((img, i) => (
 								<div
@@ -590,6 +770,70 @@ export function Composer({
 									</button>
 								</div>
 							))}
+							{files.map((f, i) => (
+								<div
+									key={f.absolutePath}
+									className="group flex h-9 w-48 items-center gap-2 overflow-hidden rounded-lg border border-border bg-surface-2 px-2.5 text-xs"
+									title={f.absolutePath}
+								>
+									<FileAttachmentIcon name={f.name} mimeType={f.mimeType} />
+									<div className="flex min-w-0 flex-1 flex-col">
+										<span className="truncate text-fg">{f.name}</span>
+										{f.size > 0 && (
+											<span className="truncate text-[10px] text-muted">{formatFileSize(f.size)}</span>
+										)}
+									</div>
+									<button
+										type="button"
+										onClick={() => revealInFinder(f.absolutePath)}
+										className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted transition-colors hover:bg-bg/60 hover:text-fg"
+										title={t("composer.revealInFinder")}
+									>
+										<FolderOpen className="h-3.5 w-3.5" />
+									</button>
+									<button
+										type="button"
+										onClick={() => removeFile(i)}
+										className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted transition-colors hover:bg-bg/60 hover:text-fg"
+										title={t("common.remove")}
+									>
+										<X className="h-3.5 w-3.5" />
+									</button>
+								</div>
+							))}
+						</div>
+					)}
+					{rejected.length > 0 && (
+						<div className="mb-2 rounded-lg border border-warning/40 bg-warning/5 px-3 py-2 text-xs text-warning">
+							<div className="flex items-center justify-between gap-2">
+								<span className="font-medium">
+									{t("composer.rejectedFiles", { count: rejected.length })}
+								</span>
+								<button
+									type="button"
+									onClick={clearRejected}
+									className="text-warning/70 hover:text-warning"
+									title={t("common.dismiss")}
+								>
+									<X className="h-3 w-3" />
+								</button>
+							</div>
+							<ul className="mt-1 space-y-0.5">
+								{rejected.map((r, i) => (
+									<li key={`${r.name}-${i}`} className="flex items-center gap-1.5 truncate text-warning/80">
+										<span className="truncate">{r.name}</span>
+										<span className="shrink-0 text-warning/60">— {r.reason}</span>
+										<button
+											type="button"
+											onClick={() => dismissRejected(i)}
+											className="ml-auto shrink-0 text-warning/60 hover:text-warning"
+											title={t("common.dismiss")}
+										>
+											<X className="h-3 w-3" />
+										</button>
+									</li>
+								))}
+							</ul>
 						</div>
 					)}
 					<textarea
@@ -610,12 +854,10 @@ export function Composer({
 					<div className="mt-1 flex items-center justify-between gap-2">
 						{/* Left cluster */}
 						<div className="flex items-center gap-1">
-
-						{/* + button: multi-action menu (new session, attach, skills) */}
+							{/* + button: multi-action menu (new session, attach, skills) */}
 							<input
 								ref={fileInputRef}
 								type="file"
-								accept="image/*"
 								multiple
 								className="hidden"
 								onChange={handleFileChange}
@@ -651,12 +893,29 @@ export function Composer({
 											}}
 											className="flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors hover:bg-surface-2"
 										>
-											<ImagePlus className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted" />
+											<Paperclip className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted" />
 											<span className="min-w-0 flex-1">
-												<span className="block text-fg">{t("composer.attachImage")}</span>
-												<span className="block text-[10px] text-muted">{t("composer.attachImageHint")}</span>
+												<span className="block text-fg">{t("composer.attachFiles")}</span>
+												<span className="block text-[10px] text-muted">{t("composer.attachFilesHint")}</span>
 											</span>
 										</button>
+										{/* Scheduled tasks — opens the create dialog */}
+										{onCreateSchedule && (
+											<button
+												type="button"
+												onClick={() => {
+													setPlusMenuOpen(false);
+													onCreateSchedule();
+												}}
+												className="flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors hover:bg-surface-2"
+											>
+												<Clock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted" />
+												<span className="min-w-0 flex-1">
+													<span className="block text-fg">{t("composer.scheduledTask")}</span>
+													<span className="block text-[10px] text-muted">{t("composer.scheduledTaskHint")}</span>
+												</span>
+											</button>
+										)}
 										{skills.length > 0 && (
 											<>
 												<div className="my-1 border-t border-border/60" />
@@ -685,8 +944,20 @@ export function Composer({
 											</>
 										)}
 									</div>
-								)}
+							)}
 							</div>
+							{/* Scheduled task shortcut — opens the Schedules view */}
+							{onOpenSchedules && (
+								<button
+									type="button"
+									disabled={!sidecarReady}
+									onClick={onOpenSchedules}
+									className="flex h-8 w-8 items-center justify-center rounded-full text-muted transition-colors hover:bg-surface hover:text-fg disabled:opacity-40"
+									title={t("composer.scheduledTask")}
+								>
+									<Clock className="h-4 w-4" />
+								</button>
+							)}
 							{/* Approval policy selector — chooses safe mode for the current session */}
 							<div className="relative" ref={approvalMenuRef}>
 								<button

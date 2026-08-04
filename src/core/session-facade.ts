@@ -7,7 +7,7 @@
  */
 
 import type { Model } from "@earendil-works/pi-ai/compat";
-import type { EventBase, ImageContent } from "./event-store/types.js";
+import type { EventBase, ImageContent, FileAttachment } from "./event-store/types.js";
 import type { SubscribeOptions } from "./event-store/store.js";
 import type { ExtensionRunner } from "./extensions/runner.js";
 import type { ModelRegistry } from "./model-registry.js";
@@ -52,16 +52,16 @@ export class SessionFacade {
 		return this.runtime.subscribe(listener, options);
 	}
 
-	prompt(text: string, images?: ImageContent[]): Promise<void> {
-		return this.runtime.prompt(text, images);
+	prompt(text: string, images?: ImageContent[], files?: FileAttachment[]): Promise<void> {
+		return this.runtime.prompt(text, images, files);
 	}
 
-	steer(text: string, images?: ImageContent[]): void {
-		this.runtime.steer(text, images);
+	steer(text: string, images?: ImageContent[], files?: FileAttachment[]): void {
+		this.runtime.steer(text, images, files);
 	}
 
-	followUp(text: string, images?: ImageContent[]): void {
-		this.runtime.followUp(text, images);
+	followUp(text: string, images?: ImageContent[], files?: FileAttachment[]): void {
+		this.runtime.followUp(text, images, files);
 	}
 
 	abort(): void {
@@ -140,14 +140,12 @@ export class SessionFacade {
 
 	/**
 	 * Persist the user's thinking-level choice as the global default. Same
-	 * best-effort semantics as {@link persistModel}. The runtime accepts
-	 * arbitrary level strings, so values settings.json can't represent are
-	 * skipped rather than written back as garbage.
+	 * best-effort semantics as {@link persistModel}. The `as never` cast avoids
+	 * pulling the ThinkingLevel union into this file just for the setter type.
 	 */
 	private persistThinkingLevel(level: string): void {
-		if (!isPersistableThinkingLevel(level)) return;
 		try {
-			this.settingsManager.setDefaultThinkingLevel(level);
+			this.settingsManager.setDefaultThinkingLevel(level as never);
 		} catch (e) {
 			console.warn(
 				`[pizza] failed to persist thinking-level preference (${level}): ${

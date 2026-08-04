@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { useOutletContext } from "react-router-dom";
+import { useNavigate, useOutletContext } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { sendCommandAwait, subscribeEvents, subscribeSidecarExit } from "@/lib/transport";
 import type { RpcSessionState, TypedEvent } from "@/lib/types";
 import { Conversation, type TimelineItem } from "@/components/Conversation";
-import { Composer, type ComposerImage } from "@/components/Composer";
+import { Composer, type ComposerImage, type LoadedFileAttachment } from "@/components/Composer";
 import { EmptyState } from "@/components/ui";
 import { approveToolCall, rejectToolCall } from "@/lib/transport";
 import { cn } from "@/lib/utils";
@@ -18,6 +18,29 @@ function blockToDataUrl(block: Record<string, unknown>): string | null {
 	if (data.startsWith("data:")) return data;
 	return `data:${mime};base64,${data}`;
 }
+
+function isInternalContinuationSessionEvent(event: TypedEvent): boolean {
+	const payload = event.payload as Record<string, unknown> | undefined;
+	return Boolean(
+		payload?.background === true ||
+		(typeof payload?.context_parent_session_id === "string" && payload.context_parent_session_id),
+	);
+}
+
+const CHAT_RENDER_EVENT_TYPES = new Set<string>([
+	"USER_MESSAGE",
+	"USER_FOLLOWUP_QUEUED",
+	"AGENT_MESSAGE_START",
+	"AGENT_MESSAGE_CHUNK",
+	"AGENT_MESSAGE_END",
+	"AGENT_TURN_COMPLETED",
+	"INTENT_TOOL_CALL",
+	"TOOL_EXECUTION_START",
+	"TOOL_EXECUTION_UPDATE",
+	"TOOL_EXECUTION_END",
+	"SESSION_BOUNDARY_INFERRED",
+	"SCHEDULED_TASK_FIRED",
+]);
 
 /** Extract image data URLs from a message payload (content blocks + images array). */
 function messageImages(message: unknown): string[] {
@@ -45,6 +68,51 @@ interface ExtractedToolCall {
 	id: string;
 	name: string;
 	args: string;
+}
+
+/**
+ * Extract file attachments from a user message payload. The agent receives
+ * these as discrete `files` objects (not inlined into the text), so we
+ * surface them on the chat row so the user can see what was attached.
+ */
+function messageFiles(message: unknown): Array<{
+	absolutePath: string;
+	mimeType: string;
+	name: string;
+	size: number;
+}> {
+	if (!message || typeof message !== "object") return [];
+	const msg = message as Record<string, unknown>;
+	const out: Array<{ absolutePath: string; mimeType: string; name: string; size: number }> = [];
+	if (Array.isArray(msg.files)) {
+		for (const f of msg.files as Array<Record<string, unknown>>) {
+			if (!f || typeof f !== "object") continue;
+			const absolutePath = typeof f.absolutePath === "string" ? f.absolutePath : "";
+			const name = typeof f.name === "string" ? f.name : absolutePath.split("/").pop() ?? "file";
+			const mimeType = typeof f.mimeType === "string" ? f.mimeType : "";
+			const size = typeof f.size === "number" ? f.size : 0;
+			if (absolutePath) out.push({ absolutePath, mimeType, name, size });
+		}
+	}
+	const content = typeof msg.content === "string" ? msg.content : "";
+	for (const match of content.matchAll(/<file\s+path="([^"]+)"\s*\/?>/g)) {
+		const absolutePath = match[1];
+		if (!absolutePath || out.some((file) => file.absolutePath === absolutePath)) continue;
+		out.push({
+			absolutePath,
+			mimeType: "",
+			name: absolutePath.split("/").pop() ?? "file",
+			size: 0,
+		});
+	}
+	return out;
+}
+
+function hideFileRefs(text: string): string {
+	return text
+		.replace(/^\s*<file\s+path="[^"]+"\s*\/?>\s*$/gm, "")
+		.replace(/\n{3,}/g, "\n\n")
+		.trim();
 }
 
 /** Extract toolCall blocks (id, name, JSON args) from an assistant message. */
@@ -95,7 +163,7 @@ function messageThinking(message: unknown): string {
 function messageText(message: unknown): string {
 	if (!message || typeof message !== "object") return "";
 	const msg = message as Record<string, unknown>;
-	if (typeof msg.content === "string") return msg.content;
+	if (typeof msg.content === "string") return hideFileRefs(msg.content);
 	if (Array.isArray(msg.content)) {
 		return (msg.content as Array<Record<string, unknown>>)
 			.map((block) => {
@@ -126,7 +194,8 @@ function buildTimelineFromMessages(
 		if (role === "user") {
 			const text = messageText(msg);
 			const images = messageImages(msg);
-			history.push({ id: `hist-${history.length}`, role: "user", title: t("common.you"), text, status: "", images: images.length > 0 ? images : undefined, timestamp: ts });
+			const files = messageFiles(msg);
+			history.push({ id: `hist-${history.length}`, role: "user", title: t("common.you"), text, status: "", images: images.length > 0 ? images : undefined, files: files.length > 0 ? files : undefined, timestamp: ts });
 		} else if (role === "assistant") {
 			const text = messageText(msg);
 			const thinking = messageThinking(msg);
@@ -181,6 +250,7 @@ export default function ChatView({
 	workspace?: string | null;
 	onRefreshState?: () => void;
 }) {
+	const navigate = useNavigate();
 	const { sidebarCollapsed } = useOutletContext<LayoutOutletContext>() ?? { sidebarCollapsed: false };
 	const { t } = useTranslation();
 	const [items, setItems] = useState<TimelineItem[]>([]);
@@ -194,7 +264,9 @@ export default function ChatView({
 	const seenIdsByWs = useRef<Map<string, Set<string>>>(new Map());
 	const activeAssistantByWs = useRef<Map<string, string | null>>(new Map());
 	const itemsRef = useRef<TimelineItem[]>([]);
+	const stateRef = useRef<RpcSessionState | null>(state);
 	itemsRef.current = items;
+	stateRef.current = state;
 	const prevWsRef = useRef<string | null>(null);
 
 	// Keep latest t in a ref so closures created in effects can read it
@@ -234,12 +306,13 @@ export default function ChatView({
 				const messages = (data?.messages as Array<Record<string, unknown>> | undefined) ?? [];
 				const history = buildTimelineFromMessages(messages, tRef.current);
 				if (!cancelled) setItems(history);
+				onRefreshState?.();
 			} catch {
 				// Silently ignore — the empty state will show.
 			}
 		})();
 		return () => { cancelled = true; };
-	}, [workspace]);
+	}, [workspace, onRefreshState]);
 
 	// Save/restore conversation on workspace switch.
 	useEffect(() => {
@@ -297,6 +370,32 @@ export default function ChatView({
 		const eventCwd = event._cwd ?? "";
 		const currentWs = workspace ?? "";
 		const isForCurrent = eventCwd === currentWs;
+		const activeState = stateRef.current;
+		const eventSessionId = typeof (event as unknown as { session_id?: unknown }).session_id === "string"
+			? (event as unknown as { session_id: string }).session_id
+			: undefined;
+		const eventThreadId = typeof event.thread_id === "string" ? event.thread_id : undefined;
+		const payloadSessionId = typeof (event.payload as Record<string, unknown> | undefined)?.sessionId === "string"
+			? (event.payload as Record<string, unknown>).sessionId as string
+			: undefined;
+		const isRenderEvent = CHAT_RENDER_EVENT_TYPES.has(event.type);
+		const isScheduledCompletionForCurrent =
+			event.type === "SCHEDULED_TASK_COMPLETED" &&
+			payloadSessionId === activeState?.sessionId;
+		const isScheduledFiredForCurrent =
+			event.type === "SCHEDULED_TASK_FIRED" &&
+			payloadSessionId === activeState?.sessionId;
+		const belongsToCurrentSession =
+			!isRenderEvent ||
+			isScheduledCompletionForCurrent ||
+			isScheduledFiredForCurrent ||
+			(eventSessionId && eventSessionId === activeState?.sessionId) ||
+			(payloadSessionId && payloadSessionId === activeState?.sessionId) ||
+			(!eventSessionId && eventThreadId && eventThreadId === activeState?.threadId) ||
+			(!eventSessionId && !eventThreadId && event.type !== "SCHEDULED_TASK_FIRED");
+		if (isForCurrent && !belongsToCurrentSession) {
+			return;
+		}
 
 		// Determine which seenIds and activeAssistant to use.
 		const seenRef = isForCurrent ? seenIdsRef : { current: seenIdsByWs.current.get(eventCwd) ?? new Set<string>() };
@@ -361,6 +460,7 @@ export default function ChatView({
 			case "USER_MESSAGE": {
 				const text = messageText(event.payload);
 				const images = messageImages(event.payload);
+				const files = messageFiles(event.payload);
 				// When a queued follow-up is drained, the reactor emits a real
 				// USER_MESSAGE whose caused_by points at the USER_FOLLOWUP_QUEUED
 				// event we already rendered as a (queued) user bubble. Promote
@@ -379,7 +479,7 @@ export default function ChatView({
 					}
 					return [
 						...prev,
-						{ id: event.event_id, role: "user", title: tRef.current("common.you"), text, status: "", images: images.length > 0 ? images : undefined, timestamp: ts },
+						{ id: event.event_id, role: "user", title: tRef.current("common.you"), text, status: "", images: images.length > 0 ? images : undefined, files: files.length > 0 ? files : undefined, timestamp: ts },
 					];
 				});
 				break;
@@ -392,10 +492,11 @@ export default function ChatView({
 				// arrives (matched via caused_by).
 				const text = messageText(event.payload);
 				const images = messageImages(event.payload);
+				const files = messageFiles(event.payload);
 				const ts = typeof event.timestamp === "number" ? event.timestamp : undefined;
 				updateItems((prev) => [
 					...prev,
-					{ id: event.event_id, role: "user", title: tRef.current("common.you"), text, status: "", images: images.length > 0 ? images : undefined, queued: true, timestamp: ts },
+					{ id: event.event_id, role: "user", title: tRef.current("common.you"), text, status: "", images: images.length > 0 ? images : undefined, files: files.length > 0 ? files : undefined, queued: true, timestamp: ts },
 				]);
 				break;
 			}
@@ -467,7 +568,34 @@ export default function ChatView({
 				}
 				break;
 			}
-			case "AGENT_TURN_COMPLETED": {
+				case "SCHEDULED_TASK_FIRED": {
+					// Render a non-intrusive system notice in the timeline so the user
+					// can see "your scheduled task just fired" inline. The follow-up
+					// USER_MESSAGE will arrive as a regular event right after.
+					if (!isForCurrent) break;
+					const payload = event.payload as Record<string, unknown> | undefined;
+					const taskId = (payload?.taskId as string) ?? "";
+					const firedAt = typeof payload?.at === "number" ? (payload.at as number) : Date.now();
+					updateItems((prev) => [
+						...prev,
+						{
+							id: event.event_id,
+							role: "system",
+							title: tRef.current("schedule.triggeredNotice", { name: taskId }),
+							text: "",
+							status: "",
+							timestamp: firedAt,
+						},
+					]);
+					break;
+				}
+				case "SCHEDULED_TASK_COMPLETED": {
+					if (isScheduledCompletionForCurrent) {
+						reloadForSessionSwitch();
+					}
+					break;
+				}
+				case "AGENT_TURN_COMPLETED": {
 				const id = activeRef.current;
 				const payload = event.payload as Record<string, unknown> | undefined;
 				const reason = String(payload?.reason ?? "");
@@ -596,6 +724,7 @@ export default function ChatView({
 			case "SESSION_CREATED":
 			case "SESSION_FORKED":
 			case "SESSION_JUMPED": {
+				if (isInternalContinuationSessionEvent(event)) break;
 				// The active session changed (user started a new session,
 				// jumped/forked from the BranchTreeExplorer, or replayed
 				// from the Timeline). Our current items belong to the OLD
@@ -647,7 +776,7 @@ export default function ChatView({
 	}, []);
 
 	const handleSend = useCallback(
-		async (message: string, images?: ComposerImage[]) => {
+		async (message: string, images?: ComposerImage[], files?: LoadedFileAttachment[]) => {
 			setError("");
 			const payloadImages = images?.map((img) => ({ data: img.data, mimeType: img.mimeType }));
 			// prompt/follow_up responses only arrive after the entire agent turn
@@ -655,9 +784,15 @@ export default function ChatView({
 			// the event subscription independently, so we fire-and-forget the command
 			// and only catch immediate send errors (e.g. sidecar not running).
 			try {
+				const payloadFiles = files?.map((f) => ({
+					absolutePath: f.absolutePath,
+					mimeType: f.mimeType,
+					name: f.name,
+					size: f.size,
+				}));
 				const cmd = state?.isStreaming
-					? { type: "follow_up", message, images: payloadImages }
-					: { type: "prompt", message, images: payloadImages };
+					? { type: "follow_up", message, images: payloadImages, files: payloadFiles }
+					: { type: "prompt", message, images: payloadImages, files: payloadFiles };
 				sendCommandAwait(cmd, 600000).catch((e) => {
 					setError(e instanceof Error ? e.message : String(e));
 				});
@@ -791,6 +926,8 @@ export default function ChatView({
 				onSend={handleSend}
 				onAbort={handleAbort}
 				onRefreshState={onRefreshState}
+				onOpenSchedules={() => navigate("/schedules")}
+				onCreateSchedule={() => navigate("/schedules?create=1")}
 				/>
 		</div>
 	);

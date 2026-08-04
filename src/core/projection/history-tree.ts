@@ -26,6 +26,8 @@ export interface HistoryTreeNodeInfo {
 	is_active: boolean;
 	/** Whether the session is closed (end_event_id !== "HEAD"). */
 	closed: boolean;
+	/** Whether an internal continuation is currently active for this node. */
+	has_active_continuation?: boolean;
 	/** First user message in the session (truncated), for orientation/search. */
 	snippet?: string;
 	/**
@@ -50,12 +52,16 @@ export function buildHistoryTreeNodes(
 	store?: EventStore,
 ): HistoryTreeNodeInfo[] {
 	const byId = new Map(sessions.map((s) => [s.session_id, s]));
+	const activeSession = activeSessionId ? byId.get(activeSessionId) : undefined;
+	const activeVisibleSessionId = activeSession?.context_parent_session_id ?? activeSessionId;
+	const visibleSessions = sessions.filter((s) => !s.context_parent_session_id);
+	const visibleIds = new Set(visibleSessions.map((s) => s.session_id));
 	const children = new Map<string, SessionDescriptor[]>();
 	const roots: SessionDescriptor[] = [];
 
-	for (const session of sessions) {
+	for (const session of visibleSessions) {
 		const parentId = session.parent_session_id;
-		if (parentId && byId.has(parentId)) {
+		if (parentId && visibleIds.has(parentId)) {
 			const list = children.get(parentId) ?? [];
 			list.push(session);
 			children.set(parentId, list);
@@ -91,8 +97,9 @@ export function buildHistoryTreeNodes(
 			parent_session_id: session.parent_session_id,
 			depth,
 			child_count: childList.length,
-			is_active: session.session_id === activeSessionId,
+			is_active: session.session_id === activeVisibleSessionId,
 			closed: session.event_range.end_event_id !== "HEAD",
+			has_active_continuation: activeSession?.context_parent_session_id === session.session_id,
 			snippet: store ? findFirstUserMessage(store, session) : undefined,
 			fork_at_event_id: forkPoints.get(session.session_id),
 		});

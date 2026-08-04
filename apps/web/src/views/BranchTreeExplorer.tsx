@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { GitBranch, Search, RefreshCw, GitFork, CornerUpRight, Pencil, Copy } from "lucide-react";
+import { GitBranch, Search, RefreshCw, GitFork, CornerUpRight, Pencil, Copy, LogIn } from "lucide-react";
 import {
 	historyTreeList,
 	historyTreeFork,
 	historyTreeJump,
+	historyTreeSwitch,
 	historyTreeRename,
 	subscribeEvents,
 } from "@/lib/transport";
@@ -126,6 +127,31 @@ export default function BranchTreeExplorer({ workspace }: { workspace?: string |
 		catch (e) { setError(e instanceof Error ? e.message : String(e)); }
 	}, [load]);
 
+	const onSwitch = useCallback(async (node: RpcHistoryTreeNode) => {
+		setMenu(null);
+		setSelected(node.session_id);
+		if (node.is_active) return;
+		try {
+			const result = await historyTreeSwitch(node.session_id, "history tree switch");
+			setSelected(result.session_id);
+			await load();
+		}
+		catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+	}, [load]);
+
+	const onActivate = useCallback(async (node: RpcHistoryTreeNode) => {
+		setMenu(null);
+		setSelected(node.session_id);
+		if (node.is_active) return;
+		try {
+			const result = await historyTreeSwitch(node.session_id, "history tree row click");
+			setSelected(result.session_id);
+			await load();
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		}
+	}, [load]);
+
 	const onRename = useCallback(async (node: RpcHistoryTreeNode) => {
 		setMenu(null);
 		const name = window.prompt(t("history.renamePrompt"), node.name ?? "");
@@ -171,19 +197,19 @@ export default function BranchTreeExplorer({ workspace }: { workspace?: string |
 							description={query ? t("history.noMatch") : t("history.emptyDescription")}
 						/>
 					</div>
-				) : (
-					<ul className="font-mono text-xs">
-						{nodes.map((node) => (
-							<TreeRow
-								key={node.session_id}
-								node={node}
-								selected={selected === node.session_id}
-								onSelect={() => setSelected(node.session_id)}
-								onContextMenu={(x, y) => setMenu({ node, x, y })}
-							/>
-						))}
-					</ul>
-				)}
+					) : (
+						<ul className="font-mono text-xs">
+							{nodes.map((node) => (
+								<TreeRow
+									key={node.session_id}
+									node={node}
+									selected={selected === node.session_id}
+									onSelect={() => void onActivate(node)}
+									onContextMenu={(x, y) => setMenu({ node, x, y })}
+								/>
+							))}
+						</ul>
+					)}
 			</div>
 
 			{/* Breadcrumb */}
@@ -201,12 +227,11 @@ export default function BranchTreeExplorer({ workspace }: { workspace?: string |
 					y={menu.y}
 					onDismiss={() => setMenu(null)}
 					items={buildHistoryMenuItems(menu.node, t, {
+						onSwitch: () => void onSwitch(menu.node),
 						onJump: () => void onJump(menu.node),
 						onFork: () => void onFork(menu.node),
 						onRename: () => void onRename(menu.node),
-						onCopyId: () => {
-							void navigator.clipboard?.writeText(menu.node.session_id);
-						},
+						onCopyId: () => void navigator.clipboard?.writeText(menu.node.session_id),
 					})}
 				/>
 			)}
@@ -217,9 +242,16 @@ export default function BranchTreeExplorer({ workspace }: { workspace?: string |
 function buildHistoryMenuItems(
 	node: RpcHistoryTreeNode,
 	t: (k: string) => string,
-	handlers: { onJump: () => void; onFork: () => void; onRename: () => void; onCopyId: () => void },
+	handlers: { onSwitch: () => void; onJump: () => void; onFork: () => void; onRename: () => void; onCopyId: () => void },
 ): ContextMenuItem[] {
 	return [
+		{
+			icon: LogIn,
+			label: t("history.switchHere"),
+			hint: node.closed ? t("history.switchClosedHint") : t("history.switchOpenHint"),
+			disabled: node.is_active,
+			onClick: handlers.onSwitch,
+		},
 		{
 			icon: CornerUpRight,
 			label: t("history.jumpHere"),

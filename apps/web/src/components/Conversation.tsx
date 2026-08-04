@@ -3,6 +3,8 @@ import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { Markdown } from "./Markdown";
 import { Button, Badge } from "@/components/ui";
+import { FileAttachmentIcon } from "@/components/FileAttachmentIcon";
+import { formatFileSize } from "@/lib/file-format";
 import {
 	Terminal,
 	ChevronRight,
@@ -31,6 +33,9 @@ export interface TimelineItem {
 	isError?: boolean;
 	/** Attached images as data URLs (for user messages). */
 	images?: string[];
+
+	/** Attached file path references (for user messages). */
+	files?: Array<{ absolutePath: string; mimeType: string; name: string; size: number }>;
 	/** True for a follow-up message queued while the agent is still running. */
 	queued?: boolean;
 	/** Pending approval for a risky tool call (safe mode on). */
@@ -360,6 +365,25 @@ function UserBubble({ item }: { item: TimelineItem }) {
 						))}
 					</div>
 				)}
+				{item.files && item.files.length > 0 && (
+					<div className="mb-2 flex flex-wrap gap-2">
+						{item.files.map((f) => (
+							<div
+								key={f.absolutePath}
+								className="flex h-9 w-48 items-center gap-2 overflow-hidden rounded-lg border border-border bg-surface-2 px-2.5 text-xs"
+								title={f.absolutePath}
+							>
+								<FileAttachmentIcon name={f.name} mimeType={f.mimeType} />
+								<div className="flex min-w-0 flex-1 flex-col">
+									<span className="truncate text-fg">{f.name}</span>
+									{f.size > 0 && (
+										<span className="truncate text-[10px] text-muted">{formatFileSize(f.size)}</span>
+									)}
+								</div>
+							</div>
+						))}
+					</div>
+				)}
 				{item.text && (
 					<div className="whitespace-pre-wrap break-words text-sm leading-relaxed text-fg">
 						{item.text}
@@ -402,6 +426,21 @@ function UserBubble({ item }: { item: TimelineItem }) {
 	);
 }
 
+/** Small inline notice for system-originated events (e.g. scheduled task fired). */
+function SystemNotice({ item }: { item: TimelineItem }) {
+	const ts = item.timestamp ? new Date(item.timestamp).toLocaleString() : "";
+	return (
+		<div className="my-3 flex items-center justify-center gap-2 text-[11px] text-muted">
+			<span className="h-px flex-1 bg-border/60" />
+			<span className="rounded-full border border-border bg-surface-2 px-2.5 py-0.5 font-mono">
+				{item.title}
+			</span>
+			{ts && <span className="text-muted/70">{ts}</span>}
+			<span className="h-px flex-1 bg-border/60" />
+		</div>
+	);
+}
+
 function AssistantMessage({ item }: { item: TimelineItem }) {
 	const { t } = useTranslation();
 	const [hover, setHover] = useState(false);
@@ -422,6 +461,25 @@ function AssistantMessage({ item }: { item: TimelineItem }) {
 								alt={t("conversation.attachment")}
 								className="max-h-48 rounded-md border border-border object-contain"
 							/>
+						))}
+					</div>
+				)}
+				{item.files && item.files.length > 0 && (
+					<div className="mb-2 flex flex-wrap gap-2">
+						{item.files.map((f) => (
+							<div
+								key={f.absolutePath}
+								className="flex h-9 w-48 items-center gap-2 overflow-hidden rounded-lg border border-border bg-surface-2 px-2.5 text-xs"
+								title={f.absolutePath}
+							>
+								<FileAttachmentIcon name={f.name} mimeType={f.mimeType} />
+								<div className="flex min-w-0 flex-1 flex-col">
+									<span className="truncate text-fg">{f.name}</span>
+									{f.size > 0 && (
+										<span className="truncate text-[10px] text-muted">{formatFileSize(f.size)}</span>
+									)}
+								</div>
+							</div>
 						))}
 					</div>
 				)}
@@ -458,6 +516,7 @@ export function Conversation({
 		<div className="mx-auto max-w-3xl px-6 pb-32 pt-4">
 			{items.map((item) => {
 				if (item.role === "user") return <UserBubble key={item.id} item={item} />;
+				if (item.role === "system") return <SystemNotice key={item.id} item={item} />;
 				if (item.role === "tool") return <ToolCard key={item.id} item={item} onResolveApproval={onResolveApproval} />;
 				// Skip empty assistant bubbles (turns that produced only tool calls).
 				if (!item.streaming && !item.text && !item.thinking && !(item.images && item.images.length > 0)) {

@@ -1,3 +1,5 @@
+use base64::Engine;
+use serde::Serialize;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -25,7 +27,7 @@ fn read_api_key(provider: &str) -> Option<String> {
 	}
 }
 
-fn log_file(msg: &str) {
+pub(crate) fn log_file(msg: &str) {
 	use std::io::Write;
 	if let Ok(mut f) = std::fs::OpenOptions::new()
 		.create(true)
@@ -221,6 +223,17 @@ struct SidecarEntry {
 	stdin: ChildStdin,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileAttachmentInfo {
+	kind: &'static str,
+	absolute_path: String,
+	relative_path: String,
+	mime_type: String,
+	name: String,
+	size: u64,
+}
+
 pub struct BridgeState {
 	/// Sidecars keyed by cwd.
 	sidecars: Mutex<HashMap<String, SidecarEntry>>,
@@ -272,7 +285,14 @@ pub fn kill_sidecar_for_window(state: &BridgeState, window_label: &str) {
 			active.values().any(|c| c == &cwd)
 		};
 		if !still_in_use {
-			kill_sidecar_for_cwd(state, &cwd);
+			if cwd_has_runnable_scheduled_tasks(&cwd) {
+				log_file(&format!(
+					"kill_sidecar_for_window: keeping scheduled sidecar for {}",
+					cwd
+				));
+			} else {
+				kill_sidecar_for_cwd(state, &cwd);
+			}
 		}
 	}
 }
@@ -319,6 +339,360 @@ fn broadcast_to_all_sidecars(state: &BridgeState, command_type: &str) {
 		"broadcast_to_all_sidecars: command={} sent_to={} failed={:?}",
 		command_type, sent, failed
 	));
+}
+
+fn home_dir() -> Option<PathBuf> {
+	std::env::var("HOME").ok().map(PathBuf::from)
+}
+
+fn normalize_path_for_compare(path: &str) -> String {
+	std::fs::canonicalize(path)
+		.unwrap_or_else(|_| PathBuf::from(path))
+		.to_string_lossy()
+		.replace('\\', "/")
+}
+
+fn persistent_chat_cwd() -> Option<String> {
+	home_dir().map(|home| {
+		home.join(".pizza")
+			.join("main")
+			.to_string_lossy()
+			.to_string()
+	})
+}
+
+fn is_persistent_chat_cwd(cwd: &str) -> bool {
+	persistent_chat_cwd()
+		.map(|main| normalize_path_for_compare(cwd) == normalize_path_for_compare(&main))
+		.unwrap_or(false)
+}
+
+fn workspace_meta_root() -> Option<PathBuf> {
+	home_dir().map(|home| home.join(".pizza").join("agent").join("workspaces"))
+}
+
+fn scheduler_tasks_path_for_workspace(workspace_id: &str) -> Option<PathBuf> {
+	home_dir().map(|home| {
+		home.join(".pizza")
+			.join("workspaces")
+			.join(workspace_id)
+			.join("scheduler")
+			.join("tasks.json")
+	})
+}
+
+fn scheduler_tasks_path_for_cwd(cwd: &str) -> Option<PathBuf> {
+	if is_persistent_chat_cwd(cwd) {
+		return home_dir().map(|home| {
+			home.join(".pizza")
+				.join("main")
+				.join("scheduler")
+				.join("tasks.json")
+		});
+	}
+	let target = normalize_path_for_compare(cwd);
+	let root = workspace_meta_root()?;
+	let entries = std::fs::read_dir(root).ok()?;
+	for entry in entries.flatten() {
+		let meta_path = entry.path().join("meta.json");
+		let raw = match std::fs::read_to_string(meta_path) {
+			Ok(raw) => raw,
+			Err(_) => continue,
+		};
+		let meta: Value = match serde_json::from_str(&raw) {
+			Ok(meta) => meta,
+			Err(_) => continue,
+		};
+		let Some(meta_cwd) = meta.get("cwd").and_then(|v| v.as_str()) else {
+			continue;
+		};
+		if normalize_path_for_compare(meta_cwd) != target {
+			continue;
+		}
+		let Some(workspace_id) = meta.get("workspace_id").and_then(|v| v.as_str()) else {
+			continue;
+		};
+		return scheduler_tasks_path_for_workspace(workspace_id);
+	}
+	None
+}
+
+fn task_target_is_supported(task: &Value) -> bool {
+	let target = match task.get("sessionTarget") {
+		Some(value) => value,
+		None => return false,
+	};
+	match target.get("kind").and_then(|v| v.as_str()) {
+		Some("new") => true,
+		Some("pinned") => target
+			.get("sessionId")
+			.and_then(|v| v.as_str())
+			.map(|s| !s.is_empty())
+			.unwrap_or(false),
+		_ => false,
+	}
+}
+
+fn tasks_file_has_runnable_enabled_task(path: &PathBuf) -> bool {
+	let raw = match std::fs::read_to_string(path) {
+		Ok(raw) => raw,
+		Err(_) => return false,
+	};
+	let parsed: Value = match serde_json::from_str(&raw) {
+		Ok(value) => value,
+		Err(_) => return false,
+	};
+	let tasks = parsed
+		.get("tasks")
+		.and_then(|v| v.as_array())
+		.or_else(|| parsed.as_array());
+	let Some(tasks) = tasks else {
+		return false;
+	};
+	tasks.iter().any(|task| {
+		task.get("enabled")
+			.and_then(|v| v.as_bool())
+			.unwrap_or(false)
+			&& task_target_is_supported(task)
+	})
+}
+
+fn cwd_has_runnable_scheduled_tasks(cwd: &str) -> bool {
+	scheduler_tasks_path_for_cwd(cwd)
+		.map(|path| tasks_file_has_runnable_enabled_task(&path))
+		.unwrap_or(false)
+}
+
+fn scheduled_cwds_to_keep_alive() -> Vec<String> {
+	let mut out = Vec::new();
+	if let Some(main_cwd) = persistent_chat_cwd() {
+		if cwd_has_runnable_scheduled_tasks(&main_cwd) {
+			out.push(main_cwd);
+		}
+	}
+	let Some(root) = workspace_meta_root() else {
+		return out;
+	};
+	let entries = match std::fs::read_dir(root) {
+		Ok(entries) => entries,
+		Err(_) => return out,
+	};
+	for entry in entries.flatten() {
+		let meta_path = entry.path().join("meta.json");
+		let raw = match std::fs::read_to_string(meta_path) {
+			Ok(raw) => raw,
+			Err(_) => continue,
+		};
+		let meta: Value = match serde_json::from_str(&raw) {
+			Ok(meta) => meta,
+			Err(_) => continue,
+		};
+		let Some(cwd) = meta.get("cwd").and_then(|v| v.as_str()) else {
+			continue;
+		};
+		let Some(workspace_id) = meta.get("workspace_id").and_then(|v| v.as_str()) else {
+			continue;
+		};
+		let Some(tasks_path) = scheduler_tasks_path_for_workspace(workspace_id) else {
+			continue;
+		};
+		if tasks_file_has_runnable_enabled_task(&tasks_path)
+			&& !out.iter().any(|existing| {
+				normalize_path_for_compare(existing) == normalize_path_for_compare(cwd)
+			}) {
+			out.push(cwd.to_string());
+		}
+	}
+	out
+}
+
+fn write_rpc_line(sidecar: &mut SidecarEntry, value: Value) -> Result<(), String> {
+	let line = serde_json::to_string(&value).map_err(|e| e.to_string())?;
+	sidecar
+		.stdin
+		.write_all(line.as_bytes())
+		.map_err(|e| format!("write: {e}"))?;
+	sidecar
+		.stdin
+		.write_all(b"\n")
+		.map_err(|e| format!("write nl: {e}"))?;
+	sidecar.stdin.flush().map_err(|e| format!("flush: {e}"))?;
+	Ok(())
+}
+
+fn spawn_background_sidecar(
+	app: AppHandle,
+	state: &BridgeState,
+	cwd: String,
+) -> Result<(), String> {
+	if !std::path::Path::new(&cwd).is_dir() {
+		return Err(format!("Directory does not exist: {}", cwd));
+	}
+	{
+		let mut sidecars = state.sidecars.lock().unwrap();
+		if let Some(sidecar) = sidecars.get_mut(&cwd) {
+			let _ = write_rpc_line(
+				sidecar,
+				serde_json::json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "get_state" }),
+			);
+			return Ok(());
+		}
+	}
+
+	let (program, mut args) = resolve_pizza_command(&app);
+	if is_persistent_chat_cwd(&cwd) {
+		args.push("--main".to_string());
+	}
+	let mut cmd = Command::new(&program);
+	cmd.args(&args);
+	cmd.current_dir(&cwd);
+	cmd.stdin(Stdio::piped());
+	cmd.stdout(Stdio::piped());
+	cmd.stderr(Stdio::piped());
+	cmd.env("PATH", resolve_shell_path());
+	log_file(&format!(
+		"scheduler_guard: spawning {} {:?} cwd={}",
+		program, args, cwd
+	));
+	let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn: {e}"))?;
+	let stdin = child.stdin.take().ok_or("no stdin")?;
+	let stdout = child.stdout.take().ok_or("no stdout")?;
+	let stderr = child.stderr.take().ok_or("no stderr")?;
+	let pid = child.id();
+
+	let stderr_cwd = cwd.clone();
+	thread::spawn(move || {
+		let mut reader = BufReader::new(stderr);
+		let mut bytes = Vec::new();
+		let _ = reader.read_to_end(&mut bytes);
+		let text = String::from_utf8_lossy(&bytes).trim().to_string();
+		if !text.is_empty() {
+			log_file(&format!(
+				"scheduler_guard stderr [cwd={}]: {}",
+				stderr_cwd, text
+			));
+		}
+	});
+
+	{
+		let mut sidecars = state.sidecars.lock().unwrap();
+		sidecars.insert(cwd.clone(), SidecarEntry { child, stdin });
+		if let Some(sidecar) = sidecars.get_mut(&cwd) {
+			let _ = write_rpc_line(
+				sidecar,
+				serde_json::json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "get_state" }),
+			);
+		}
+	}
+
+	let reader_cwd = cwd.clone();
+	std::thread::spawn(move || {
+		log_file(&format!(
+			"reader thread: started for scheduler cwd={}",
+			reader_cwd
+		));
+		let reader = BufReader::new(stdout);
+		for line in reader.lines() {
+			match line {
+				Ok(line) => {
+					let trimmed = line.trim();
+					if trimmed.is_empty() || !trimmed.starts_with('{') {
+						continue;
+					}
+					let mut parsed: Value = match serde_json::from_str(trimmed) {
+						Ok(v) => v,
+						Err(_) => continue,
+					};
+					log_file(&format!("sidecar stdout [cwd={}]: {}", reader_cwd, trimmed));
+					let app_ref = &app;
+					let active = app_ref.state::<BridgeState>();
+					let active_map = active.active.lock().unwrap();
+					let etype = parsed
+						.get("type")
+						.and_then(|t| t.as_str())
+						.unwrap_or("")
+						.to_string();
+					if etype == "response" {
+						if let Some(obj) = parsed.as_object_mut() {
+							obj.insert("_cwd".to_string(), Value::String(reader_cwd.clone()));
+						}
+					}
+					for (label, _ac_cwd) in active_map.iter() {
+						if let Some(win) = app_ref.get_webview_window(label) {
+							let mut tagged = parsed.clone();
+							if let Some(obj) = tagged.as_object_mut() {
+								obj.insert("_cwd".to_string(), Value::String(reader_cwd.clone()));
+							}
+							match etype.as_str() {
+								"response" => {
+									let _ = win.emit("rpc_response", tagged);
+								}
+								"extension_ui_request" => {
+									let _ = win.emit("extension_ui_request", tagged);
+								}
+								_ => {
+									let _ = win.emit("rpc_event", tagged);
+								}
+							}
+						}
+					}
+				}
+				Err(e) => {
+					log_file(&format!("reader error [cwd={}]: {e}", reader_cwd));
+					break;
+				}
+			}
+		}
+		log_file(&format!(
+			"reader thread: EOF for scheduler cwd={}",
+			reader_cwd
+		));
+		let state = app.state::<BridgeState>();
+		let mut sidecars = state.sidecars.lock().unwrap();
+		if let Some(mut entry) = sidecars.remove(&reader_cwd) {
+			drop(entry.stdin);
+			let _ = entry.child.wait();
+			log_file(&format!(
+				"reader thread: reaped scheduler sidecar pid={:?} cwd={}",
+				pid, reader_cwd
+			));
+		}
+	});
+
+	log_file(&format!(
+		"scheduler_guard: started sidecar pid={:?} cwd={}",
+		pid, cwd
+	));
+	Ok(())
+}
+
+pub fn start_scheduler_sidecar_guard(app: AppHandle) {
+	thread::spawn(move || loop {
+		let cwds = scheduled_cwds_to_keep_alive();
+		for cwd in cwds {
+			if let Some(main_cwd) = persistent_chat_cwd() {
+				if normalize_path_for_compare(&cwd) == normalize_path_for_compare(&main_cwd) {
+					continue;
+				}
+			}
+			let already_running = {
+				let state = app.state::<BridgeState>();
+				let sidecars = state.sidecars.lock().unwrap();
+				sidecars.contains_key(&cwd)
+			};
+			if already_running {
+				continue;
+			}
+			let state = app.state::<BridgeState>();
+			if let Err(e) = spawn_background_sidecar(app.clone(), state.inner(), cwd.clone()) {
+				log_file(&format!(
+					"scheduler_guard: failed to start cwd={}: {}",
+					cwd, e
+				));
+			}
+		}
+		thread::sleep(Duration::from_secs(15));
+	});
 }
 
 /// One-shot init: spawns sidecar for the calling window, sends get_state. Returns state JSON.
@@ -918,6 +1292,181 @@ pub async fn delete_workspace(
 	Ok(())
 }
 
+/// Reveal an arbitrary file in the system file manager (Finder on macOS,
+/// Explorer on Windows, the desktop file manager on Linux). The path should
+/// be absolute — the sidecar places uploads under <cwd>/.pizza/uploads/...
+/// and the frontend surfaces them as <file path="..."/> references.
+#[tauri::command]
+pub async fn reveal_file(absolute_path: String) -> Result<(), String> {
+	let path = if absolute_path.starts_with("~") {
+		if let Ok(home) = std::env::var("HOME") {
+			format!("{}{}", home, &absolute_path[1..])
+		} else {
+			absolute_path.clone()
+		}
+	} else {
+		absolute_path.clone()
+	};
+
+	if !std::path::Path::new(&path).exists() {
+		return Err(format!("Path does not exist: {}", path));
+	}
+
+	#[cfg(target_os = "macos")]
+	let opener = "open";
+	#[cfg(target_os = "linux")]
+	let opener = "xdg-open";
+	#[cfg(target_os = "windows")]
+	let opener = "explorer";
+
+	std::process::Command::new(opener)
+		.arg(&path)
+		.spawn()
+		.map_err(|e| format!("Failed to open file manager: {e}"))?;
+
+	Ok(())
+}
+
+fn file_name_for_path(path: &std::path::Path) -> String {
+	path.file_name()
+		.and_then(|name| name.to_str())
+		.filter(|name| !name.is_empty())
+		.unwrap_or("untitled")
+		.to_string()
+}
+
+fn sanitize_upload_filename(filename: &str) -> String {
+	let cleaned: String = filename
+		.chars()
+		.map(|c| {
+			if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ' ') {
+				c
+			} else {
+				'_'
+			}
+		})
+		.collect();
+	let trimmed = cleaned.trim().trim_matches('.').to_string();
+	if trimmed.is_empty() {
+		"untitled".to_string()
+	} else {
+		trimmed
+	}
+}
+
+fn guess_mime_type(path: &std::path::Path, fallback: &str) -> String {
+	if !fallback.is_empty() && fallback != "application/octet-stream" {
+		return fallback.to_string();
+	}
+	let ext = path
+		.extension()
+		.and_then(|ext| ext.to_str())
+		.unwrap_or("")
+		.to_ascii_lowercase();
+	match ext.as_str() {
+		"jpg" | "jpeg" => "image/jpeg",
+		"png" => "image/png",
+		"gif" => "image/gif",
+		"webp" => "image/webp",
+		"svg" => "image/svg+xml",
+		"pdf" => "application/pdf",
+		"txt" | "log" => "text/plain",
+		"md" | "markdown" => "text/markdown",
+		"json" => "application/json",
+		"csv" => "text/csv",
+		"html" | "htm" => "text/html",
+		"css" => "text/css",
+		"js" | "mjs" | "cjs" => "text/javascript",
+		"ts" | "tsx" => "text/typescript",
+		"py" => "text/x-python",
+		"rs" => "text/rust",
+		"doc" => "application/msword",
+		"docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+		"xls" => "application/vnd.ms-excel",
+		"xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+		"ppt" => "application/vnd.ms-powerpoint",
+		"pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+		"zip" => "application/zip",
+		_ => fallback,
+	}
+	.to_string()
+}
+
+#[tauri::command]
+pub async fn describe_dropped_files(paths: Vec<String>) -> Result<Vec<FileAttachmentInfo>, String> {
+	let mut files = Vec::new();
+	for raw_path in paths {
+		let path = PathBuf::from(&raw_path);
+		let absolute = path.canonicalize().unwrap_or(path);
+		let metadata = std::fs::metadata(&absolute)
+			.map_err(|e| format!("Failed to read dropped path {}: {e}", absolute.display()))?;
+		let fallback = if metadata.is_dir() {
+			"application/x-directory"
+		} else {
+			"application/octet-stream"
+		};
+		files.push(FileAttachmentInfo {
+			kind: "file",
+			absolute_path: absolute.to_string_lossy().to_string(),
+			relative_path: absolute.to_string_lossy().to_string(),
+			mime_type: guess_mime_type(&absolute, fallback),
+			name: file_name_for_path(&absolute),
+			size: metadata.len(),
+		});
+	}
+	Ok(files)
+}
+
+#[tauri::command]
+pub async fn save_upload(
+	window: tauri::Window,
+	state: tauri::State<'_, BridgeState>,
+	filename: String,
+	mime_type: String,
+	data_b64: String,
+) -> Result<FileAttachmentInfo, String> {
+	let window_label = window.label().to_string();
+	let cwd = {
+		let active = state.active.lock().unwrap();
+		active
+			.get(&window_label)
+			.cloned()
+			.ok_or("No active workspace for this window")?
+	};
+	let safe_name = sanitize_upload_filename(&filename);
+	let upload_dir = PathBuf::from(&cwd).join(".pizza").join("uploads");
+	std::fs::create_dir_all(&upload_dir)
+		.map_err(|e| format!("Failed to create upload directory: {e}"))?;
+	let stored_name = format!("{}-{}", uuid::Uuid::new_v4(), safe_name);
+	let path = upload_dir.join(stored_name);
+	let bytes = base64::engine::general_purpose::STANDARD
+		.decode(data_b64)
+		.map_err(|e| format!("Invalid upload data: {e}"))?;
+	std::fs::write(&path, &bytes).map_err(|e| format!("Failed to save upload: {e}"))?;
+	let relative_path = path
+		.strip_prefix(&cwd)
+		.map(|p| p.to_string_lossy().to_string())
+		.unwrap_or_else(|_| path.to_string_lossy().to_string());
+	Ok(FileAttachmentInfo {
+		kind: "file",
+		absolute_path: path.to_string_lossy().to_string(),
+		relative_path,
+		mime_type: guess_mime_type(&path, &mime_type),
+		name: filename,
+		size: bytes.len() as u64,
+	})
+}
+
+/// Wrap an absolute path so it can be passed to the shell quote-free.
+fn quote_arg(s: &str) -> String {
+	if s.chars()
+		.all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | '~'))
+	{
+		s.to_string()
+	} else {
+		format!("'{}'", s.replace('\'', "'\\''"))
+	}
+}
 /// Reveal a workspace's cwd in the system file manager (Finder on macOS).
 #[tauri::command]
 pub async fn reveal_workspace(cwd: String) -> Result<(), String> {

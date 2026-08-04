@@ -173,3 +173,22 @@ export interface ImageContent {
 	data: string;
 	mime_type: string;
 }
+
+/**
+ * File attachment content — a path reference to a file the agent can read
+ * with its own file tools (read, bash, python-docx, etc.). Stored on disk
+ * under <cwd>/.pizza/uploads/<ws>/<session>/<uuid>-<basename> by the
+ * sidecar's save_upload handler; the agent gets the absolute path and
+ * decides how to read it.
+ */
+export interface FileAttachment {
+	type: "file";
+	/** Absolute path the agent can read with file tools. */
+	absolutePath: string;
+	/** Best-effort MIME (may be empty when the OS didn't supply one). */
+	mimeType: string;
+	/** Original file name (basename). */
+	name: string;
+	/** File size in bytes. */
+	size: number;
+}

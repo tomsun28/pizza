@@ -6,7 +6,7 @@
  */
 
 import type { AgentMessage } from "../agent/types.js";
-import type { EventBase, ImageContent } from "../event-store/types.js";
+import type { EventBase, ImageContent, FileAttachment } from "../event-store/types.js";
 import type { EventStore, SubscribeOptions } from "../event-store/store.js";
 import type { SessionDescriptor } from "../projection/types.js";
 import type { ToolRegistry, ApprovalHandler } from "../intent/types.js";
@@ -38,8 +38,8 @@ export interface EventSourcedRuntimeConfig {
 	storagePath?: string;
 	/** Pre-configured EventStore (optional, will create if not provided) */
 	store?: EventStore;
-	/** Thread ID for event isolation. When set, the runtime wraps its store so every appended event carries thread_id = threadId. */
-	threadId?: string;
+	/** Thread ID for event isolation. When set, every appended event carries the current thread id. */
+	threadId?: string | (() => string | undefined);
 	/** Pre-configured SessionManager (optional, will create if not provided) */
 	sessionManager?: SessionManager;
 	/** Classifier configuration */
@@ -143,9 +143,9 @@ export class EventSourcedRuntime {
 	}
 
 	/**
-	 * Process user input. Drives the reactor to completion (one turn cycle).
+				payload: { content: text, images, files },
 	 */
-	async prompt(text: string, images?: ImageContent[]): Promise<void> {
+	async prompt(text: string, images?: ImageContent[], files?: FileAttachment[]): Promise<void> {
 		if (this._isProcessing) {
 			throw new Error(
 				"EventSourcedRuntime is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion.",
@@ -155,6 +155,8 @@ export class EventSourcedRuntime {
 		this._isProcessing = true;
 
 		try {
+			this.sessionManager?.ensureActiveSessionWritable("prompt from historical session");
+			this.refreshSystemPromptForCurrentSession();
 			// Lazy-create the reactor and start it. Reactor lives only as long as the prompt cycle.
 			const projection = this.getProjection();
 
@@ -196,7 +198,7 @@ export class EventSourcedRuntime {
 			this.store.append({
 				actor_id: "user",
 				type: "USER_MESSAGE",
-				payload: { content: text, images },
+				payload: { content: text, images, files },
 			});
 
 			await settledPromise;
@@ -264,19 +266,19 @@ export class EventSourcedRuntime {
 	 * Inject a steer message — interrupts the current turn and delivers the message
 	 * as a follow-up after the current turn settles.
 	 */
-	steer(text: string, images?: ImageContent[]): void {
+	steer(text: string, images?: ImageContent[], files?: FileAttachment[]): void {
 		if (!this._isProcessing) {
 			this.store.append({
 				actor_id: "user",
 				type: "USER_MESSAGE",
-				payload: { content: text, images },
+				payload: { content: text, images, files },
 			});
 			return;
 		}
 		this.store.append({
 			actor_id: "user",
 			type: "USER_INTERRUPT",
-			payload: { content: text, images, reason: "steer" },
+			payload: { content: text, images, files, reason: "steer" },
 		});
 	}
 
@@ -284,11 +286,11 @@ export class EventSourcedRuntime {
 	 * Queue a follow-up message — delivered after the current turn naturally completes.
 	 * If the runtime is not processing, queues it for the next prompt.
 	 */
-	followUp(text: string, images?: ImageContent[]): void {
+	followUp(text: string, images?: ImageContent[], files?: FileAttachment[]): void {
 		this.store.append({
 			actor_id: "user",
 			type: "USER_FOLLOWUP_QUEUED",
-			payload: { content: text, images },
+			payload: { content: text, images, files },
 		});
 	}
 
@@ -365,6 +367,7 @@ export class EventSourcedRuntime {
 
 	setSystemPrompt(prompt: string): void {
 		const old_value = this.config.systemPrompt;
+		if (old_value === prompt) return;
 		this.config.systemPrompt = prompt;
 		this.store.append({
 			actor_id: "user",
@@ -477,7 +480,9 @@ export class EventSourcedRuntime {
 	 * Fork session at a specific event.
 	 */
 	fork(eventId: string): SessionDescriptor {
-		return this.sessionManager?.forkAt(eventId) as any;
+		const desc = this.sessionManager?.forkAt(eventId) as any;
+		this.refreshSystemPromptForCurrentSession();
+		return desc;
 	}
 
 	/**
@@ -485,13 +490,26 @@ export class EventSourcedRuntime {
 	 */
 	switchSession(sessionId: string): void {
 		this.sessionManager?.switchTo(sessionId);
+		this.refreshSystemPromptForCurrentSession();
 	}
 
 	/**
 	 * Create a new session.
 	 */
 	createSession(name?: string): SessionDescriptor {
-		return this.sessionManager?.createSession("user_explicit", name) as any;
+		const desc = this.sessionManager?.createSession("user_explicit", name) as any;
+		this.refreshSystemPromptForCurrentSession();
+		return desc;
+	}
+
+	/**
+	 * Rebuild prompt fragments that depend on the active session. This keeps
+	 * session breadcrumbs fresh even when the UI changes sessions between turns.
+	 */
+	refreshSystemPromptForCurrentSession(): string {
+		if (!this.config.refreshSystemPrompt) return this.config.systemPrompt;
+		this.config.systemPrompt = this.config.refreshSystemPrompt();
+		return this.config.systemPrompt;
 	}
 
 	/**
@@ -590,5 +608,6 @@ export function createEventSourcedRuntime(
 		retryPolicy: config.retryPolicy,
 		compactionPolicy: config.compactionPolicy,
 		compactionEngineSettings: config.compactionEngineSettings,
+		refreshSystemPrompt: config.refreshSystemPrompt,
 	});
 }

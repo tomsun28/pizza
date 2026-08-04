@@ -58,17 +58,37 @@ export function eventToMessage(event: EventBase): AgentMessage | null {
 			// uses camelCase `mimeType`. Convert here so the LLM payload builder
 			// (openai-completions etc.) reads the correct field — otherwise it
 			// emits `data:undefined;base64,...` and the provider returns 400.
+			// Build attachment blocks (images + files). Files don't have an
+			// SDK-level "FileContent" type in pi-ai, so we emit a synthetic text
+			// block pointing at the absolute path; the agent's `read` tool
+			// opens the file from there.
 			let content: string | (TextContent | ImageContent)[] = payload.content as string | (TextContent | ImageContent)[];
+			const images: ImageContent[] = [];
+			const fileBlocks: TextContent[] = [];
 			if (payload.images && payload.images.length > 0) {
-				const images: ImageContent[] = payload.images.map((img) => ({
-					type: "image" as const,
-					data: img.data,
-					mimeType: (img as { mimeType?: string; mime_type?: string }).mimeType ?? img.mime_type,
-				}));
+				for (const img of payload.images) {
+					images.push({
+						type: "image" as const,
+						data: img.data,
+						mimeType: (img as { mimeType?: string; mime_type?: string }).mimeType ?? img.mime_type,
+					});
+				}
+			}
+			if (payload.files && payload.files.length > 0) {
+				for (const file of payload.files) {
+					const kb = file.size > 0 ? ` (${Math.max(1, Math.round(file.size / 1024))} KB)` : "";
+					const mime = file.mimeType ? ` [${file.mimeType}]` : "";
+					fileBlocks.push({
+						type: "text",
+						text: `[Attached file: ${file.absolutePath}${mime}${kb}]`,
+					});
+				}
+			}
+			if (images.length > 0 || fileBlocks.length > 0) {
 				if (typeof content === "string") {
-					content = [{ type: "text", text: content } as TextContent, ...images];
+					content = [{ type: "text", text: content }, ...fileBlocks, ...images];
 				} else {
-					content = [...content, ...images];
+					content = [...content, ...fileBlocks, ...images];
 				}
 			}
 			return {

@@ -9,7 +9,182 @@
  */
 
 // ============================================================================
-// Primitives (dependency-free)
+// Scheduled task primitives
+// ============================================================================
+
+/**
+ * Schedule data types — shared between the agent (src/core/scheduler/) and
+ * consumers (apps/web/). Kept dependency-free so protocol consumers don't
+ * have to pull in agent internals.
+ *
+ * Two layers of scheduling are supported:
+ *   - "visual" modes: every_n_minutes / every_n_hours / daily / weekdays /
+ *     weekly / monthly. Each "time" field is an array so multiple time
+ *     points are first-class (e.g. "每天 02:00 和 03:00").
+ *   - "advanced" mode: cron expression with optional timezone.
+ *
+ * The two layers are equivalent at runtime: any visual schedule can be
+ * converted to an equivalent cron expression for display, and any cron
+ * expression (covering the supported syntax) can be converted back. See
+ * src/core/scheduler/cron.ts for the conversion helpers.
+ */
+
+export type ScheduleMode =
+	| "every_n_minutes"
+	| "every_n_hours"
+	| "daily"
+	| "weekdays"
+	| "weekly"
+	| "monthly"
+	| "cron";
+
+/** 24h wall-clock time. */
+export interface TimeOfDay {
+	hour: number; // 0-23
+	minute: number; // 0-59
+}
+
+/** 0 = Sunday, 1 = Monday, ..., 6 = Saturday (matches JS Date.getDay()). */
+export type Weekday = 0 | 1 | 2 | 3 | 4 | 5 | 6;
+
+/** Day-of-month, 1-31. */
+export type DayOfMonth = number;
+
+/**
+ * ScheduleSpec is the canonical, fully-unrolled schedule for one task.
+ * Each field is optional except where the chosen mode requires it.
+ */
+export interface ScheduleSpec {
+	mode: ScheduleMode;
+	/** every_n_minutes / every_n_hours */
+	everyN?: { n: number; unit: "minute" | "hour" };
+	/** daily / weekdays / weekly / monthly. Always an array (possibly empty). */
+	times?: TimeOfDay[];
+	/** weekly (multi-select). */
+	weekdays?: Weekday[];
+	/** monthly (multi-select). */
+	daysOfMonth?: DayOfMonth[];
+	/** cron mode. */
+	cron?: { expression: string; tz?: string };
+	/** First allowed fire time (epoch ms). Defaults to creation time. */
+	startAt?: number;
+	/** Last allowed fire time (epoch ms). Omit = forever. */
+	endAt?: number;
+}
+
+/**
+ * A persisted scheduled task. One task = one schedule + one prompt message
+ * that gets dispatched to the agent at every fire time.
+ */
+export interface ScheduledTask {
+	id: string;
+	/** Display name. Defaults to first 30 chars of prompt. */
+	name: string;
+	/** Message to dispatch to the agent at every fire time. */
+	prompt: string;
+	/**
+	 * Which scope owns this task.
+	 *   - "main"       → stored at ~/.pizza/main/scheduler/tasks.json
+	 *   - "workspace"  → stored at ~/.pizza/workspaces/<workspaceId>/scheduler/tasks.json
+	 * When scope === "workspace", workspaceId must be set.
+	 */
+	scope: "main" | "workspace";
+	/** Workspace id when scope === "workspace". */
+	workspaceId?: string;
+	schedule: ScheduleSpec;
+	enabled: boolean;
+	/** Last successful fire time (epoch ms). */
+	lastRunAt?: number;
+	/** Status of the most recent run. */
+	lastRunStatus?: "ok" | "failed" | "skipped";
+	/** Event id of the last USER_MESSAGE event produced by this task. */
+	lastRunEventId?: string;
+	/** Number of times this task has fired since creation. */
+	runCount?: number;
+	createdAt: number;
+	updatedAt: number;
+	/** "user" = manual creation, "intent" = natural-language chat intent. */
+	createdBy: "user" | "intent";
+	/** Original user sentence when createdBy === "intent" (auditability). */
+	sourceText?: string;
+	/**
+	 * Which session the task runs in at each fire time.
+	 *   - { kind: "pinned", sessionId } → dispatch into the saved logical session
+	 *   - { kind: "new", purpose }      → each fire creates a fresh session whose
+	 *                                     first user message is the task prompt
+	 * Optional only for backwards compat; legacy missing/current targets require
+	 * the user to edit the task and choose one of the supported targets.
+	 */
+	sessionTarget?: SessionTarget;
+	/**
+	 * What to do when this task wants to fire but its target session is
+	 * already running another task. Default: "skip" (cron-style drop the tick).
+	 */
+	concurrencyPolicy?: ConcurrencyPolicy;
+	/**
+	 * Auto-release the session lock and mark the task as failed if it
+	 * doesn't finish within this many minutes. 0 = no timeout (default).
+	 * Recommended: 15 for interactive agents, 0 for batch jobs.
+	 */
+	timeoutMinutes?: number;
+}
+
+/**
+ * Where a task runs when it fires.
+ */
+export type SessionTarget =
+	| { kind: "pinned"; sessionId?: string; label?: string }
+	/** @deprecated kept only so old tasks can be migrated through the UI. */
+	| { kind: "current" }
+	| { kind: "new"; purpose: string };
+
+/**
+ * What to do when a second task wants to run while another is in flight
+ * in the same target session.
+ */
+export type ConcurrencyPolicy = "skip" | "queue" | "preempt";
+
+/**
+ * Per-scope scheduler policy (the global defaults for newly-created
+ * tasks). Persisted in settings.json. Per-task fields on ScheduledTask
+ * override these defaults.
+ */
+export interface SchedulerPolicy {
+	concurrency: ConcurrencyPolicy;
+	timeoutMinutes: number;
+	defaultSessionTarget: SessionTarget;
+}
+
+/** Lightweight status snapshot returned to UI when listing tasks. */
+export interface ScheduledTaskSummary extends ScheduledTask {
+	/** Next scheduled fire time, or null if disabled / past endAt. */
+	nextRunAt: number | null;
+}
+
+/** One record in runs.jsonl — appended on every fire. */
+export interface ScheduledTaskRun {
+	taskId: string;
+	at: number;
+	status: "ok" | "failed" | "skipped";
+	/** Event id of the produced USER_MESSAGE (if any). */
+	eventId?: string;
+	/** Session id that received the scheduled prompt (if known). */
+	sessionId?: string;
+	/** Optional error / skip reason. */
+	reason?: string;
+}
+
+/** Default limit for schedule_history RPC. */
+export const SCHEDULE_HISTORY_DEFAULT_LIMIT = 50;
+
+/** Maximum time points a user can attach to one schedule. */
+export const SCHEDULE_MAX_TIME_POINTS = 32;
+
+/** Maximum days/weekdays in one schedule. */
+export const SCHEDULE_MAX_DAYS = 31;
+
+// Internal aliases so the rest of this file can use the bare names
+// without colliding with the inlined types above.
 // ============================================================================
 
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -35,9 +210,9 @@ export interface ModelInfo {
 
 export type RpcCommand =
 	// Prompting
-	| { id?: string; type: "prompt"; message: string; images?: unknown[]; streamingBehavior?: "steer" | "followUp" }
-	| { id?: string; type: "steer"; message: string; images?: unknown[] }
-	| { id?: string; type: "follow_up"; message: string; images?: unknown[] }
+	| { id?: string; type: "prompt"; message: string; images?: unknown[]; files?: unknown[]; streamingBehavior?: "steer" | "followUp" }
+	| { id?: string; type: "steer"; message: string; images?: unknown[]; files?: unknown[] }
+	| { id?: string; type: "follow_up"; message: string; images?: unknown[]; files?: unknown[] }
 	| { id?: string; type: "abort" }
 	| { id?: string; type: "rewind"; targetEventId?: string }
 
@@ -72,7 +247,7 @@ export type RpcCommand =
 	// Session
 	| { id?: string; type: "get_session_stats" }
 	| { id?: string; type: "export_html"; outputPath?: string }
-	| { id?: string; type: "switch_session"; sessionPath: string }
+	| { id?: string; type: "switch_session"; sessionPath: string; reason?: string }
 	| { id?: string; type: "fork"; entryId: string }
 	| { id?: string; type: "clone" }
 	| { id?: string; type: "get_fork_messages" }
@@ -87,6 +262,7 @@ export type RpcCommand =
 	// History tree / event forensics (web docks)
 	| { id?: string; type: "history_tree"; action: "list"; query?: string }
 	| { id?: string; type: "history_tree"; action: "view"; sessionId: string; maxMessages?: number }
+	| { id?: string; type: "history_tree"; action: "switch"; sessionId: string; reason?: string }
 	| { id?: string; type: "history_tree"; action: "jump"; sessionId: string; reason?: string }
 	| { id?: string; type: "history_tree"; action: "fork"; sessionId: string }
 	| { id?: string; type: "history_tree"; action: "rename"; sessionId: string; name: string }
@@ -97,7 +273,6 @@ export type RpcCommand =
 	| { id?: string; type: "reject"; intentEventId: string }
 	| { id?: string; type: "set_safe_mode"; enabled: boolean }
 	| { id?: string; type: "new_session" }
-	| { id?: string; type: "new_session" }
 	| { id?: string; type: "get_skills" }
 	| { id?: string; type: "get_extensions" }
 	| { id?: string; type: "set_extension_enabled"; extensionId: string; enabled: boolean }
@@ -106,7 +281,48 @@ export type RpcCommand =
 	// Provider auth: reload in-memory credentials from auth.json (used after the
 	// desktop bridge edits auth.json out-of-band, so a model switch picks up the
 	// new key instead of the stale in-memory cache or an env-var fallback).
-	| { id?: string; type: "reload_providers" };
+	| { id?: string; type: "reload_providers" }
+	| { id?: string; type: "get_scheduler_policy" }
+	| { id?: string; type: "set_scheduler_policy"; policy: SchedulerPolicy }
+
+	// Scheduled tasks
+	| { id?: string; type: "schedule_list"; scope: "main" | "workspace"; workspaceId?: string }
+	| { id?: string; type: "schedule_create"; task: ScheduledTaskCreateInput }
+	| { id?: string; type: "schedule_update"; taskId: string; patch: ScheduledTaskPatch; scope: "main" | "workspace"; workspaceId?: string }
+	| { id?: string; type: "schedule_delete"; taskId: string; scope: "main" | "workspace"; workspaceId?: string }
+	| { id?: string; type: "schedule_run_now"; taskId: string; scope: "main" | "workspace"; workspaceId?: string }
+	| { id?: string; type: "schedule_reload"; scope?: "main" | "workspace"; workspaceId?: string }
+	| { id?: string; type: "schedule_history"; taskId: string; scope: "main" | "workspace"; workspaceId?: string; limit?: number };
+
+/** Input for schedule_create RPC. Server fills id/createdAt/updatedAt. */
+export interface ScheduledTaskCreateInput {
+	name: string;
+	prompt: string;
+	scope: "main" | "workspace";
+	workspaceId?: string;
+	schedule: ScheduleSpec;
+	enabled?: boolean;
+	createdBy?: "user" | "intent";
+	sourceText?: string;
+	startAt?: number;
+	endAt?: number;
+	sessionTarget?: SessionTarget;
+	concurrencyPolicy?: ConcurrencyPolicy;
+	timeoutMinutes?: number;
+}
+
+/** Patch object for schedule_update. Any field omitted is left unchanged. */
+export interface ScheduledTaskPatch {
+	name?: string;
+	prompt?: string;
+	schedule?: ScheduleSpec;
+	enabled?: boolean;
+	startAt?: number | null;
+	endAt?: number | null;
+	sessionTarget?: SessionTarget | null;
+	concurrencyPolicy?: ConcurrencyPolicy | null;
+	timeoutMinutes?: number | null;
+}
 
 // ============================================================================
 // RPC Slash Command (for get_commands response)
@@ -130,6 +346,7 @@ export interface RpcSkillInfo {
 	command: string;
 	/** Human-readable name. */
 	name: string;
+	/** Human-readable description. */
 	description?: string;
 }
 
@@ -139,6 +356,7 @@ export interface RpcExtensionInfo {
 	id: string;
 	/** Human-readable name. */
 	name: string;
+	/** Human-readable description. */
 	description?: string;
 	/** Where the extension comes from. */
 	kind: "builtin" | "user" | "project" | "cli" | "package";
@@ -169,6 +387,7 @@ export interface RpcSessionState {
 	isCompacting: boolean;
 	sessionFile?: string;
 	sessionId: string;
+	threadId?: string;
 	autoCompactionEnabled: boolean;
 	messageCount: number;
 	pendingMessageCount: number;
@@ -242,7 +461,7 @@ export type RpcResponse =
 	// Session
 	| { id?: string; type: "response"; command: "get_session_stats"; success: true; data: unknown }
 	| { id?: string; type: "response"; command: "export_html"; success: true; data: { path: string } }
-	| { id?: string; type: "response"; command: "switch_session"; success: true; data: { cancelled: boolean } }
+	| { id?: string; type: "response"; command: "switch_session"; success: true; data: { cancelled: boolean; sessionId?: string } }
 	| { id?: string; type: "response"; command: "fork"; success: true; data: { text: string; cancelled: boolean } }
 	| { id?: string; type: "response"; command: "clone"; success: true; data: { cancelled: boolean } }
 	| { id?: string; type: "response"; command: "get_fork_messages"; success: true; data: { messages: Array<{ entryId: string; text: string }> } }
@@ -268,6 +487,17 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "install_extension"; success: true; data: { extensionId: string; ok: boolean; message: string; installed: boolean } }
 	| { id?: string; type: "response"; command: "uninstall_extension"; success: true; data: { extensionId: string; ok: boolean; message: string; installed: boolean } }
 	| { id?: string; type: "response"; command: "reload_providers"; success: true; data: { providers: string[] } }
+	| { id?: string; type: "response"; command: "get_scheduler_policy"; success: true; data: { policy: SchedulerPolicy } }
+	| { id?: string; type: "response"; command: "set_scheduler_policy"; success: true; data: { policy: SchedulerPolicy } }
+
+	// Scheduled tasks
+	| { id?: string; type: "response"; command: "schedule_list"; success: true; data: { tasks: ScheduledTaskSummary[] } }
+	| { id?: string; type: "response"; command: "schedule_create"; success: true; data: { task: ScheduledTaskSummary } }
+	| { id?: string; type: "response"; command: "schedule_update"; success: true; data: { task: ScheduledTaskSummary } }
+	| { id?: string; type: "response"; command: "schedule_delete"; success: true; data: { ok: true; taskId: string } }
+	| { id?: string; type: "response"; command: "schedule_run_now"; success: true; data: { fired: true; taskId: string; at: number } }
+	| { id?: string; type: "response"; command: "schedule_reload"; success: true; data: { reloaded: number } }
+	| { id?: string; type: "response"; command: "schedule_history"; success: true; data: { runs: ScheduledTaskRun[] } }
 
 	// Error response (any command can fail)
 	| { id?: string; type: "response"; command: string; success: false; error: string };
@@ -288,6 +518,7 @@ export interface RpcHistoryTreeNode {
 	child_count: number;
 	is_active: boolean;
 	closed: boolean;
+	has_active_continuation?: boolean;
 	snippet?: string;
 	/** Event id the branch was forked at (present when it has a parent). */
 	fork_at_event_id?: string;
@@ -305,6 +536,7 @@ export interface RpcHistorySessionView {
 export type RpcHistoryTreeResult =
 	| { action: "list"; nodes: RpcHistoryTreeNode[] }
 	| { action: "view"; view: RpcHistorySessionView | null }
+	| { action: "switch"; session_id: string }
 	| { action: "jump"; session_id: string; reopened: boolean }
 	| { action: "fork"; session_id: string }
 	| { action: "rename"; ok: boolean };
@@ -349,6 +581,13 @@ export type RpcExtensionUIResponse =
 // ============================================================================
 // Typed events (stdout, raw EventBase forwarded by the bridge)
 // ============================================================================
+
+// Well-known event types emitted by the scheduler. The UI subscribes to
+// these over the rpc_event stream so it can update task status, history,
+// and the "⏰ 已触发" notice card in real time.
+export const SCHEDULED_TASK_FIRED = "SCHEDULED_TASK_FIRED";
+export const SCHEDULED_TASK_COMPLETED = "SCHEDULED_TASK_COMPLETED";
+export const SCHEDULE_INTENT_RESOLVED = "SCHEDULE_INTENT_RESOLVED";
 
 export interface TypedEvent {
 	type: string;
