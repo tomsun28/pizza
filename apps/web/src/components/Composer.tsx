@@ -4,9 +4,12 @@ import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import {
 	loadFileAttachment,
+	loadPathAttachments,
 	type LoadedFileAttachment,
 	type RejectedAttachment,
 } from "@/lib/file-attachment";
+import { FileAttachmentIcon } from "@/components/FileAttachmentIcon";
+import { formatFileSize } from "@/lib/file-format";
 
 export type { LoadedFileAttachment } from "@/lib/file-attachment";
 import { sendCommandAwait, setSafeMode, newSession, getSkills, invoke, type SkillInfo } from "@/lib/transport";
@@ -21,58 +24,6 @@ function formatTokens(n: number): string {
 	if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
 	if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
 	return `${n}`;
-}
-
-/** Format a byte count as a compact human-readable string (e.g. 1.2k, 3.4M). */
-function formatFileSize(bytes: number): string {
-	if (bytes <= 0) return "";
-	if (bytes < 1024) return `${bytes} B`;
-	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} kB`;
-	if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-	return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
-}
-
-/**
- * Map a filename or MIME type to a small icon hint. We render a tiny
- * 2-letter ext badge since lucide has no built-in file-type icons.
- */
-const FILE_TYPE_TINTS: { match: RegExp; label: string; tone: string }[] = [
-	{ match: /^image\//, label: "IMG", tone: "bg-violet-500/15 text-violet-300" },
-	{ match: /\.(png|jpe?g|gif|webp|svg|bmp|heic|avif)$/i, label: "IMG", tone: "bg-violet-500/15 text-violet-300" },
-	{ match: /\.(docx?|doc)$/i, label: "DOC", tone: "bg-blue-500/15 text-blue-300" },
-	{ match: /\.(pdf)$/i, label: "PDF", tone: "bg-red-500/15 text-red-300" },
-	{ match: /\.(xlsx?|csv|xls)$/i, label: "XLS", tone: "bg-green-500/15 text-green-300" },
-	{ match: /\.(pptx?|ppt)$/i, label: "PPT", tone: "bg-orange-500/15 text-orange-300" },
-	{ match: /\.(zip|7z|rar|tar|gz|bz2|xz)$/i, label: "ZIP", tone: "bg-yellow-500/15 text-yellow-300" },
-	{ match: /\.(ts|tsx|js|jsx|mjs|cjs|json)$/i, label: "JS", tone: "bg-amber-500/15 text-amber-300" },
-	{ match: /\.(py|ipynb)$/i, label: "PY", tone: "bg-emerald-500/15 text-emerald-300" },
-	{ match: /\.(md|markdown|mdx)$/i, label: "MD", tone: "bg-slate-500/15 text-slate-300" },
-	{ match: /\.(html?|css|scss|sass|less)$/i, label: "WEB", tone: "bg-orange-500/15 text-orange-300" },
-	{ match: /\.(sh|bash|zsh|fish|ps1)$/i, label: "SH", tone: "bg-zinc-500/15 text-zinc-300" },
-	{ match: /\.(rs|go|java|kt|swift|c|cc|cpp|cxx|h|hpp|rb|py|ts)$/i, label: "CODE", tone: "bg-sky-500/15 text-sky-300" },
-	{ match: /\.(txt|log|md)$/i, label: "TXT", tone: "bg-zinc-500/15 text-zinc-300" },
-];
-
-/**
- * Small uppercase file-type badge for the file chip. Renders a 2-3 letter
- * label (IMG, PDF, DOC, ZIP, etc.) tinted by category. We intentionally avoid
- * pulling in a many-kg file-type icon library — the badge is enough to
- * distinguish the major categories at a glance.
- */
-function FileIcon({ name, mimeType }: { name: string; mimeType?: string }) {
-	const pick = FILE_TYPE_TINTS.find((t) =>
-		(t.match.test(name) || (mimeType && t.match.test(mimeType))) ? true : false,
-	) ?? FILE_TYPE_TINTS[FILE_TYPE_TINTS.length - 1];
-	const label = pick.label;
-	const tone = pick.tone;
-	return (
-		<div
-			className={`flex h-6 w-6 shrink-0 items-center justify-center rounded text-[10px] font-semibold uppercase tracking-wide ${tone}`}
-			title={mimeType || name}
-		>
-			{label}
-		</div>
-	);
 }
 
 /** Small circular progress ring showing context window usage. */
@@ -569,33 +520,102 @@ ${insert}`;
 	}, []);
 
 	const addFiles = useCallback(async (files: FileList | File[]) => {
-	// Every dropped/picked file ends up under the workspace's per-session
-	// uploads directory. Image attachments stay as base64 inline attachments
-	// (the LLM needs to see the pixels); anything else becomes a path
-	// reference the agent can read back with its own file tools.
-	const list = Array.from(files);
-	const results = await Promise.all(list.map(loadFileAttachment));
-	const nextImages: ComposerImage[] = [];
-	const nextFiles: LoadedFileAttachment[] = [];
-	const nextRejected: RejectedAttachment[] = [];
-	for (const r of results) {
-		if (r.kind === "image") {
-			nextImages.push({
-				data: r.data,
-				mimeType: r.mimeType,
-				name: r.name,
-				preview: r.preview,
-			});
-		} else if (r.kind === "file") {
-			nextFiles.push(r);
-		} else {
-			nextRejected.push(r);
+		// Image attachments stay as base64 inline attachments; anything else
+		// becomes a path reference the agent can read back with its file tools.
+		const list = Array.from(files);
+		const results = await Promise.all(list.map(loadFileAttachment));
+		const nextImages: ComposerImage[] = [];
+		const nextFiles: LoadedFileAttachment[] = [];
+		const nextRejected: RejectedAttachment[] = [];
+		for (const r of results) {
+			if (r.kind === "image") {
+				nextImages.push({
+					data: r.data,
+					mimeType: r.mimeType,
+					name: r.name,
+					preview: r.preview,
+				});
+			} else if (r.kind === "file") {
+				nextFiles.push(r);
+			} else {
+				nextRejected.push(r);
+			}
 		}
-	}
-	if (nextImages.length > 0) setImages((prev) => [...prev, ...nextImages]);
-	if (nextFiles.length > 0) setFiles((prev) => [...prev, ...nextFiles]);
-	if (nextRejected.length > 0) setRejected((prev) => [...prev, ...nextRejected]);
-}, []);;
+		if (nextImages.length > 0) setImages((prev) => [...prev, ...nextImages]);
+		if (nextFiles.length > 0) setFiles((prev) => [...prev, ...nextFiles]);
+		if (nextRejected.length > 0) setRejected((prev) => [...prev, ...nextRejected]);
+	}, []);
+
+	const addPathFiles = useCallback(async (paths: string[]) => {
+		const uniquePaths = Array.from(new Set(paths.filter(Boolean)));
+		if (uniquePaths.length === 0) return;
+		try {
+			const nextFiles = await loadPathAttachments(uniquePaths);
+			if (nextFiles.length > 0) {
+				setFiles((prev) => {
+					const seen = new Set(prev.map((file) => file.absolutePath));
+					return [
+						...prev,
+						...nextFiles.filter((file) => {
+							if (seen.has(file.absolutePath)) return false;
+							seen.add(file.absolutePath);
+							return true;
+						}),
+					];
+				});
+			}
+		} catch (e) {
+			setRejected((prev) => [
+				...prev,
+				{
+					kind: "rejected",
+					name: uniquePaths.length === 1 ? uniquePaths[0] : `${uniquePaths.length} files`,
+					size: 0,
+					mimeType: "",
+					reason: e instanceof Error ? e.message : String(e),
+				},
+			]);
+		}
+	}, []);
+
+	useEffect(() => {
+		if (!sidecarReady || !isTauri()) return;
+		let cancelled = false;
+		let unlisten: (() => void) | undefined;
+		let unlistenNative: (() => void) | undefined;
+		void (async () => {
+			const { listen } = await import("@tauri-apps/api/event");
+			unlistenNative = await listen<{ paths?: string[] }>("native_file_drop", (event) => {
+				if (cancelled) return;
+				setIsDragOver(false);
+				void addPathFiles(event.payload.paths ?? []);
+			});
+			const { getCurrentWebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+			unlisten = await getCurrentWebviewWindow().onDragDropEvent((event) => {
+				if (cancelled) return;
+				const payload = event.payload as { type?: string; paths?: string[] };
+				if (payload.type === "enter" || payload.type === "over") {
+					setIsDragOver(true);
+					return;
+				}
+				if (payload.type === "leave") {
+					setIsDragOver(false);
+					return;
+				}
+				if (payload.type === "drop") {
+					setIsDragOver(false);
+					void addPathFiles(payload.paths ?? []);
+				}
+			});
+		})().catch((e) => {
+			console.error("[composer] tauri drag-drop listener failed:", e);
+		});
+		return () => {
+			cancelled = true;
+			unlisten?.();
+			unlistenNative?.();
+		};
+	}, [sidecarReady, addPathFiles]);
 
 	// --- Drag-and-drop wiring ----------------------------------------------
 	// We listen on the outer composer wrapper (not the textarea) so users can
@@ -728,7 +748,7 @@ ${insert}`;
 							</div>
 						</div>
 					)}
-					{images.length > 0 && (
+					{(images.length > 0 || files.length > 0) && (
 						<div className="mb-2 flex flex-wrap gap-2">
 							{images.map((img, i) => (
 								<div
@@ -750,38 +770,38 @@ ${insert}`;
 									</button>
 								</div>
 							))}
-						{files.map((f, i) => (
-							<div
-								key={f.absolutePath}
-								className="group flex h-9 w-48 items-center gap-2 overflow-hidden rounded-lg border border-border bg-surface-2 px-2.5 text-xs"
-								title={f.absolutePath}
-							>
-								<FileIcon name={f.name} mimeType={f.mimeType} />
-								<div className="flex min-w-0 flex-1 flex-col">
-									<span className="truncate text-fg">{f.name}</span>
-									{f.size > 0 && (
-										<span className="truncate text-[10px] text-muted">{formatFileSize(f.size)}</span>
-									)}
-								</div>
-								<button
-									type="button"
-									onClick={() => revealInFinder(f.absolutePath)}
-									className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted transition-colors hover:bg-bg/60 hover:text-fg"
-									title={t("composer.revealInFinder")}
+							{files.map((f, i) => (
+								<div
+									key={f.absolutePath}
+									className="group flex h-9 w-48 items-center gap-2 overflow-hidden rounded-lg border border-border bg-surface-2 px-2.5 text-xs"
+									title={f.absolutePath}
+								>
+									<FileAttachmentIcon name={f.name} mimeType={f.mimeType} />
+									<div className="flex min-w-0 flex-1 flex-col">
+										<span className="truncate text-fg">{f.name}</span>
+										{f.size > 0 && (
+											<span className="truncate text-[10px] text-muted">{formatFileSize(f.size)}</span>
+										)}
+									</div>
+									<button
+										type="button"
+										onClick={() => revealInFinder(f.absolutePath)}
+										className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted transition-colors hover:bg-bg/60 hover:text-fg"
+										title={t("composer.revealInFinder")}
 									>
 										<FolderOpen className="h-3.5 w-3.5" />
 									</button>
-								<button
-									type="button"
-									onClick={() => removeFile(i)}
-									className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted transition-colors hover:bg-bg/60 hover:text-fg"
-									title={t("common.remove")}
+									<button
+										type="button"
+										onClick={() => removeFile(i)}
+										className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted transition-colors hover:bg-bg/60 hover:text-fg"
+										title={t("common.remove")}
 									>
 										<X className="h-3.5 w-3.5" />
 									</button>
-							</div>
-						))}
-					</div>
+								</div>
+							))}
+						</div>
 					)}
 					{rejected.length > 0 && (
 						<div className="mb-2 rounded-lg border border-warning/40 bg-warning/5 px-3 py-2 text-xs text-warning">
@@ -834,12 +854,10 @@ ${insert}`;
 					<div className="mt-1 flex items-center justify-between gap-2">
 						{/* Left cluster */}
 						<div className="flex items-center gap-1">
-
-						{/* + button: multi-action menu (new session, attach, skills) */}
+							{/* + button: multi-action menu (new session, attach, skills) */}
 							<input
 								ref={fileInputRef}
 								type="file"
-								accept="image/*"
 								multiple
 								className="hidden"
 								onChange={handleFileChange}

@@ -15,6 +15,15 @@
 
 import { sendCommandAwait } from "./transport";
 
+function isTauri(): boolean {
+	return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+async function invokeTauri<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+	const { invoke } = await import("@tauri-apps/api/core");
+	return invoke<T>(command, args);
+}
+
 /** Hard upper bound for image attachments; the sidecar / image-resize path
  *  handles anything under this.  */
 export const MAX_IMAGE_BYTES = 2000 * 2000 * 4;
@@ -71,6 +80,17 @@ export interface RejectedAttachment {
 
 export type LoadedAttachment = LoadedImageAttachment | LoadedFileAttachment;
 export type AnyAttachment = LoadedAttachment | RejectedAttachment;
+
+type NativeFileAttachment = Omit<LoadedFileAttachment, "kind"> & { kind?: "file" };
+
+export async function loadPathAttachments(paths: string[]): Promise<LoadedFileAttachment[]> {
+	if (!isTauri() || paths.length === 0) return [];
+	const files = await invokeTauri<NativeFileAttachment[]>("describe_dropped_files", { paths });
+	return files.map((file) => ({
+		...file,
+		kind: "file",
+	}));
+}
 
 // ---------------------------------------------------------------------------
 // FileReader helpers — browser/DOM only.
@@ -171,34 +191,41 @@ export async function loadFileAttachment(file: File): Promise<AnyAttachment> {
 		};
 	}
 
-	try {
-		const r = await sendCommandAwait<{
-			absolutePath: string;
-			relativePath: string;
-			size: number;
-		}>({
-			type: "save_upload",
-			filename: name,
-			mimeType: declaredMime || "application/octet-stream",
-			dataB64,
-		}, 120_000);
-		if (!r.data) {
+		try {
+			const uploaded = isTauri()
+				? await invokeTauri<NativeFileAttachment>("save_upload", {
+						filename: name,
+						mimeType: declaredMime || "application/octet-stream",
+						dataB64,
+					})
+				: (await sendCommandAwait<{
+						absolutePath: string;
+						relativePath: string;
+						mimeType?: string;
+						size: number;
+					}>({
+						type: "save_upload",
+						filename: name,
+						mimeType: declaredMime || "application/octet-stream",
+						dataB64,
+					}, 120_000)).data;
+			if (!uploaded) {
+				return {
+					kind: "rejected",
+					name,
+					size,
+					mimeType: declaredMime,
+					reason: "Server returned an empty response",
+				};
+			}
 			return {
-				kind: "rejected",
+				kind: "file",
+				absolutePath: uploaded.absolutePath,
+				relativePath: uploaded.relativePath,
+				mimeType: uploaded.mimeType ?? (declaredMime || "application/octet-stream"),
 				name,
-				size,
-				mimeType: declaredMime,
-				reason: "Server returned an empty response",
+				size: uploaded.size,
 			};
-		}
-		return {
-			kind: "file",
-			absolutePath: r.data.absolutePath,
-			relativePath: r.data.relativePath,
-			mimeType: declaredMime || "application/octet-stream",
-			name,
-			size: r.data.size,
-		};
 	} catch (e) {
 		return {
 			kind: "rejected",

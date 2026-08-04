@@ -198,7 +198,7 @@ export class EventSourcedRuntime {
 			this.store.append({
 				actor_id: "user",
 				type: "USER_MESSAGE",
-				payload: { content: text, images },
+				payload: { content: text, images, files },
 			});
 
 			await settledPromise;

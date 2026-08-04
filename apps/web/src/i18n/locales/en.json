@@ -83,9 +83,8 @@
     "skills": "Skills",
     "revealInFinder": "Show in file manager",
     "dropFiles": "Drop files to attach",
-    "rejectedFiles_one": "1 file was skipped",
-    "rejectedFiles_other": "{{count}} files were skipped"
-    "skills": "Skills",
+		"rejectedFiles_one": "1 file was skipped",
+		"rejectedFiles_other": "{{count}} files were skipped",
     "scheduledTask": "Scheduled task",
     "scheduledTaskHint": "Run a task automatically at the right time"
   },

@@ -186,8 +186,7 @@ export class SessionManager {
 
 		const forked = this.createSession("fork", source.name, {
 			parentSessionId: source.session_id,
-			contextParentSessionId: preserveHistory ? source.session_id : undefined,
-			startEventId: preserveHistory ? this.store.head ?? forkAtEventId : forkAtEventId,
+			startEventId: preserveHistory ? source.event_range.start_event_id : forkAtEventId,
 			summaryEventId: source.summary_event_id,
 			threadId: source.thread_id,
 		});

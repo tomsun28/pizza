@@ -83,17 +83,36 @@ function messageFiles(message: unknown): Array<{
 }> {
 	if (!message || typeof message !== "object") return [];
 	const msg = message as Record<string, unknown>;
-	if (!Array.isArray(msg.files)) return [];
 	const out: Array<{ absolutePath: string; mimeType: string; name: string; size: number }> = [];
-	for (const f of msg.files as Array<Record<string, unknown>>) {
-		if (!f || typeof f !== "object") continue;
-		const absolutePath = typeof f.absolutePath === "string" ? f.absolutePath : "";
-		const name = typeof f.name === "string" ? f.name : absolutePath.split("/").pop() ?? "file";
-		const mimeType = typeof f.mimeType === "string" ? f.mimeType : "";
-		const size = typeof f.size === "number" ? f.size : 0;
-		if (absolutePath) out.push({ absolutePath, mimeType, name, size });
+	if (Array.isArray(msg.files)) {
+		for (const f of msg.files as Array<Record<string, unknown>>) {
+			if (!f || typeof f !== "object") continue;
+			const absolutePath = typeof f.absolutePath === "string" ? f.absolutePath : "";
+			const name = typeof f.name === "string" ? f.name : absolutePath.split("/").pop() ?? "file";
+			const mimeType = typeof f.mimeType === "string" ? f.mimeType : "";
+			const size = typeof f.size === "number" ? f.size : 0;
+			if (absolutePath) out.push({ absolutePath, mimeType, name, size });
+		}
+	}
+	const content = typeof msg.content === "string" ? msg.content : "";
+	for (const match of content.matchAll(/<file\s+path="([^"]+)"\s*\/?>/g)) {
+		const absolutePath = match[1];
+		if (!absolutePath || out.some((file) => file.absolutePath === absolutePath)) continue;
+		out.push({
+			absolutePath,
+			mimeType: "",
+			name: absolutePath.split("/").pop() ?? "file",
+			size: 0,
+		});
 	}
 	return out;
+}
+
+function hideFileRefs(text: string): string {
+	return text
+		.replace(/^\s*<file\s+path="[^"]+"\s*\/?>\s*$/gm, "")
+		.replace(/\n{3,}/g, "\n\n")
+		.trim();
 }
 
 /** Extract toolCall blocks (id, name, JSON args) from an assistant message. */
@@ -144,7 +163,7 @@ function messageThinking(message: unknown): string {
 function messageText(message: unknown): string {
 	if (!message || typeof message !== "object") return "";
 	const msg = message as Record<string, unknown>;
-	if (typeof msg.content === "string") return msg.content;
+	if (typeof msg.content === "string") return hideFileRefs(msg.content);
 	if (Array.isArray(msg.content)) {
 		return (msg.content as Array<Record<string, unknown>>)
 			.map((block) => {
