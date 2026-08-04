@@ -8,7 +8,8 @@ import {
 	type LoadedFileAttachment,
 	type RejectedAttachment,
 } from "@/lib/file-attachment";
-import { FileAttachmentIcon, formatFileSize } from "@/components/FileAttachmentIcon";
+import { FileAttachmentIcon } from "@/components/FileAttachmentIcon";
+import { formatFileSize } from "@/lib/file-format";
 
 export type { LoadedFileAttachment } from "@/lib/file-attachment";
 import { sendCommandAwait, setSafeMode, newSession, getSkills, invoke, type SkillInfo } from "@/lib/transport";

@@ -1,14 +1,5 @@
 import { cn } from "@/lib/utils";
 
-/** Compact human-readable byte count (e.g. 1.2 kB, 3.4 MB). */
-export function formatFileSize(bytes: number): string {
-	if (bytes <= 0) return "";
-	if (bytes < 1024) return `${bytes} B`;
-	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} kB`;
-	if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-	return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
-}
-
 const FILE_TYPE_TONES: { match: RegExp; label: string; tone: string }[] = [
 	{ match: /^image\//i, label: "IMG", tone: "border-violet-300 bg-violet-100 text-violet-800 dark:border-violet-700 dark:bg-violet-950/70 dark:text-violet-100" },
 	{ match: /\.(png|jpe?g|gif|webp|svg|bmp|heic|avif)$/i, label: "IMG", tone: "border-violet-300 bg-violet-100 text-violet-800 dark:border-violet-700 dark:bg-violet-950/70 dark:text-violet-100" },

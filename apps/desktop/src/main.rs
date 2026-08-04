@@ -14,16 +14,16 @@ fn main() {
 		.invoke_handler(tauri::generate_handler![
 			bridge::init_sidecar,
 			bridge::stop_sidecar,
-				bridge::rpc_command,
-				bridge::new_workspace,
-				bridge::list_workspaces,
-				bridge::delete_workspace,
-				bridge::reveal_workspace,
-				bridge::reveal_file,
-				bridge::describe_dropped_files,
-				bridge::save_upload,
-				bridge::list_providers,
-				bridge::set_provider_api_key,
+			bridge::rpc_command,
+			bridge::new_workspace,
+			bridge::list_workspaces,
+			bridge::delete_workspace,
+			bridge::reveal_workspace,
+			bridge::reveal_file,
+			bridge::describe_dropped_files,
+			bridge::save_upload,
+			bridge::list_providers,
+			bridge::set_provider_api_key,
 			bridge::remove_provider_api_key,
 			bridge::restart_sidecar,
 			bridge::set_window_background,
@@ -44,25 +44,23 @@ fn main() {
 			}
 			Ok(())
 		})
-			.on_window_event(|window, event| {
-				match event {
-					WindowEvent::CloseRequested { .. } => {
-						let label = window.label().to_string();
-						log::info!("window {} closed, stopping its sidecar", label);
-						let state = window.app_handle().state::<bridge::BridgeState>();
-						bridge::kill_sidecar_for_window(state.inner(), &label);
-					}
-					WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) => {
-						let paths: Vec<String> = paths
-							.iter()
-							.map(|path| path.to_string_lossy().to_string())
-							.collect();
-						bridge::log_file(&format!("native_file_drop: {:?}", paths));
-						let _ = window.emit("native_file_drop", serde_json::json!({ "paths": paths }));
-					}
-					_ => {}
-				}
-			})
+		.on_window_event(|window, event| match event {
+			WindowEvent::CloseRequested { .. } => {
+				let label = window.label().to_string();
+				log::info!("window {} closed, stopping its sidecar", label);
+				let state = window.app_handle().state::<bridge::BridgeState>();
+				bridge::kill_sidecar_for_window(state.inner(), &label);
+			}
+			WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) => {
+				let paths: Vec<String> = paths
+					.iter()
+					.map(|path| path.to_string_lossy().to_string())
+					.collect();
+				bridge::log_file(&format!("native_file_drop: {:?}", paths));
+				let _ = window.emit("native_file_drop", serde_json::json!({ "paths": paths }));
+			}
+			_ => {}
+		})
 		.run(tauri::generate_context!())
 		.expect("error while running tauri application");
 }

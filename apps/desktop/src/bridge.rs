@@ -1292,7 +1292,6 @@ pub async fn delete_workspace(
 	Ok(())
 }
 
-
 /// Reveal an arbitrary file in the system file manager (Finder on macOS,
 /// Explorer on Windows, the desktop file manager on Linux). The path should
 /// be absolute — the sidecar places uploads under <cwd>/.pizza/uploads/...
@@ -1460,7 +1459,9 @@ pub async fn save_upload(
 
 /// Wrap an absolute path so it can be passed to the shell quote-free.
 fn quote_arg(s: &str) -> String {
-	if s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | '~')) {
+	if s.chars()
+		.all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | '~'))
+	{
 		s.to_string()
 	} else {
 		format!("'{}'", s.replace('\'', "'\\''"))

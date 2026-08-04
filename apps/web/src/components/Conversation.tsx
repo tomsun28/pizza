@@ -3,7 +3,8 @@ import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { Markdown } from "./Markdown";
 import { Button, Badge } from "@/components/ui";
-import { FileAttachmentIcon, formatFileSize } from "@/components/FileAttachmentIcon";
+import { FileAttachmentIcon } from "@/components/FileAttachmentIcon";
+import { formatFileSize } from "@/lib/file-format";
 import {
 	Terminal,
 	ChevronRight,
@@ -366,7 +367,7 @@ function UserBubble({ item }: { item: TimelineItem }) {
 				)}
 				{item.files && item.files.length > 0 && (
 					<div className="mb-2 flex flex-wrap gap-2">
-						{item.files.map((f, i) => (
+						{item.files.map((f) => (
 							<div
 								key={f.absolutePath}
 								className="flex h-9 w-48 items-center gap-2 overflow-hidden rounded-lg border border-border bg-surface-2 px-2.5 text-xs"
@@ -465,7 +466,7 @@ function AssistantMessage({ item }: { item: TimelineItem }) {
 				)}
 				{item.files && item.files.length > 0 && (
 					<div className="mb-2 flex flex-wrap gap-2">
-						{item.files.map((f, i) => (
+						{item.files.map((f) => (
 							<div
 								key={f.absolutePath}
 								className="flex h-9 w-48 items-center gap-2 overflow-hidden rounded-lg border border-border bg-surface-2 px-2.5 text-xs"
