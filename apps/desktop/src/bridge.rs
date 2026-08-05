@@ -1457,16 +1457,6 @@ pub async fn save_upload(
 	})
 }
 
-/// Wrap an absolute path so it can be passed to the shell quote-free.
-fn quote_arg(s: &str) -> String {
-	if s.chars()
-		.all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | '~'))
-	{
-		s.to_string()
-	} else {
-		format!("'{}'", s.replace('\'', "'\\''"))
-	}
-}
 /// Reveal a workspace's cwd in the system file manager (Finder on macOS).
 #[tauri::command]
 pub async fn reveal_workspace(cwd: String) -> Result<(), String> {
