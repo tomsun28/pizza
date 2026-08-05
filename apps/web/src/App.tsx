@@ -6,7 +6,6 @@ import Layout from "@/components/Layout";
 import AgentView from "@/views/AgentView";
 import SettingsView from "@/views/SettingsView";
 import PluginsView from "@/views/PluginsView";
-import SchedulesView from "@/views/SchedulesView";
 import { subscribeSidecarExit, subscribeEvents, initSidecar, sendCommandAwait, listWorkspaces, restartSidecar } from "@/lib/transport";
 import { BrandIcon } from "@/components/BrandIcon";
 import type { RpcSessionState, WorkspaceMeta } from "@/lib/types";
@@ -379,12 +378,6 @@ function AppInner() {
 							/>
 						} />
 					<Route path="/plugins" element={<PluginsView />} />
-					<Route path="/schedules" element={
-						<SchedulesView
-							scope={workspace && workspace.endsWith("/.pizza/main") ? "main" : "workspace"}
-							workspaceId={workspace ?? undefined}
-						/>
-					} />
 					<Route path="*" element={<Navigate to="/" replace />} />
 					</Route>
 			</Routes>

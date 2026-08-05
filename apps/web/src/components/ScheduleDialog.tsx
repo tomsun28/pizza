@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Trash2 } from "lucide-react";
 import type { ConcurrencyPolicy, DayOfMonth, ScheduleSpec, ScheduledTaskSummary, SessionTarget, TimeOfDay, Weekday } from "@/lib/types";
-import { Button, ErrorBanner, Field, Modal, Spinner } from "@/components/ui";
+import { Button, ErrorBanner, Field, Modal, Select, Spinner } from "@/components/ui";
 import { ScheduleModePicker } from "@/components/ScheduleModePicker";
 import { TimePointChips, formatTimeOfDay } from "@/components/TimePointChips";
 import { SchedulePreview } from "@/components/SchedulePreview";
@@ -11,14 +10,24 @@ import { cn } from "@/lib/utils";
 
 type Scope = "main" | "workspace";
 
-interface ScheduleDialogProps {
-	open: boolean;
-	onClose: () => void;
+interface ScheduleFormProps {
 	scope: Scope;
 	workspaceId?: string;
 	/** When editing, the existing task. When creating, undefined. */
 	existing?: ScheduledTaskSummary | null;
 	onSaved: (task: ScheduledTaskSummary) => void;
+	onCancel: () => void;
+	/**
+	 * Compact layout for the inline composer popover: tighter spacing and a
+	 * shorter scroll area so the panel stays anchored above the input box
+	 * instead of taking over the whole screen like the page-level modal.
+	 */
+	compact?: boolean;
+}
+
+interface ScheduleDialogProps extends Omit<ScheduleFormProps, "onCancel" | "compact"> {
+	open: boolean;
+	onClose: () => void;
 }
 
 /** Build an empty visual schedule for "create" mode. */
@@ -40,9 +49,30 @@ function editableSessionTarget(target: SessionTarget | undefined, sessionId?: st
 	return target;
 }
 
+/**
+ * Modal shell around {@link ScheduleForm}, used by the full Schedules page.
+ * The composer popover renders `ScheduleForm` directly instead, so creating /
+ * editing a task from the input box never blocks the whole window.
+ */
 export function ScheduleDialog(props: ScheduleDialogProps) {
 	const { t } = useTranslation();
-	const { open, onClose, scope, workspaceId, existing, onSaved } = props;
+	const { open, onClose, ...rest } = props;
+	if (!open) return null;
+	return (
+		<Modal
+			open={open}
+			onClose={onClose}
+			title={rest.existing ? t("schedule.editTitle") : t("schedule.createTitle")}
+		>
+			{/* Remount on target change so all field state resets cleanly. */}
+			<ScheduleForm key={rest.existing?.id ?? "new"} {...rest} onCancel={onClose} />
+		</Modal>
+	);
+}
+
+export function ScheduleForm(props: ScheduleFormProps) {
+	const { t } = useTranslation();
+	const { scope, workspaceId, existing, onSaved, onCancel, compact } = props;
 	const isEdit = !!existing;
 
 	const [name, setName] = useState(existing?.name ?? "");
@@ -71,9 +101,11 @@ export function ScheduleDialog(props: ScheduleDialogProps) {
 	const [newSessionPurpose, setNewSessionPurpose] = useState(
 		existing?.sessionTarget?.kind === "new" ? existing.sessionTarget.purpose : "",
 	);
-	// Reset whenever the dialog opens with a different existing task.
+	// Initialize from the target task once per mount. Callers remount the form
+	// (via `key`) when they switch between create / edit, so re-running this on
+	// every `existing` identity change would only risk clobbering in-progress
+	// edits when the parent refreshes its task list in the background.
 	useEffect(() => {
-		if (!open) return;
 		let cancelled = false;
 		setName(existing?.name ?? "");
 		setPrompt(existing?.prompt ?? "");
@@ -102,10 +134,11 @@ export function ScheduleDialog(props: ScheduleDialogProps) {
 		return () => {
 			cancelled = true;
 		};
-	}, [open, existing]);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, []);
 
 	useEffect(() => {
-		if (!open || isEdit) return;
+		if (isEdit) return;
 		let cancelled = false;
 		(async () => {
 			try {
@@ -125,7 +158,8 @@ export function ScheduleDialog(props: ScheduleDialogProps) {
 		return () => {
 			cancelled = true;
 		};
-	}, [open, isEdit]);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [isEdit]);
 
 	const resolveSessionTargetForSave = async (): Promise<SessionTarget> => {
 		if (sessionTarget.kind !== "pinned" || sessionTarget.sessionId) return sessionTarget;
@@ -187,7 +221,8 @@ export function ScheduleDialog(props: ScheduleDialogProps) {
 				});
 				onSaved(created);
 			}
-			onClose();
+			// Closing is the caller's job: it already knows whether to dismiss
+			// the modal / popover or fall back to the task list.
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		} finally {
@@ -386,36 +421,13 @@ export function ScheduleDialog(props: ScheduleDialogProps) {
 	};
 
 	return (
-		<Modal
-			open={open}
-			onClose={onClose}
-			title={isEdit ? t("schedule.editTitle") : t("schedule.createTitle")}
-			footer={
-				<div className="flex items-center justify-between gap-2">
-					<div className="flex items-center gap-2 text-xs text-muted">
-						<label className="flex cursor-pointer items-center gap-2">
-							<input
-								type="checkbox"
-								checked={enabled}
-								onChange={(e) => setEnabled(e.target.checked)}
-								className="accent-accent"
-							/>
-							{t("schedule.enabled")}
-						</label>
-					</div>
-					<div className="flex items-center gap-2">
-						<Button tone="neutral" variant="ghost" onClick={onClose} disabled={saving}>
-							{t("schedule.cancel")}
-						</Button>
-						<Button tone="accent" onClick={handleSave} disabled={!canSave || saving}>
-							{saving ? <Spinner /> : null}
-							{t("schedule.save")}
-						</Button>
-					</div>
-				</div>
-			}
-		>
-			<div className="max-h-[70vh] space-y-4 overflow-y-auto pr-1">
+		<div className="flex min-h-0 flex-col">
+			<div
+				className={cn(
+					"min-h-0 overflow-y-auto pr-1",
+					compact ? "max-h-[52vh] space-y-3" : "max-h-[70vh] space-y-4",
+				)}
+			>
 				{error && <ErrorBanner message={error} />}
 
 				<Field label={t("schedule.name")}>
@@ -424,7 +436,10 @@ export function ScheduleDialog(props: ScheduleDialogProps) {
 						value={name}
 						placeholder={t("schedule.namePlaceholder")}
 						onChange={(e) => setName(e.target.value)}
-						className="w-full rounded-md border border-border bg-surface px-3 py-2.5 text-sm text-fg outline-none focus:border-accent"
+						className={cn(
+							"rounded-lg border border-border bg-surface px-3 py-2.5 text-sm text-fg outline-none transition-colors hover:border-accent/40 focus:border-accent",
+							compact && "py-2 text-sm",
+						)}
 					/>
 				</Field>
 
@@ -471,8 +486,8 @@ export function ScheduleDialog(props: ScheduleDialogProps) {
 						value={prompt}
 						placeholder={t("schedule.taskContentPlaceholder")}
 						onChange={(e) => setPrompt(e.target.value)}
-						rows={3}
-						className="w-full rounded-md border border-border bg-surface px-3 py-2.5 text-sm text-fg outline-none focus:border-accent"
+						rows={compact ? 3 : 3}
+						className="w-full rounded-lg border border-border bg-surface px-3 py-2.5 text-sm text-fg outline-none transition-colors hover:border-accent/40 focus:border-accent"
 					/>
 				</Field>
 
@@ -483,33 +498,34 @@ export function ScheduleDialog(props: ScheduleDialogProps) {
 						<span className="px-2">{t("schedule.timeoutShort")}</span>
 					</div>
 					<div className="grid grid-cols-[1fr_1fr_auto] items-center gap-2">
-						<select
+						<Select
+							size={compact ? "sm" : "md"}
 							value={sessionTarget.kind}
-							onChange={(e) => {
-								const v = e.target.value as "pinned" | "new";
-								if (v === "pinned") setSessionTarget(defaultSessionTarget(currentSessionId));
-								else setSessionTarget({ kind: "new", purpose: newSessionPurpose });
-							}}
-							className="h-9 rounded-md border border-border bg-surface px-2 text-sm text-fg outline-none focus:border-accent"
 							title={t(
 								sessionTarget.kind === "pinned"
 									? "schedule.sessionPinnedHint"
 									: "schedule.sessionNewHint",
 							)}
-						>
-							<option value="pinned">{t("schedule.sessionPinned")}</option>
-							<option value="new">{t("schedule.sessionNew")}</option>
-						</select>
-						<select
+							options={[
+								{ value: "pinned", label: t("schedule.sessionPinned") },
+								{ value: "new", label: t("schedule.sessionNew") },
+							]}
+							onChange={(v) => {
+								if (v === "pinned") setSessionTarget(defaultSessionTarget(currentSessionId));
+								else setSessionTarget({ kind: "new", purpose: newSessionPurpose });
+							}}
+						/>
+						<Select
+							size={compact ? "sm" : "md"}
 							value={concurrencyPolicy}
-							onChange={(e) => setConcurrencyPolicy(e.target.value as ConcurrencyPolicy)}
-							className="h-9 rounded-md border border-border bg-surface px-2 text-sm text-fg outline-none focus:border-accent"
 							title={t(`schedule.concurrency_${concurrencyPolicy}_hint`)}
-						>
-							<option value="skip">{t("schedule.concurrency_skip")}</option>
-							<option value="queue">{t("schedule.concurrency_queue")}</option>
-							<option value="preempt">{t("schedule.concurrency_preempt")}</option>
-						</select>
+							options={[
+								{ value: "skip", label: t("schedule.concurrency_skip"), hint: t("schedule.concurrency_skip_hint") },
+								{ value: "queue", label: t("schedule.concurrency_queue"), hint: t("schedule.concurrency_queue_hint") },
+								{ value: "preempt", label: t("schedule.concurrency_preempt"), hint: t("schedule.concurrency_preempt_hint") },
+							]}
+							onChange={(v) => setConcurrencyPolicy(v as ConcurrencyPolicy)}
+						/>
 						<div className="flex items-center gap-1">
 							<input
 								type="number"
@@ -517,7 +533,10 @@ export function ScheduleDialog(props: ScheduleDialogProps) {
 								max={1440}
 								value={timeoutMinutes}
 								onChange={(e) => setTimeoutMinutes(Math.max(0, Number(e.target.value || 0)))}
-								className="h-9 w-16 rounded-md border border-border bg-surface px-2 text-sm text-fg outline-none focus:border-accent"
+								className={cn(
+									"rounded-lg border border-border bg-surface px-2 text-sm text-fg outline-none transition-colors hover:border-accent/40 focus:border-accent",
+									compact ? "h-8 w-14 text-xs" : "h-9 w-16",
+								)}
 								placeholder="0"
 								title={t("schedule.timeoutHint")}
 							/>
@@ -534,7 +553,10 @@ export function ScheduleDialog(props: ScheduleDialogProps) {
 								setNewSessionPurpose(v);
 								if (sessionTarget.kind === "new") setSessionTarget({ kind: "new", purpose: v });
 							}}
-							className="h-9 w-full rounded-md border border-border bg-surface px-2 text-sm text-fg outline-none focus:border-accent"
+							className={cn(
+								"rounded-lg border border-border bg-surface px-2 text-sm text-fg outline-none transition-colors hover:border-accent/40 focus:border-accent",
+								compact ? "h-8" : "h-9",
+							)}
 						/>
 					)}
 				</div>
@@ -552,32 +574,28 @@ export function ScheduleDialog(props: ScheduleDialogProps) {
 					</span>
 				</div>
 			</div>
-		</Modal>
-	);
-}
 
-/**
- * Small inline delete-confirm helper used by SchedulesPanel.
- */
-export function DeleteTaskButton({
-	onClick,
-	loading,
-}: {
-	onClick: () => void;
-	loading?: boolean;
-}) {
-	const { t } = useTranslation();
-	return (
-		<button
-			type="button"
-			onClick={onClick}
-			disabled={loading}
-			className="inline-flex items-center gap-1 rounded-md border border-border bg-surface px-2 py-1 text-xs text-muted hover:border-danger hover:text-danger disabled:opacity-50"
-			title={t("schedule.delete")}
-		>
-			<Trash2 className="h-3 w-3" />
-			{t("schedule.delete")}
-		</button>
+			<div className="mt-3 flex items-center justify-between gap-2 border-t border-border pt-3">
+				<label className="flex cursor-pointer items-center gap-2 text-xs text-muted">
+					<input
+						type="checkbox"
+						checked={enabled}
+						onChange={(e) => setEnabled(e.target.checked)}
+						className="accent-accent"
+					/>
+					{t("schedule.enabled")}
+				</label>
+				<div className="flex items-center gap-2">
+					<Button tone="neutral" variant="ghost" size={compact ? "sm" : "md"} onClick={onCancel} disabled={saving}>
+						{t("schedule.cancel")}
+					</Button>
+					<Button tone="accent" size={compact ? "sm" : "md"} onClick={handleSave} disabled={!canSave || saving}>
+						{saving ? <Spinner /> : null}
+						{t("schedule.save")}
+					</Button>
+				</div>
+			</div>
+		</div>
 	);
 }
 
@@ -598,19 +616,39 @@ export function formatNextRun(at: number | null | undefined): string {
 }
 
 /** Format a list of times for display (e.g. "09:00, 18:00"). */
-export function formatTimes(times: TimeOfDay[] | undefined): string {
+function formatTimes(times: TimeOfDay[] | undefined): string {
 	if (!times || times.length === 0) return "—";
 	return times.map(formatTimeOfDay).join(", ");
 }
 
 /** Format days of month list. */
-export function formatDaysOfMonth(days: DayOfMonth[] | undefined): string {
+function formatDaysOfMonth(days: DayOfMonth[] | undefined): string {
 	if (!days || days.length === 0) return "—";
 	return days.join(", ");
 }
 
 /** Format weekdays list. */
-export function formatWeekdays(weekdays: Weekday[] | undefined): string {
+function formatWeekdays(weekdays: Weekday[] | undefined): string {
 	if (!weekdays || weekdays.length === 0) return "—";
 	return weekdays.map((d) => `周${WEEKDAY_LABELS_ZH[d]}`).join(", ");
+}
+
+/** One-line human summary of a task's trigger, for dense list rows. */
+export function describeSchedule(schedule: ScheduleSpec): string {
+	switch (schedule.mode) {
+		case "every_n_minutes":
+			return `每 ${schedule.everyN?.n ?? "?"} 分钟`;
+		case "every_n_hours":
+			return `每 ${schedule.everyN?.n ?? "?"} 小时`;
+		case "daily":
+			return `每天 ${formatTimes(schedule.times)}`;
+		case "weekdays":
+			return `工作日 ${formatTimes(schedule.times)}`;
+		case "weekly":
+			return `${formatWeekdays(schedule.weekdays)} ${formatTimes(schedule.times)}`;
+		case "monthly":
+			return `每月 ${formatDaysOfMonth(schedule.daysOfMonth)} ${formatTimes(schedule.times)}`;
+		case "cron":
+			return schedule.cron?.expression ?? "";
+	}
 }

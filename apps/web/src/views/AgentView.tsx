@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { useNavigate, useOutletContext } from "react-router-dom";
+import { useOutletContext } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { sendCommandAwait, subscribeEvents, subscribeSidecarExit } from "@/lib/transport";
 import type { RpcSessionState, TypedEvent } from "@/lib/types";
@@ -250,7 +250,6 @@ export default function AgentView({
 	workspace?: string | null;
 	onRefreshState?: () => void;
 }) {
-	const navigate = useNavigate();
 	const { sidebarCollapsed } = useOutletContext<LayoutOutletContext>() ?? { sidebarCollapsed: false };
 	const { t } = useTranslation();
 	const [items, setItems] = useState<TimelineItem[]>([]);
@@ -926,9 +925,7 @@ export default function AgentView({
 				onSend={handleSend}
 				onAbort={handleAbort}
 				onRefreshState={onRefreshState}
-				onOpenSchedules={() => navigate("/schedules")}
-				onCreateSchedule={() => navigate("/schedules?create=1")}
-				/>
+			/>
 		</div>
 	);
 }
