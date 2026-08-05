@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
 	Folder,
@@ -8,13 +8,14 @@ import {
 	ChevronRight,
 	ChevronDown,
 	RefreshCw,
-	ArrowLeft,
+	X,
 	Copy,
 	ClipboardCopy,
 	Eye,
 	ExternalLink,
 	ChevronsUpDown,
 	FolderSearch,
+	WrapText,
 } from "lucide-react";
 import {
 	listDir,
@@ -23,7 +24,11 @@ import {
 	revealPath,
 	type DirEntry,
 } from "@/lib/transport";
-import { EmptyState, ErrorBanner, Spinner, ContextMenu, type ContextMenuItem } from "@/components/ui";
+import { EmptyState, ErrorBanner, Spinner, ContextMenu, IconButton, type ContextMenuItem } from "@/components/ui";
+import { CodeViewer } from "@/components/CodeViewer";
+import { ResizeHandle } from "@/components/ResizeHandle";
+import { languageForPath } from "@/lib/code-lang";
+import { usePersistedState } from "@/lib/usePersistedState";
 import { cn } from "@/lib/utils";
 
 function formatSize(bytes: number): string {
@@ -37,20 +42,9 @@ interface ContextMenuState {
 	y: number;
 }
 
-function getLanguage(filePath: string): string {
-	const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
-	const map: Record<string, string> = {
-		ts: "typescript", tsx: "tsx", js: "javascript", jsx: "jsx",
-		json: "json", md: "markdown", rs: "rust", go: "go",
-		py: "python", rb: "ruby", java: "java", c: "c", cpp: "cpp",
-		h: "c", hpp: "cpp", css: "css", html: "html", xml: "xml",
-		yaml: "yaml", yml: "yaml", toml: "toml", sh: "bash",
-		bash: "bash", zsh: "bash", sql: "sql", graphql: "graphql",
-		vue: "vue", svelte: "svelte", txt: "text", env: "text",
-		lock: "text", gitignore: "text", dockerfile: "docker",
-	};
-	return map[ext] ?? "text";
-}
+/** Bounds for the draggable tree / preview split, in px. */
+const PREVIEW_MIN = 120;
+const PREVIEW_MAX = 900;
 
 interface TreeNode extends DirEntry {
 	children?: TreeNode[];
@@ -69,11 +63,16 @@ export default function FileExplorer({ workspace }: { workspace?: string | null 
 	const [fileContent, setFileContent] = useState("");
 	const [fileLoading, setFileLoading] = useState(false);
 	const [fileError, setFileError] = useState("");
-	const [breadcrumb, setBreadcrumb] = useState<string[]>([]);
 	const [menu, setMenu] = useState<ContextMenuState | null>(null);
-	const fileContentRef = useRef<HTMLDivElement>(null);
+	const [previewHeight, setPreviewHeight] = usePersistedState<number>("files-preview-height", 320);
+	const [wrap, setWrap] = usePersistedState<boolean>("files-preview-wrap", false);
 
 	const cwd = workspace ?? "";
+
+	const clampPreview = useCallback((next: number) => {
+		const max = Math.min(PREVIEW_MAX, Math.max(PREVIEW_MIN, window.innerHeight - 200));
+		setPreviewHeight(Math.min(max, Math.max(PREVIEW_MIN, next)));
+	}, [setPreviewHeight]);
 
 	// Dismiss context menu on any outside click / escape.
 	useEffect(() => {
@@ -120,7 +119,6 @@ export default function FileExplorer({ workspace }: { workspace?: string | null 
 		setExpanded(new Set());
 		setSelectedFile(null);
 		setFileContent("");
-		setBreadcrumb([]);
 		void loadRoot();
 	}, [cwd, loadRoot]);
 
@@ -167,8 +165,6 @@ export default function FileExplorer({ workspace }: { workspace?: string | null 
 			setFileContent("");
 			setFileError("");
 			setFileLoading(true);
-			// Update breadcrumb from path segments.
-			setBreadcrumb(filePath.split("/").filter(Boolean));
 			try {
 				const content = await readFileContent(cwd, filePath);
 				setFileContent(content);
@@ -198,7 +194,8 @@ export default function FileExplorer({ workspace }: { workspace?: string | null 
 		return results;
 	}, [query, tree]);
 
-	const lang = selectedFile ? getLanguage(selectedFile) : "text";
+	const lang = selectedFile ? languageForPath(selectedFile) : "plaintext";
+	const selectedNode = selectedFile ? findNode(tree, selectedFile) : null;
 
 	return (
 		<div className="flex h-full flex-col">
@@ -298,54 +295,65 @@ export default function FileExplorer({ workspace }: { workspace?: string | null 
 				/>
 			)}
 
-			{/* File content viewer */}
+			{/* File preview — draggable split against the tree above. */}
 			{selectedFile && (
-				<div className="flex shrink-0 flex-col border-t border-border" style={{ height: "45%" }}>
-					{/* File header with breadcrumb + close */}
-					<div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5">
-						<button
-							onClick={() => { setSelectedFile(null); setFileContent(""); setBreadcrumb([]); }}
-							className="flex h-6 w-6 items-center justify-center rounded text-muted transition-colors hover:bg-surface-2 hover:text-fg"
-							title={t("files.closeFile")}
-						>
-							<ArrowLeft className="h-3.5 w-3.5" />
-						</button>
-						<div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto font-mono text-[11px] text-muted">
-							{breadcrumb.map((seg, i) => (
-								<span key={i} className="flex items-center gap-0.5 whitespace-nowrap">
-									{i > 0 && <ChevronRight className="h-3 w-3" />}
-									<span className={cn(i === breadcrumb.length - 1 && "text-fg")}>{seg}</span>
-								</span>
-							))}
+				<>
+					<ResizeHandle
+						orientation="horizontal"
+						invert
+						getSize={() => previewHeight}
+						onResize={clampPreview}
+						className="border-t border-border"
+					/>
+					<div className="flex shrink-0 flex-col" style={{ height: previewHeight }}>
+						{/* Preview header: file name, meta, actions. */}
+						<div className="flex shrink-0 items-center gap-1.5 border-b border-border bg-surface-2/40 px-2 py-1.5">
+							<FileIcon className="h-3.5 w-3.5 shrink-0 text-muted" />
+							<span className="min-w-0 truncate font-mono text-[11px] text-fg" title={selectedFile}>
+								{selectedFile.split("/").pop()}
+							</span>
+							<span className="min-w-0 flex-1 truncate font-mono text-[10px] text-muted">
+								{selectedFile.includes("/") ? selectedFile.slice(0, selectedFile.lastIndexOf("/")) : ""}
+							</span>
+							<div className="flex shrink-0 items-center gap-1.5 pr-1 font-mono text-[10px] text-muted">
+								{lang !== "plaintext" && <span className="uppercase tracking-wide">{lang}</span>}
+								{selectedNode && selectedNode.size > 0 && <span>{formatSize(selectedNode.size)}</span>}
+							</div>
+							<IconButton
+								onClick={() => setWrap((v) => !v)}
+								title={t("files.toggleWrap")}
+								active={wrap}
+							>
+								<WrapText className="h-3.5 w-3.5" />
+							</IconButton>
+							<IconButton onClick={() => copyText(fileContent)} title={t("common.copy")}>
+								<Copy className="h-3.5 w-3.5" />
+							</IconButton>
+							<IconButton
+								onClick={() => openInEditor(cwd, selectedFile).catch((e) => console.error("openInEditor failed:", e))}
+								title={t("files.openInEditor")}
+							>
+								<ExternalLink className="h-3.5 w-3.5" />
+							</IconButton>
+							<IconButton
+								onClick={() => { setSelectedFile(null); setFileContent(""); setFileError(""); }}
+								title={t("files.closeFile")}
+							>
+								<X className="h-3.5 w-3.5" />
+							</IconButton>
 						</div>
-						<button
-							onClick={() => void navigator.clipboard?.writeText(fileContent)}
-							className="flex h-6 w-6 items-center justify-center rounded text-muted transition-colors hover:bg-surface-2 hover:text-fg"
-							title={t("common.copy")}
-						>
-							<Copy className="h-3.5 w-3.5" />
-						</button>
-						<button
-							onClick={() => { if (selectedFile) { openInEditor(cwd, selectedFile).catch((e) => console.error("openInEditor failed:", e)); } }}
-							className="flex h-6 w-6 items-center justify-center rounded text-muted transition-colors hover:bg-surface-2 hover:text-fg"
-							title={t("files.openInEditor")}
-						>
-							<ExternalLink className="h-3.5 w-3.5" />
-						</button>
+						{/* Content */}
+						<div className="min-h-0 flex-1">
+							{fileLoading ? (
+								<div className="flex h-full items-center justify-center bg-bg"><Spinner /></div>
+							) : fileError ? (
+								<div className="bg-bg p-3"><ErrorBanner message={fileError} /></div>
+							) : (
+								<CodeViewer code={fileContent} language={lang} wrap={wrap} />
+							)}
+						</div>
 					</div>
-					{/* Content */}
-					<div ref={fileContentRef} className="min-h-0 flex-1 overflow-auto bg-bg">
-						{fileLoading ? (
-							<div className="flex h-full items-center justify-center"><Spinner /></div>
-						) : fileError ? (
-							<div className="p-3"><ErrorBanner message={fileError} /></div>
-						) : (
-							<pre className="p-3 font-mono text-[11px] leading-relaxed text-fg">
-								<code className={`language-${lang}`}>{fileContent}</code>
-							</pre>
-						)}
-					</div>
-				</div>
+				</>
 			)}
 		</div>
 	);

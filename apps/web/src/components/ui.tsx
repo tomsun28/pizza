@@ -126,6 +126,42 @@ export function Button({
 	);
 }
 
+/**
+ * A compact square icon-only button for dense toolbars (dock headers, preview
+ * panes). `active` renders the accent state, used for toggles like line-wrap.
+ */
+export function IconButton({
+	children,
+	onClick,
+	title,
+	active,
+	disabled,
+	className,
+}: {
+	children: ReactNode;
+	onClick?: () => void;
+	title?: string;
+	active?: boolean;
+	disabled?: boolean;
+	className?: string;
+}) {
+	return (
+		<button
+			type="button"
+			onClick={onClick}
+			title={title}
+			disabled={disabled}
+			className={cn(
+				"flex h-6 w-6 shrink-0 items-center justify-center rounded transition-colors disabled:opacity-40",
+				active ? "bg-accent/10 text-accent" : "text-muted hover:bg-surface-2 hover:text-fg",
+				className,
+			)}
+		>
+			{children}
+		</button>
+	);
+}
+
 export function StatusDot({
 	tone,
 }: {

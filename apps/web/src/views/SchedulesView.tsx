@@ -210,7 +210,7 @@ export default function SchedulesView({
 						iconLeft={<ArrowLeft className="h-3.5 w-3.5" />}
 						onClick={() => navigate("/")}
 					>
-						{t("common.backToChat")}
+						{t("common.backToAgent")}
 					</Button>
 					<Button
 						tone="neutral"

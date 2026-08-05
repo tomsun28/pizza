@@ -10,15 +10,15 @@
     "settings": "Settings",
     "error": "Error",
     "starting": "Starting...",
-    "backToChat": "Back to Chat",
+    "backToAgent": "Back to Agent",
     "back": "Back",
     "forward": "Forward"
   },
   "layout": {
     "brandTagline": "Create together.",
-    "chat": "Chat",
-    "chatSubtitle": "always-on assistant",
-    "chatTitle": "Persistent agent at ~/.pizza/main",
+    "agent": "Agent",
+    "agentSubtitle": "always-on agent",
+    "agentTitle": "Persistent agent at ~/.pizza/main",
     "workspaces": "Workspaces",
     "newWorkspace": "New Workspace",
     "newWorkspaceTitle": "New workspace",
@@ -42,8 +42,8 @@
     "plugins": "Plugins",
     "pluginsSubtitle": "Skills · Extensions"
   },
-  "chat": {
-    "newChat": "New Chat",
+  "agent": {
+    "newSession": "New Session",
     "readyPrompt": "Ready. Ask anything about this project.",
     "sidecarExited": "Sidecar exited (code {{code}})",
     "agentError": "Agent error ({{reason}})",
@@ -136,7 +136,7 @@
     "selectOne": "Select a task on the left to view details",
     "createdBy": "Created by",
     "createdByUser": "manual",
-    "createdByIntent": "chat intent",
+    "createdByIntent": "agent intent",
     "triggeredNotice": "⏰ Scheduled task \"{{name}}\" fired",
     "runOk": "Succeeded",
     "runFailed": "Failed",
@@ -151,7 +151,7 @@
     },
     "sessionTarget": "Run in session",
     "sessionPinned": "Pin to this session",
-    "sessionPinnedHint": "Bind to the session selected when the task is created; later chat switches won't move it",
+    "sessionPinnedHint": "Bind to the session selected when the task is created; later agent switches won't move it",
     "sessionCurrent": "Current session at run time",
     "sessionCurrentHint": "Run in whichever session is active when the task fires",
     "sessionNew": "New session per fire",
@@ -217,7 +217,27 @@
     "revealInFiles": "Reveal in file manager",
     "revealInFilesDir": "Reveal containing folder",
     "copyAbsolutePath": "Copy absolute path",
-    "copyFileName": "Copy file name"
+    "copyFileName": "Copy file name",
+    "toggleWrap": "Toggle line wrap"
+  },
+  "git": {
+    "title": "Git",
+    "refresh": "Refresh",
+    "detached": "Detached HEAD",
+    "ahead": "Commits ahead of upstream",
+    "behind": "Commits behind upstream",
+    "staged": "Staged",
+    "unstaged": "Changes",
+    "untracked": "Untracked",
+    "mode": {
+      "staged": "staged",
+      "worktree": "worktree",
+      "untracked": "new file"
+    },
+    "cleanTitle": "Working tree clean",
+    "cleanDescription": "No uncommitted changes in this workspace.",
+    "closeDiff": "Close diff",
+    "noDiff": "No textual diff for this entry."
   },
   "history": {
     "title": "History",
@@ -227,7 +247,7 @@
     "search": "Search branches…",
     "refresh": "Refresh",
     "emptyTitle": "No branches yet",
-    "emptyDescription": "Send a message in Chat to create the root session, then fork from any point.",
+    "emptyDescription": "Send a message in Agent to create the root session, then fork from any point.",
     "noMatch": "No branches match your search.",
 	    "forkFromHere": "Fork from here",
 	    "forkHint": "Creates a new child branch (freezes this one if open)",
@@ -385,7 +405,7 @@
     "setup": {
       "title": "First-time setup",
       "bannerTitle": "An API key is required to use Pizza",
-      "bannerBody": "Pick a provider below and enter your API key to start chatting. No providers are configured yet, so the chat feature is currently unavailable.",
+      "bannerBody": "Pick a provider below and enter your API key to start. No providers are configured yet, so the agent is currently unavailable.",
       "restarting": "Restarting the sidecar to pick up the new key..."
     },
     "scheduler": {

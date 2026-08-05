@@ -57,7 +57,7 @@ export function ScheduleDialog(props: ScheduleDialogProps) {
 	const [daysOfMonthDraft, setDaysOfMonthDraft] = useState("");
 	// Phase 2: where this task runs and how to behave on session contention.
 	// New tasks default to the session selected at creation time, so a later
-	// manual chat switch does not make the task drift into another conversation.
+	// manual agent switch does not make the task drift into another conversation.
 	const [currentSessionId, setCurrentSessionId] = useState<string | undefined>();
 	const [sessionTarget, setSessionTarget] = useState<SessionTarget>(
 		editableSessionTarget(existing?.sessionTarget),

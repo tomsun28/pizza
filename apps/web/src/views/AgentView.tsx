@@ -73,7 +73,7 @@ interface ExtractedToolCall {
 /**
  * Extract file attachments from a user message payload. The agent receives
  * these as discrete `files` objects (not inlined into the text), so we
- * surface them on the chat row so the user can see what was attached.
+ * surface them on the agent row so the user can see what was attached.
  */
 function messageFiles(message: unknown): Array<{
 	absolutePath: string;
@@ -237,7 +237,7 @@ function buildTimelineFromMessages(
 	return history;
 }
 
-export default function ChatView({
+export default function AgentView({
 	state,
 	sidecarReady,
 	sidecarExitCode,
@@ -276,7 +276,7 @@ export default function ChatView({
 
 	// --- Session-switch reload (jump/fork from BranchTreeExplorer) ---
 	// When the active session changes via SESSION_FORKED or SESSION_JUMPED,
-	// the ChatView's current items belong to the OLD session. We clear them
+	// the AgentView's current items belong to the OLD session. We clear them
 	// and re-fetch get_messages for the NEW active session. Debounced so a
 	// fork (which emits both SESSION_CREATED + SESSION_FORKED) only reloads
 	// once. A session_split emits SESSION_BOUNDARY_INFERRED instead, handled
@@ -545,7 +545,7 @@ export default function ChatView({
 						: "";
 					const isError = stopReason === "error" || Boolean(errorMessage);
 					const fallbackText = isError && !text
-						? errorMessage || tRef.current("chat.agentError", { reason: stopReason || "no response" })
+					? errorMessage || tRef.current("agent.agentError", { reason: stopReason || "no response" })
 						: text;
 					updateItems((prev) =>
 						prev.map((it) =>
@@ -756,7 +756,7 @@ export default function ChatView({
 			unlisteners.push(un1);
 			const un2 = await subscribeSidecarExit((code) => {
 				if (code !== null) {
-					setError(tRef.current("chat.sidecarExited", { code }));
+					setError(tRef.current("agent.sidecarExited", { code }));
 				}
 			});
 			if (cancelled) { un2(); return; }
@@ -873,7 +873,7 @@ export default function ChatView({
 	const wsName = workspace ? workspace.replace(/\/+$/, "").split("/").pop() || "" : "";
 	const sessionTitle = firstUserText
 		? (firstUserText.length > 60 ? firstUserText.slice(0, 60).trimEnd() + "…" : firstUserText)
-		: wsName || t("chat.newChat");
+		: wsName || t("agent.newSession");
 
 	return (
 		<div className="flex h-full flex-col">
@@ -895,9 +895,9 @@ export default function ChatView({
 							title={t("common.pizza")}
 							description={
 								sidecarReady
-									? t("chat.readyPrompt")
+									? t("agent.readyPrompt")
 									: sidecarExitCode !== null
-										? t("chat.sidecarExited", { code: sidecarExitCode })
+										? t("agent.sidecarExited", { code: sidecarExitCode })
 										: t("common.starting")
 							}
 						/>

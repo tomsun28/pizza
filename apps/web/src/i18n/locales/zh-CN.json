@@ -10,15 +10,15 @@
     "settings": "设置",
     "error": "错误",
     "starting": "启动中...",
-    "backToChat": "返回聊天",
+    "backToAgent": "返回助理",
     "back": "后退",
     "forward": "前进"
   },
   "layout": {
     "brandTagline": "一起创造。",
-    "chat": "聊天",
-    "chatSubtitle": "一直在的助手",
-    "chatTitle": "一直在的助手,位于 ~/.pizza/main",
+    "agent": "助理",
+    "agentSubtitle": "常驻助理",
+    "agentTitle": "常驻助理,位于 ~/.pizza/main",
     "workspaces": "工作区",
     "newWorkspace": "新建工作区",
     "newWorkspaceTitle": "新建工作区",
@@ -42,8 +42,8 @@
     "plugins": "插件",
     "pluginsSubtitle": "技能 · 扩展"
   },
-  "chat": {
-    "newChat": "新对话",
+  "agent": {
+    "newSession": "新会话",
     "readyPrompt": "就绪。可以问关于此项目的任何问题。",
     "sidecarExited": "Sidecar 已退出 (代码 {{code}})",
     "agentError": "Agent 错误 ({{reason}})",
@@ -136,7 +136,7 @@
     "selectOne": "从左侧选择一个任务查看详情",
     "createdBy": "创建方式",
     "createdByUser": "手动创建",
-    "createdByIntent": "聊天识别",
+    "createdByIntent": "助理识别",
     "triggeredNotice": "⏰ 定时任务《{{name}}》已触发",
     "runOk": "执行成功",
     "runFailed": "执行失败",
@@ -217,7 +217,27 @@
     "revealInFiles": "在文件管理器中显示",
     "revealInFilesDir": "打开所在目录",
     "copyAbsolutePath": "复制绝对路径",
-    "copyFileName": "复制文件名"
+    "copyFileName": "复制文件名",
+    "toggleWrap": "切换自动换行"
+  },
+  "git": {
+    "title": "Git",
+    "refresh": "刷新",
+    "detached": "分离式 HEAD",
+    "ahead": "领先上游的提交数",
+    "behind": "落后上游的提交数",
+    "staged": "已暂存",
+    "unstaged": "已修改",
+    "untracked": "未跟踪",
+    "mode": {
+      "staged": "暂存区",
+      "worktree": "工作区",
+      "untracked": "新文件"
+    },
+    "cleanTitle": "工作区干净",
+    "cleanDescription": "当前工作区没有未提交的变更。",
+    "closeDiff": "关闭 diff",
+    "noDiff": "该条目没有文本 diff。"
   },
   "history": {
     "title": "历史",
@@ -227,7 +247,7 @@
     "search": "搜索分支…",
     "refresh": "刷新",
     "emptyTitle": "还没有分支",
-    "emptyDescription": "在 Chat 发一条消息即可创建根会话，然后从任意节点分叉。",
+    "emptyDescription": "在助理里发一条消息即可创建根会话，然后从任意节点分叉。",
     "noMatch": "没有匹配的分支。",
 	    "forkFromHere": "从此处分叉",
 	    "forkHint": "创建新子分支（若当前分支开放，则冻结它）",
@@ -385,7 +405,7 @@
     "setup": {
       "title": "首次设置",
       "bannerTitle": "需要配置 API key 才能使用 Pizza",
-      "bannerBody": "在下方选择一个服务商并填入 API key,即可开始聊天。当前没有配置任何服务商,所以聊天功能暂时不可用。",
+      "bannerBody": "在下方选择一个服务商并填入 API key,即可开始使用。当前没有配置任何服务商,所以助理暂时不可用。",
       "restarting": "正在重启 sidecar 以应用新 key..."
     },
     "scheduler": {

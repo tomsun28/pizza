@@ -463,6 +463,55 @@ export async function revealPath(cwd: string, subPath: string): Promise<void> {
 	await core.invoke("reveal_path", { cwd, subPath });
 }
 
+// --- Git status / diff (right dock Git tab, Tauri only) ---
+
+export interface GitStatusEntry {
+	/** Two-char porcelain status code, e.g. " M", "M ", "A ", "??". */
+	xy: string;
+	/** File path relative to the repo root. */
+	path: string;
+	/** Original path for renames/copies, if any. */
+	orig_path?: string | null;
+	/** Added lines vs HEAD; null for untracked or binary files. */
+	additions?: number | null;
+	/** Removed lines vs HEAD; null for untracked or binary files. */
+	deletions?: number | null;
+}
+
+/** Which diff `gitDiff` should return for a path. */
+export type GitDiffMode = "staged" | "worktree" | "untracked";
+
+export interface GitStatusSummary {
+	is_repo: boolean;
+	branch: string;
+	head: string;
+	head_subject: string;
+	upstream: string;
+	ahead: number;
+	behind: number;
+	entries: GitStatusEntry[];
+	untracked: number;
+	staged: number;
+	unstaged: number;
+}
+
+export async function gitStatus(cwd: string): Promise<GitStatusSummary> {
+	if (!isTauri()) {
+		return {
+			is_repo: false, branch: "", head: "", head_subject: "", upstream: "",
+			ahead: 0, behind: 0, entries: [], untracked: 0, staged: 0, unstaged: 0,
+		};
+	}
+	const core = await import("@tauri-apps/api/core");
+	return core.invoke<GitStatusSummary>("git_status", { cwd });
+}
+
+export async function gitDiff(cwd: string, path: string, mode: GitDiffMode): Promise<string> {
+	if (!isTauri()) return "";
+	const core = await import("@tauri-apps/api/core");
+	return core.invoke<string>("git_diff", { cwd, path, mode });
+}
+
 // --- Provider management (Tauri only) ---
 
 export interface ProviderInfo {

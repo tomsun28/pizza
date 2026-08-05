@@ -43,34 +43,36 @@ export default function WorkspacePane({
 	}, [setBottomHeight]);
 
 	return (
-		<div className="relative flex h-full flex-col">
-			{/* Top-right dock toggles — float over the main view's top-right corner. */}
-			<div className="absolute right-2 top-2 z-40 flex items-center gap-1">
-				<button
-					onClick={() => setBottomOpen((v) => !v)}
-					className={cn(
-						"flex h-8 w-8 items-center justify-center rounded-lg transition-colors hover:bg-surface-2",
-						bottomOpen ? "text-accent" : "text-muted/60 hover:text-muted",
-					)}
-					title={t("terminal.toggle")}
-				>
-					<PanelBottom className="h-4 w-4" />
-				</button>
-				<button
-					onClick={() => setRightOpen((v) => !v)}
-					className={cn(
-						"flex h-8 w-8 items-center justify-center rounded-lg transition-colors hover:bg-surface-2",
-						rightOpen ? "text-accent" : "text-muted/60 hover:text-muted",
-					)}
-					title={t("dock.toggleRight")}
-				>
-					<PanelRight className="h-4 w-4" />
-				</button>
-			</div>
-
+		<div className="flex h-full flex-col">
 			{/* Main row: routed view + right dock. */}
 			<div className="flex min-h-0 flex-1">
-				<div className="min-w-0 flex-1 overflow-hidden">{children}</div>
+				{/* The toggles float over the MAIN view's top-right corner (not the
+				    whole pane) so they never overlap the right dock's tab strip. */}
+				<div className="relative min-w-0 flex-1 overflow-hidden">
+					<div className="absolute right-2 top-2 z-40 flex items-center gap-1">
+						<button
+							onClick={() => setBottomOpen((v) => !v)}
+							className={cn(
+								"flex h-8 w-8 items-center justify-center rounded-lg transition-colors hover:bg-surface-2",
+								bottomOpen ? "text-accent" : "text-muted/60 hover:text-muted",
+							)}
+							title={t("terminal.toggle")}
+						>
+							<PanelBottom className="h-4 w-4" />
+						</button>
+						<button
+							onClick={() => setRightOpen((v) => !v)}
+							className={cn(
+								"flex h-8 w-8 items-center justify-center rounded-lg transition-colors hover:bg-surface-2",
+								rightOpen ? "text-accent" : "text-muted/60 hover:text-muted",
+							)}
+							title={t("dock.toggleRight")}
+						>
+							<PanelRight className="h-4 w-4" />
+						</button>
+					</div>
+					{children}
+				</div>
 				{rightOpen && (
 					<>
 						<ResizeHandle
