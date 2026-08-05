@@ -532,7 +532,7 @@ export default function SettingsView({
 	const [restartError, setRestartError] = useState("");
 	const handleConfigured = useCallback(async () => {
 		// Prefer the sidecar-restart path (re-scans modelRegistry with the new key).
-		// Fall back to "just go back to chat" if no restart callback was provided
+		// Fall back to "just go back to agent" if no restart callback was provided
 		// (e.g. web/preview builds without Tauri).
 		if (onRestartSidecar) {
 			setRestarting(true);

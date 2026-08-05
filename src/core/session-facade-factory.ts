@@ -329,9 +329,10 @@ export async function createSessionFacade(
 	const shellPath = settingsManager.getShellPath();
 	const autoResizeImages = settingsManager.getImageAutoResize();
 	const cliToolOptions: BashToolOptions = { commandPrefix: shellCommandPrefix, shellPath, read: { autoResizeImages } };
-	// The `delegate_agent` built-in command is wired into the cli tool only for the
-	// main agent (it needs the agent dir to spawn sub-agents / list workspaces).
-	if (isMainAgent) {
+	// The `delegate_agent` built-in command is wired into the cli tool for both
+	// the main agent and workspace agents (it needs the agent dir to spawn
+	// sub-agents / list workspaces).
+	if (agentDir) {
 		cliToolOptions.delegateAgent = { agentDir, mainDir };
 	}
 	const toolOptions = {
@@ -415,7 +416,7 @@ export async function createSessionFacade(
 				createSessionSplitToolDefinition(),
 				createHistoryTreeToolDefinition(),
 			];
-			if (isMainAgent && agentDir) {
+			if (agentDir) {
 				builtinDefs.push(createDelegateAgentToolDefinition({ agentDir, mainDir }));
 			}
 			for (const builtinDef of builtinDefs) {

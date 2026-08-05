@@ -198,7 +198,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 
 	// File exploration guidelines
 	if (hasCli) {
-		addGuideline("The cli tool has exactly these built-in commands (underscore-prefixed, handled internally, never sent to the shell): _read, _write, _edit, _session_split, _history_tree, and (main agent only) _delegate_agent. Everything else — including grep, find, ls, cat, sed, git, npm — is a native shell command run through the same cli tool.");
+		addGuideline("The cli tool has exactly these built-in commands (underscore-prefixed, handled internally, never sent to the shell): _read, _write, _edit, _session_split, _history_tree, and _delegate_agent. Everything else — including grep, find, ls, cat, sed, git, npm — is a native shell command run through the same cli tool.");
 		addGuideline("Built-in commands are NOT a shell: never use pipes (|), redirects (> <), chaining (; & &&), command substitution, or newlines with them. A built-in only works as the FIRST word of its own single cli() call — buried after &&/||/;/| it is passed to the shell, which has no such command. Issue each built-in as its own separate call; do not prefix it with cd && since the working directory is already set. For pipelines, redirections, or globs, use a plain shell command instead (grep, find, ls, cat, sed, git, npm, etc.).");
 	}
 

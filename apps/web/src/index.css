@@ -228,3 +228,100 @@
 }
 .md th { background: var(--surface-2); font-weight: 700; }
 .md img { max-width: 100%; border-radius: 0.5rem; }
+
+/* ---------------------------------------------------------------------------
+   Syntax highlighting (highlight.js) + code/diff viewer tokens.
+
+   highlight.js ships its own themes, but they hard-code colors and would clash
+   with the app's light/dark palette. Instead we map hljs' token classes onto
+   our own CSS variables so highlighting follows the active theme.
+   --------------------------------------------------------------------------- */
+:root {
+	--syn-keyword: #a626a4;
+	--syn-string: #50a14f;
+	--syn-number: #986801;
+	--syn-comment: #a0a1a7;
+	--syn-func: #4078f2;
+	--syn-type: #c18401;
+	--syn-var: #e45649;
+	--syn-punct: #6b685f;
+	/* Diff row backgrounds — tinted just enough to scan at a glance. */
+	--diff-add-bg: color-mix(in srgb, var(--success) 14%, transparent);
+	--diff-del-bg: color-mix(in srgb, var(--danger) 12%, transparent);
+	--diff-hunk-bg: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.dark {
+	--syn-keyword: #c678dd;
+	--syn-string: #98c379;
+	--syn-number: #d19a66;
+	--syn-comment: #5c6370;
+	--syn-func: #61afef;
+	--syn-type: #e5c07b;
+	--syn-var: #e06c75;
+	--syn-punct: #8888aa;
+	--diff-add-bg: color-mix(in srgb, var(--success) 16%, transparent);
+	--diff-del-bg: color-mix(in srgb, var(--danger) 16%, transparent);
+	--diff-hunk-bg: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-doctag,
+.hljs-meta .hljs-keyword {
+	color: var(--syn-keyword);
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-attribute,
+.hljs-meta .hljs-string {
+	color: var(--syn-string);
+}
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-quote {
+	color: var(--syn-number);
+}
+.hljs-comment,
+.hljs-meta {
+	color: var(--syn-comment);
+	font-style: italic;
+}
+.hljs-title,
+.hljs-title.function_,
+.hljs-section,
+.hljs-name {
+	color: var(--syn-func);
+}
+.hljs-title.class_,
+.hljs-type,
+.hljs-built_in,
+.hljs-class .hljs-title,
+.hljs-selector-class {
+	color: var(--syn-type);
+}
+.hljs-variable,
+.hljs-template-variable,
+.hljs-attr,
+.hljs-selector-attr,
+.hljs-selector-pseudo,
+.hljs-deletion,
+.hljs-tag {
+	color: var(--syn-var);
+}
+.hljs-punctuation,
+.hljs-operator {
+	color: var(--syn-punct);
+}
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 700; }
+.hljs-link { text-decoration: underline; }
+
+/* Diff rows. Applied by DiffViewer; kept in CSS so the color-mix tints
+   recompute automatically on theme switch. */
+.diff-add { background: var(--diff-add-bg); }
+.diff-del { background: var(--diff-del-bg); }
+.diff-hunk { background: var(--diff-hunk-bg); color: var(--accent); }

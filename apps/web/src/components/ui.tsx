@@ -1,5 +1,6 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { Check, ChevronDown } from "lucide-react";
 import {
 	PixelAlert,
 	PixelBadge as PxlBadge,
@@ -123,6 +124,42 @@ export function Button({
 		>
 			{children}
 		</PxlButton>
+	);
+}
+
+/**
+ * A compact square icon-only button for dense toolbars (dock headers, preview
+ * panes). `active` renders the accent state, used for toggles like line-wrap.
+ */
+export function IconButton({
+	children,
+	onClick,
+	title,
+	active,
+	disabled,
+	className,
+}: {
+	children: ReactNode;
+	onClick?: () => void;
+	title?: string;
+	active?: boolean;
+	disabled?: boolean;
+	className?: string;
+}) {
+	return (
+		<button
+			type="button"
+			onClick={onClick}
+			title={title}
+			disabled={disabled}
+			className={cn(
+				"flex h-6 w-6 shrink-0 items-center justify-center rounded transition-colors disabled:opacity-40",
+				active ? "bg-accent/10 text-accent" : "text-muted hover:bg-surface-2 hover:text-fg",
+				className,
+			)}
+		>
+			{children}
+		</button>
 	);
 }
 
@@ -377,5 +414,115 @@ function ContextMenuRow({
 				)}
 			</span>
 		</button>
+	);
+}
+
+/**
+ * Custom dropdown styled to match the rest of the app (rounded-lg, accent
+ * focus ring, popup with check mark on the selected option). Replaces native
+ * `<select>` so the form controls in popovers/modals look consistent with the
+ * Composer / ScheduleModePicker dropdowns instead of using the OS chrome.
+ */
+export interface SelectOption {
+	value: string;
+	label: string;
+	hint?: string;
+}
+
+export function Select({
+	value,
+	options,
+	onChange,
+	placeholder,
+	title,
+	size = "md",
+}: {
+	value: string;
+	options: SelectOption[];
+	onChange: (value: string) => void;
+	placeholder?: string;
+	title?: string;
+	size?: "sm" | "md";
+}) {
+	const [open, setOpen] = useState(false);
+	const wrapRef = useRef<HTMLDivElement>(null);
+
+	useEffect(() => {
+		if (!open) return;
+		const onClick = (e: MouseEvent) => {
+			if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+		};
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key === "Escape") setOpen(false);
+		};
+		document.addEventListener("mousedown", onClick);
+		document.addEventListener("keydown", onKey);
+		return () => {
+			document.removeEventListener("mousedown", onClick);
+			document.removeEventListener("keydown", onKey);
+		};
+	}, [open]);
+
+	const current = options.find((o) => o.value === value);
+	const heightClass = size === "sm" ? "h-8" : "h-9";
+	const textClass = size === "sm" ? "text-xs" : "text-sm";
+
+	return (
+		<div ref={wrapRef} className="relative" title={title}>
+			<button
+				type="button"
+				onClick={() => setOpen((o) => !o)}
+				className={cn(
+					"flex w-full items-center justify-between gap-2 rounded-lg border px-3 text-left transition-colors",
+					heightClass,
+					textClass,
+					open
+						? "border-accent bg-surface text-fg"
+						: "border-border bg-surface text-fg hover:border-accent/40",
+				)}
+			>
+				<span className={cn("truncate", !current && "text-muted")}>
+					{current ? current.label : (placeholder ?? "—")}
+				</span>
+				<ChevronDown
+					className={cn(
+						"h-3.5 w-3.5 shrink-0 text-muted transition-transform",
+						open && "rotate-180 text-accent",
+					)}
+				/>
+			</button>
+			{open && (
+				<div className="absolute left-0 right-0 top-full z-30 mt-1 max-h-60 overflow-y-auto rounded-xl border border-border bg-surface p-1 shadow-lg">
+					{options.map((o) => {
+						const selected = o.value === value;
+						return (
+							<button
+								key={o.value}
+								type="button"
+								onClick={() => {
+									onChange(o.value);
+									setOpen(false);
+								}}
+								className={cn(
+									"flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors",
+									textClass,
+									selected
+										? "bg-accent/10 text-fg"
+										: "text-muted hover:bg-surface-2 hover:text-fg",
+								)}
+							>
+								<span className="min-w-0 flex-1">
+									<span className="block truncate">{o.label}</span>
+									{o.hint && (
+										<span className="block truncate text-[10px] text-muted">{o.hint}</span>
+									)}
+								</span>
+								{selected && <Check className="h-3.5 w-3.5 shrink-0 text-accent" />}
+							</button>
+						);
+					})}
+				</div>
+			)}
+		</div>
 	);
 }

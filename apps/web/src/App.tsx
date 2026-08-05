@@ -3,10 +3,9 @@ import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from
 import { useTranslation } from "react-i18next";
 import { PxlKitSurfaceProvider } from "@pxlkit/ui-kit";
 import Layout from "@/components/Layout";
-import ChatView from "@/views/ChatView";
+import AgentView from "@/views/AgentView";
 import SettingsView from "@/views/SettingsView";
 import PluginsView from "@/views/PluginsView";
-import SchedulesView from "@/views/SchedulesView";
 import { subscribeSidecarExit, subscribeEvents, initSidecar, sendCommandAwait, listWorkspaces, restartSidecar } from "@/lib/transport";
 import { BrandIcon } from "@/components/BrandIcon";
 import type { RpcSessionState, WorkspaceMeta } from "@/lib/types";
@@ -119,7 +118,7 @@ function AppInner() {
 
 	const handleSelectWorkspace = useCallback(async (cwd: string) => {
 		if (workspace === cwd && sidecarReady) return;
-		// Navigate back to chat page when selecting a workspace.
+		// Navigate back to agent page when selecting a workspace.
 		navigate("/");
 		// startWithWorkspace sets workspace AFTER initSidecar completes,
 		// so get_messages goes to the correct sidecar.
@@ -255,7 +254,7 @@ function AppInner() {
 	// First-run / unconfigured-key detection: when the sidecar comes up but
 	// `state.model` is undefined, no provider has an API key configured yet.
 	// Redirect the user into a setup-mode Settings page instead of dumping
-	// them into an empty chat they can't actually use.
+	// them into an empty agent they can't actually use.
 	useEffect(() => {
 		if (!sidecarReady) return;
 		if (!state) return;
@@ -290,7 +289,7 @@ function AppInner() {
 				<div className="flex h-screen items-center justify-center bg-bg">
 					<div className="flex max-w-md flex-col items-center gap-4 px-6 text-center">
 						<BrandIcon size={48} className="text-danger" />
-						<p className="font-mono text-sm text-fg">{t("chat.failedToStartWorkspace")}</p>
+						<p className="font-mono text-sm text-fg">{t("agent.failedToStartWorkspace")}</p>
 						<p className="font-mono text-xs text-muted">{initError}</p>
 						<button
 							type="button"
@@ -300,7 +299,7 @@ function AppInner() {
 							}}
 							className="mt-2 rounded-md border border-border bg-surface-2 px-4 py-2 text-sm text-fg transition-colors hover:bg-surface-2/80"
 						>
-							{t("common.backToChat")}
+							{t("common.backToAgent")}
 						</button>
 					</div>
 				</div>
@@ -342,7 +341,7 @@ function AppInner() {
 						<Route
 							index
 							element={
-								<ChatView
+								<AgentView
 									state={state}
 									sidecarReady={sidecarReady}
 									sidecarExitCode={sidecarExitCode}
@@ -379,12 +378,6 @@ function AppInner() {
 							/>
 						} />
 					<Route path="/plugins" element={<PluginsView />} />
-					<Route path="/schedules" element={
-						<SchedulesView
-							scope={workspace && workspace.endsWith("/.pizza/main") ? "main" : "workspace"}
-							workspaceId={workspace ?? undefined}
-						/>
-					} />
 					<Route path="*" element={<Navigate to="/" replace />} />
 					</Route>
 			</Routes>

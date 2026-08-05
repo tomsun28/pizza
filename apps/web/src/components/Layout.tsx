@@ -255,7 +255,7 @@ export default function Layout({
 						</div>
 					</div>
 				</div>
-				{/* Main chat — persistent agent */}
+				{/* Main agent — persistent */}
 				<div className="px-3 pt-2 pb-1">
 					<button
 						onClick={() => onSelectWorkspace?.(MAIN_CHAT_CWD)}
@@ -265,7 +265,7 @@ export default function Layout({
 								? "border-accent bg-accent/10"
 								: "border-transparent hover:bg-surface-2",
 						)}
-						title={t("layout.chatTitle")}
+						title={t("layout.agentTitle")}
 					>
 						<MessageSquare
 							className={cn(
@@ -280,10 +280,10 @@ export default function Layout({
 									isMainChat ? "text-accent" : "text-fg",
 								)}
 							>
-								{t("layout.chat")}
+								{t("layout.agent")}
 							</div>
 							<div className="truncate font-mono text-[10px] text-muted">
-								{t("layout.chatSubtitle")}
+								{t("layout.agentSubtitle")}
 							</div>
 						</div>
 						{isMainChat && online && (

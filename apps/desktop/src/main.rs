@@ -32,6 +32,8 @@ fn main() {
 			bridge::read_file,
 			bridge::open_in_editor,
 			bridge::reveal_path,
+			bridge::git_status,
+			bridge::git_diff,
 			bridge::fetch_skills_sh,
 		])
 		.setup(|app| {

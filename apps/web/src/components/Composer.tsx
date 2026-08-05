@@ -9,6 +9,7 @@ import {
 	type RejectedAttachment,
 } from "@/lib/file-attachment";
 import { FileAttachmentIcon } from "@/components/FileAttachmentIcon";
+import { ScheduleMenu } from "@/components/ScheduleMenu";
 import { formatFileSize } from "@/lib/file-format";
 
 export type { LoadedFileAttachment } from "@/lib/file-attachment";
@@ -176,8 +177,6 @@ export function Composer({
 	onSend,
 	onAbort,
 	onRefreshState,
-	onOpenSchedules,
-	onCreateSchedule,
 }: {
 	sidecarReady: boolean;
 	isRunning: boolean;
@@ -191,10 +190,6 @@ export function Composer({
 	onSend: (message: string, images?: ComposerImage[], files?: LoadedFileAttachment[]) => void;
 	onAbort: () => void;
 	onRefreshState?: () => void;
-	/** Open the Schedules view (full list). */
-	onOpenSchedules?: () => void;
-	/** Open the Schedule create dialog directly. */
-	onCreateSchedule?: () => void;
 }) {
 	const [input, setInput] = useState("");
 	const [images, setImages] = useState<ComposerImage[]>([]);
@@ -241,6 +236,9 @@ export function Composer({
 	const approvalMenuRef = useRef<HTMLDivElement>(null);
 	const plusMenuRef = useRef<HTMLDivElement>(null);
 	const [plusMenuOpen, setPlusMenuOpen] = useState(false);
+	// Scheduled-task popover. Owned here so the + menu entry and the clock
+	// button open the exact same surface instead of diverging.
+	const [scheduleMenuOpen, setScheduleMenuOpen] = useState(false);
 	const [skills, setSkills] = useState<SkillInfo[]>([]);
 
 	// Only show models whose provider has valid auth. Models without auth
@@ -899,23 +897,21 @@ ${insert}`;
 												<span className="block text-[10px] text-muted">{t("composer.attachFilesHint")}</span>
 											</span>
 										</button>
-										{/* Scheduled tasks — opens the create dialog */}
-										{onCreateSchedule && (
-											<button
-												type="button"
-												onClick={() => {
-													setPlusMenuOpen(false);
-													onCreateSchedule();
-												}}
-												className="flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors hover:bg-surface-2"
-											>
-												<Clock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted" />
-												<span className="min-w-0 flex-1">
-													<span className="block text-fg">{t("composer.scheduledTask")}</span>
-													<span className="block text-[10px] text-muted">{t("composer.scheduledTaskHint")}</span>
-												</span>
-											</button>
-										)}
+										{/* Scheduled tasks — opens the schedule popover next door */}
+										<button
+											type="button"
+											onClick={() => {
+												setPlusMenuOpen(false);
+												setScheduleMenuOpen(true);
+											}}
+											className="flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors hover:bg-surface-2"
+										>
+											<Clock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted" />
+											<span className="min-w-0 flex-1">
+												<span className="block text-fg">{t("composer.scheduledTask")}</span>
+												<span className="block text-[10px] text-muted">{t("composer.scheduledTaskHint")}</span>
+											</span>
+										</button>
 										{skills.length > 0 && (
 											<>
 												<div className="my-1 border-t border-border/60" />
@@ -946,18 +942,13 @@ ${insert}`;
 									</div>
 							)}
 							</div>
-							{/* Scheduled task shortcut — opens the Schedules view */}
-							{onOpenSchedules && (
-								<button
-									type="button"
-									disabled={!sidecarReady}
-									onClick={onOpenSchedules}
-									className="flex h-8 w-8 items-center justify-center rounded-full text-muted transition-colors hover:bg-surface hover:text-fg disabled:opacity-40"
-									title={t("composer.scheduledTask")}
-								>
-									<Clock className="h-4 w-4" />
-								</button>
-							)}
+							{/* Scheduled tasks — popover with this workspace's tasks + inline editor */}
+							<ScheduleMenu
+								workspace={workspace}
+								disabled={!sidecarReady}
+								open={scheduleMenuOpen}
+								onOpenChange={setScheduleMenuOpen}
+							/>
 							{/* Approval policy selector — chooses safe mode for the current session */}
 							<div className="relative" ref={approvalMenuRef}>
 								<button

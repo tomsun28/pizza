@@ -1457,16 +1457,6 @@ pub async fn save_upload(
 	})
 }
 
-/// Wrap an absolute path so it can be passed to the shell quote-free.
-fn quote_arg(s: &str) -> String {
-	if s.chars()
-		.all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | '~'))
-	{
-		s.to_string()
-	} else {
-		format!("'{}'", s.replace('\'', "'\\''"))
-	}
-}
 /// Reveal a workspace's cwd in the system file manager (Finder on macOS).
 #[tauri::command]
 pub async fn reveal_workspace(cwd: String) -> Result<(), String> {
@@ -2048,6 +2038,303 @@ pub async fn read_file(cwd: String, file_path: String) -> Result<String, String>
 	std::fs::read_to_string(&full).map_err(|e| format!("read_to_string: {e}"))
 }
 
+// --- Git status / diff (right dock "Git" tab) ---
+
+/// Run `git` inside `cwd`, returning stdout as a String. Errors out if git is
+/// missing or the command fails (e.g. cwd is not a git repo).
+fn run_git_capture(cwd: &str, args: &[&str]) -> Result<String, String> {
+	let dir = resolve_workspace_path(cwd, None)?;
+	let output = std::process::Command::new("git")
+		.args(args)
+		.current_dir(&dir)
+		.output()
+		.map_err(|e| format!("failed to spawn git: {e}"))?;
+	if !output.status.success() {
+		let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+		// `git rev-parse --is-inside-work-tree` returns non-zero + "fatal: not a git
+		// repository" outside a repo — surface a clean, detectable error.
+		return Err(if stderr.is_empty() {
+			format!("git {} failed", args.join(" "))
+		} else {
+			stderr
+		});
+	}
+	Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+/// One row of `git status --porcelain`. `xy` is the two-char status code, `path`
+/// is the file path (relative to repo root), and `orig_path` is the original
+/// path for a rename/copy (the `R`/`C` codes), if any. `additions`/`deletions`
+/// come from `git diff --numstat` and are `None` for untracked/binary files.
+#[derive(serde::Serialize)]
+pub struct GitStatusEntry {
+	pub xy: String,
+	pub path: String,
+	pub orig_path: Option<String>,
+	pub additions: Option<u32>,
+	pub deletions: Option<u32>,
+}
+
+/// Parse `git diff --numstat -z HEAD` into a path → (additions, deletions) map.
+/// Binary files report `-` for both counts and are skipped. Rename entries in
+/// `-z` numstat are emitted as `adds\tdels\t\0<old>\0<new>\0`; we key on the
+/// new path so it lines up with the porcelain entry.
+fn parse_numstat(raw: &str) -> HashMap<String, (u32, u32)> {
+	let mut map = HashMap::new();
+	let mut fields = raw.split('\0').filter(|f| !f.is_empty()).peekable();
+	while let Some(field) = fields.next() {
+		let mut parts = field.splitn(3, '\t');
+		let adds = parts.next().unwrap_or("");
+		let dels = parts.next().unwrap_or("");
+		let path = parts.next().unwrap_or("");
+		// Binary files report "-"; skip them (no line counts to show).
+		let (Ok(adds), Ok(dels)) = (adds.parse::<u32>(), dels.parse::<u32>()) else {
+			// Still need to consume the rename's two path fields.
+			if path.is_empty() {
+				fields.next();
+				fields.next();
+			}
+			continue;
+		};
+		if path.is_empty() {
+			// Rename/copy: the old and new paths follow as separate NUL fields.
+			let _old = fields.next();
+			if let Some(new) = fields.next() {
+				map.insert(new.to_string(), (adds, dels));
+			}
+		} else {
+			map.insert(path.to_string(), (adds, dels));
+		}
+	}
+	map
+}
+
+/// Parse `git status --porcelain=v1 -z` output. Each record is
+/// `XY <path>\0`, except rename/copy records which are `XY <new>\0<old>\0`,
+/// so the old path must be consumed as a separate field.
+fn parse_porcelain(raw: &str, stats: &HashMap<String, (u32, u32)>) -> Vec<GitStatusEntry> {
+	let mut entries = Vec::new();
+	let mut fields = raw.split('\0').filter(|f| !f.is_empty());
+	while let Some(record) = fields.next() {
+		if record.len() < 3 {
+			continue;
+		}
+		let xy = record[..2].to_string();
+		let path = record[3..].to_string();
+		// Rename/copy records are followed by the original path.
+		let orig_path = if xy.starts_with('R') || xy.starts_with('C') {
+			fields.next().map(|s| s.to_string())
+		} else {
+			None
+		};
+		let (additions, deletions) = match stats.get(&path) {
+			Some((a, d)) => (Some(*a), Some(*d)),
+			None => (None, None),
+		};
+		entries.push(GitStatusEntry {
+			xy,
+			path,
+			orig_path,
+			additions,
+			deletions,
+		});
+	}
+	entries
+}
+
+/// Summary of the current git repo state for the right-dock Git tab.
+#[derive(serde::Serialize)]
+pub struct GitStatusSummary {
+	/// True if `cwd` is inside a git work tree.
+	pub is_repo: bool,
+	/// Current branch name (HEAD), or empty if detached.
+	pub branch: String,
+	/// Short commit hash of HEAD, or empty.
+	pub head: String,
+	/// Subject line of HEAD commit, or empty.
+	pub head_subject: String,
+	/// Upstream tracking branch (e.g. `origin/main`), if any.
+	pub upstream: String,
+	/// Counts of commits ahead/behind upstream (0 when no upstream).
+	pub ahead: u32,
+	pub behind: u32,
+	/// Porcelain status entries (working tree + index).
+	pub entries: Vec<GitStatusEntry>,
+	/// Number of untracked files (entries with `??`).
+	pub untracked: u32,
+	/// Number of staged changes (index differs from HEAD).
+	pub staged: u32,
+	/// Number of unstaged changes (worktree differs from index).
+	pub unstaged: u32,
+}
+
+/// Return a `GitStatusSummary` for `cwd`. If `cwd` is not a git repo, returns
+/// `is_repo: false` with empty fields (no error) so the UI can hide the tab.
+#[tauri::command]
+pub async fn git_status(cwd: String) -> Result<GitStatusSummary, String> {
+	// Cheap repo check first — non-zero exit means "not a repo"; we surface that
+	// as a successful `is_repo: false` rather than an error.
+	let inside = run_git_capture(&cwd, &["rev-parse", "--is-inside-work-tree"]);
+	let is_repo = match inside {
+		Ok(s) => s.trim() == "true",
+		Err(_) => {
+			return Ok(GitStatusSummary {
+				is_repo: false,
+				branch: String::new(),
+				head: String::new(),
+				head_subject: String::new(),
+				upstream: String::new(),
+				ahead: 0,
+				behind: 0,
+				entries: Vec::new(),
+				untracked: 0,
+				staged: 0,
+				unstaged: 0,
+			})
+		}
+	};
+	if !is_repo {
+		return Ok(GitStatusSummary {
+			is_repo: false,
+			branch: String::new(),
+			head: String::new(),
+			head_subject: String::new(),
+			upstream: String::new(),
+			ahead: 0,
+			behind: 0,
+			entries: Vec::new(),
+			untracked: 0,
+			staged: 0,
+			unstaged: 0,
+		});
+	}
+
+	// Branch name (empty when detached).
+	let branch = run_git_capture(&cwd, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+		.map(|s| s.trim().to_string())
+		.unwrap_or_default();
+
+	// HEAD short hash + subject in one call.
+	let head_line = run_git_capture(&cwd, &["log", "-1", "--format=%h%x09%s"])
+		.map(|s| s.trim().to_string())
+		.unwrap_or_default();
+	let (head, head_subject) = head_line
+		.split_once('\t')
+		.map(|(h, s)| (h.to_string(), s.to_string()))
+		.unwrap_or((String::new(), String::new()));
+
+	// Upstream tracking branch, if any.
+	let upstream = run_git_capture(&cwd, &["rev-parse", "--abbrev-ref", "@{upstream}"])
+		.map(|s| s.trim().to_string())
+		.unwrap_or_default();
+
+	// Ahead/behind counts relative to upstream, e.g. "5\t2".
+	let (ahead, behind) = if !upstream.is_empty() {
+		run_git_capture(
+			&cwd,
+			&["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
+		)
+		.ok()
+		.and_then(|s| {
+			let s = s.trim();
+			let (a, b) = s.split_once('\t')?;
+			let a = a.parse::<u32>().ok()?;
+			let b = b.parse::<u32>().ok()?;
+			Some((a, b))
+		})
+		.unwrap_or((0, 0))
+	} else {
+		(0, 0)
+	};
+
+	// Per-file line counts (staged + unstaged vs HEAD). Best-effort: an empty
+	// repo has no HEAD to diff against, so failures just mean "no stats".
+	let stats = run_git_capture(&cwd, &["diff", "--numstat", "-z", "HEAD"])
+		.map(|raw| parse_numstat(&raw))
+		.unwrap_or_default();
+
+	// Porcelain status: `-z` separates records with NUL and leaves paths unquoted.
+	let raw = run_git_capture(&cwd, &["status", "--porcelain=v1", "-z"])?;
+	let entries = parse_porcelain(&raw, &stats);
+
+	let mut untracked: u32 = 0;
+	let mut staged: u32 = 0;
+	let mut unstaged: u32 = 0;
+	for entry in &entries {
+		let bytes = entry.xy.as_bytes();
+		if entry.xy == "??" {
+			untracked += 1;
+			continue;
+		}
+		if bytes[0] != b' ' && bytes[0] != b'?' {
+			staged += 1;
+		}
+		if bytes[1] != b' ' && bytes[1] != b'?' {
+			unstaged += 1;
+		}
+	}
+
+	Ok(GitStatusSummary {
+		is_repo: true,
+		branch,
+		head,
+		head_subject,
+		upstream,
+		ahead,
+		behind,
+		entries,
+		untracked,
+		staged,
+		unstaged,
+	})
+}
+
+/// Return a unified diff for `path` (relative to `cwd`), selected by `mode`:
+///
+/// - `"staged"`   — index vs HEAD (`git diff --cached`)
+/// - `"worktree"` — working tree vs index (`git diff`)
+/// - `"untracked"`— the whole file rendered as additions
+///   (`git diff --no-index /dev/null <path>`), since an untracked file has no
+///   git-side counterpart to diff against
+///
+/// An empty `path` yields the diff for the whole repo (not valid for
+/// `"untracked"`). Note `--no-index` exits 1 when the files differ, which is
+/// the normal case here, so that mode bypasses the exit-status check.
+#[tauri::command]
+pub async fn git_diff(cwd: String, path: String, mode: String) -> Result<String, String> {
+	if mode == "untracked" {
+		if path.is_empty() {
+			return Ok(String::new());
+		}
+		let dir = resolve_workspace_path(&cwd, None)?;
+		let output = std::process::Command::new("git")
+			.args(["diff", "--no-index", "--", "/dev/null", &path])
+			.current_dir(&dir)
+			.output()
+			.map_err(|e| format!("failed to spawn git: {e}"))?;
+		// `--no-index` returns 1 whenever the inputs differ; only treat a
+		// missing stdout *and* non-empty stderr as a real failure.
+		let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+		if stdout.is_empty() {
+			let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+			if !stderr.is_empty() {
+				return Err(stderr);
+			}
+		}
+		return Ok(stdout);
+	}
+
+	let mut args: Vec<&str> = vec!["diff"];
+	if mode == "staged" {
+		args.push("--cached");
+	}
+	args.push("--");
+	if !path.is_empty() {
+		args.push(&path);
+	}
+	run_git_capture(&cwd, &args)
+}
+
 /// Fetch the skills.sh leaderboard HTML page via Rust (bypasses CORS).
 /// Returns the raw HTML so the frontend can parse skill links.
 #[tauri::command]
@@ -2101,5 +2388,54 @@ mod tests {
 			);
 			assert_eq!(path, path.trim(), "captured PATH must be trimmed: {path:?}");
 		}
+	}
+
+	#[test]
+	fn parse_numstat_reads_counts_and_renames() {
+		// Plain entries are "adds\tdels\tpath"; renames leave the path field
+		// empty and follow with <old>\0<new>.
+		let raw = "3\t1\tsrc/a.ts\0-\t-\tassets/logo.png\0".to_string()
+			+ "5\t2\t\0src/old.ts\0src/new.ts\0";
+		let map = parse_numstat(&raw);
+		assert_eq!(map.get("src/a.ts"), Some(&(3, 1)));
+		// Binary files report "-" and are skipped.
+		assert_eq!(map.get("assets/logo.png"), None);
+		// A rename is keyed on the NEW path so it matches the porcelain record.
+		assert_eq!(map.get("src/new.ts"), Some(&(5, 2)));
+		assert_eq!(map.get("src/old.ts"), None);
+	}
+
+	#[test]
+	fn parse_porcelain_pairs_renames_with_original_path() {
+		let stats = HashMap::from([("src/new.ts".to_string(), (5u32, 2u32))]);
+		// "R  <new>\0<old>" — the original path is a separate NUL field, so a
+		// naive split would mistake it for another record.
+		let raw = " M src/a.ts\0R  src/new.ts\0src/old.ts\0?? notes.md\0";
+		let entries = parse_porcelain(raw, &stats);
+		assert_eq!(
+			entries.len(),
+			3,
+			"the rename's old path must not become an entry"
+		);
+
+		assert_eq!(entries[0].xy, " M");
+		assert_eq!(entries[0].path, "src/a.ts");
+		assert_eq!(entries[0].orig_path, None);
+		// No numstat entry for this path -> no counts.
+		assert_eq!(entries[0].additions, None);
+
+		assert_eq!(entries[1].xy, "R ");
+		assert_eq!(entries[1].path, "src/new.ts");
+		assert_eq!(entries[1].orig_path.as_deref(), Some("src/old.ts"));
+		assert_eq!(entries[1].additions, Some(5));
+		assert_eq!(entries[1].deletions, Some(2));
+
+		assert_eq!(entries[2].xy, "??");
+		assert_eq!(entries[2].path, "notes.md");
+	}
+
+	#[test]
+	fn parse_porcelain_handles_empty_output() {
+		assert!(parse_porcelain("", &HashMap::new()).is_empty());
 	}
 }

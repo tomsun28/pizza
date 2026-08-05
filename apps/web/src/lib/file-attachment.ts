@@ -44,7 +44,7 @@ export interface LoadedImageAttachment {
 	mimeType: string;
 	/** Original file name, for display. */
 	name: string;
-	/** Data URL for in-chat preview. */
+	/** Data URL for in-agent preview. */
 	preview: string;
 	/** File size in bytes. */
 	size: number;

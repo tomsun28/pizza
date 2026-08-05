@@ -961,7 +961,7 @@ export async function executeBuiltinCommand(
 		case "delegate_agent": {
 			return {
 				stdout: "",
-				stderr: "delegate_agent requires the main (persistent) agent context and is executed through the cli tool.",
+				stderr: "delegate_agent requires an agent dir and is executed through the cli tool.",
 				exitCode: 1,
 			};
 		}
