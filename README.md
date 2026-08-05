@@ -38,7 +38,6 @@ Download the installer for your platform (macOS / Linux / Windows) from [GitHub 
 
 ```bash
 npm install -g @tomsun28/pizza
-export ZAI_API_KEY=your_zai_api_key
 pizza
 ```
 
