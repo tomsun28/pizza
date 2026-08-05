@@ -1,23 +1,24 @@
 /**
- * `delegate_agent` built-in CLI command — cross-workspace orchestration for the
- * persistent (main) agent.
+ * `delegate_agent` built-in CLI command — cross-workspace orchestration for
+ * any agent (main or workspace).
  *
  * Routed internally by the `cli` tool (alongside read/write/edit/session_split/
- * history_tree), but ONLY wired up when the runtime is the main agent (see
+ * history_tree), wired up whenever the runtime has an agent dir (see
  * `session-facade-factory.ts`, which passes `delegate_agent` into the cli tool's
- * options). For non-main-agent workspaces the command is recognized but reports
- * that it is unavailable.
+ * options). For sessions without an agent dir the command is recognized but
+ * reports that it is unavailable.
  *
- * Lets the main agent hand a task to a sub-agent running in another project
- * directory via the existing RPC infrastructure (`RpcClient`), so the main
- * agent's context is not polluted by the sub-agent's intermediate output.
+ * Lets an agent hand a task to a sub-agent running in another project
+ * directory via the existing RPC infrastructure (`RpcClient`), so the
+ * delegating agent's context is not polluted by the sub-agent's intermediate
+ * output.
  *
  * The command also exposes the set of known workspace agents (project
  * directories the agent has previously worked in) via the `list` action, so the
  * model can discover delegation targets without guessing paths.
  *
- * Synchronous delegation — the main agent blocks until the sub-agent finishes,
- * then receives only the sub-agent's final assistant text.
+ * Synchronous delegation — the delegating agent blocks until the sub-agent
+ * finishes, then receives only the sub-agent's final assistant text.
  */
 
 import { type Static, Type } from "@sinclair/typebox";
@@ -71,8 +72,8 @@ export interface DelegateAgentToolOptions {
 	/** Agent config directory — used to discover known workspaces and to align the sub-agent's auth. */
 	agentDir: string;
 	/**
-	 * The main agent's own working directory. Excluded from `list` results — the
-	 * main agent delegates to *other* projects, never itself.
+	 * The delegating agent's own working directory. Excluded from `list` results —
+	 * an agent delegates to *other* projects, never itself.
 	 */
 	mainDir?: string;
 }
@@ -136,7 +137,7 @@ export function createDelegateAgentToolDefinition(
 			"The sub-agent runs in its own workspace (independent event store / compaction) and " +
 			"only its final reply is returned — intermediate output does not enter this context. " +
 			"Use the `list` action to discover which project directories are available as delegation targets, " +
-			"then `run` with a target cwd and task. Only available to the main (persistent) agent.",
+			"then `run` with a target cwd and task.",
 		promptSnippet: "_delegate_agent: run a sub-agent in another project directory and return only its final reply",
 		promptGuidelines: [
 			"Use _delegate_agent to hand cross-project tasks to a sub-agent instead of handling another project's code in this context.",

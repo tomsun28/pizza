@@ -206,7 +206,7 @@ export interface BashToolOptions {
 	write?: WriteToolOptions;
 	/** Options used when routing the built-in edit command through the edit tool. */
 	edit?: EditToolOptions;
-	/** Options for the built-in delegate_agent command (main agent only). When set, the cli tool routes `delegate_agent` to the delegate_agent definition. */
+	/** Options for the built-in delegate_agent command. When set, the cli tool routes `delegate_agent` to the delegate_agent definition. */
 	delegateAgent?: DelegateAgentToolOptions;
 	/** Command prefix prepended to every command (for example shell setup commands) */
 	commandPrefix?: string;
@@ -488,7 +488,7 @@ export function createBashToolDefinition(
 	const sessionSplitDefinition = createSessionSplitToolDefinition();
 	const historyTreeDefinition = createHistoryTreeToolDefinition();
 	const delegateAgentDefinition = options?.delegateAgent ? createDelegateAgentToolDefinition(options.delegateAgent) : undefined;
-	/** Map of built-in command name → definition. delegate_agent is only present for the main agent. */
+	/** Map of built-in command name → definition. delegate_agent is present when the agent dir is available. */
 	const builtinDefinitions: Record<string, ToolDefinition<any, any, any> | undefined> = {
 		read: readDefinition,
 		write: writeDefinition,
@@ -500,7 +500,7 @@ export function createBashToolDefinition(
 	return {
 		name: "cli",
 		label: "cli",
-		description: `Execute a CLI command in the current working directory. Built-in commands are prefixed with an underscore and handled internally (they never fall back to the shell): _read, _write, _edit, _session_split, _history_tree, and (for the main agent) _delegate_agent. The underscore prefix avoids collisions with real shell commands (e.g. bash's own read/write builtins). IMPORTANT: built-in commands do NOT support shell operators — no pipes (|), redirects (> <), chaining (; & &&), command substitution, or newlines; issue each as a single pure command. To use a pipeline or redirection, run a plain shell command instead (grep, find, ls, cat, sed, git, npm, etc.). For _edit/_write, a value containing quotes, multiple spaces, or newlines must go through a verbatim channel — _edit with --edits JSON (e.g. --edits '[{"op":"replace","range":"12#ab","new":"line1\nline2"}]'), _write with --content or a <<EOF heredoc, or wrap the whole value in quotes. Do NOT pass such a value as bare positional tokens — its inner quotes/spaces get silently mangled. Output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB.`,
+		description: `Execute a CLI command in the current working directory. Built-in commands are prefixed with an underscore and handled internally (they never fall back to the shell): _read, _write, _edit, _session_split, _history_tree, and _delegate_agent. The underscore prefix avoids collisions with real shell commands (e.g. bash's own read/write builtins). IMPORTANT: built-in commands do NOT support shell operators — no pipes (|), redirects (> <), chaining (; & &&), command substitution, or newlines; issue each as a single pure command. To use a pipeline or redirection, run a plain shell command instead (grep, find, ls, cat, sed, git, npm, etc.). For _edit/_write, a value containing quotes, multiple spaces, or newlines must go through a verbatim channel — _edit with --edits JSON (e.g. --edits '[{"op":"replace","range":"12#ab","new":"line1\nline2"}]'), _write with --content or a <<EOF heredoc, or wrap the whole value in quotes. Do NOT pass such a value as bare positional tokens — its inner quotes/spaces get silently mangled. Output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB.`,
 		promptSnippet: "Execute CLI commands: built-ins are prefixed with _ (_read/_write/_edit/_session_split/_history_tree/_delegate_agent) and are pure single commands with NO shell operators; use shell commands (grep, find, ls, cat, git, npm) for pipes/redirections",
 		parameters: bashSchema,
 		async execute(
@@ -616,8 +616,8 @@ export function createBashToolDefinition(
 									content: [
 										{
 											type: "text",
-											text: "delegate_agent is only available to the main (persistent) agent. " +
-												"It cannot be used in this workspace.",
+											text: "delegate_agent is not available in this session (no agent dir configured). " +
+												"It cannot be used here.",
 										},
 									],
 									details: undefined,
@@ -777,7 +777,7 @@ export function createBashToolDefinition(
 						resetBuiltinRendererStateIfNeeded(state, key);
 						const definition = builtinDefinitions[builtin.command];
 						if (!definition) {
-							// Unknown or unavailable built-in (e.g. delegate_agent on a non-main workspace).
+							// Unknown or unavailable built-in (e.g. delegate_agent when no agent dir is configured).
 							// Fall through to the default bash call renderer below.
 						} else {
 							const renderContext = makeBuiltinRenderContext(

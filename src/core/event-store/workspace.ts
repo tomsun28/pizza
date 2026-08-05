@@ -76,9 +76,9 @@ export interface KnownWorkspace {
  *
  * Workspaces whose `meta.json` is unreadable or malformed are skipped. The
  * result is sorted by `last_accessed_at` descending (most recent first) so the
- * most relevant projects appear first. The main agent's own working directory
- * (matched by cwd) is excluded — the main agent delegates to other projects,
- * never itself.
+ * most relevant projects appear first. The delegating agent's own working
+ * directory (matched by cwd) is excluded — an agent delegates to other
+ * projects, never itself.
  */
 export function listKnownWorkspaces(agentDir: string = getDefaultAgentDir(), excludeCwd?: string): KnownWorkspace[] {
 	const workspacesRoot = join(agentDir, "workspaces");

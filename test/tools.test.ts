@@ -459,15 +459,15 @@ describe("Coding Agent Tools", () => {
 		});
 
 		it("should report delegate_agent is unavailable when the cli tool has no delegate option", async () => {
-			// Non-main-agent cli tool: delegate_agent is recognized but not wired up.
+			// cli tool without delegate option: delegate_agent is recognized but not wired up.
 			const tool = createBashTool(process.cwd());
 			const result = await tool.execute("test-no-delegate", { command: "_delegate_agent run /tmp/x do it" });
 			const output = getTextOutput(result);
-			expect(output).toContain("only available to the main");
+			expect(output).toContain("not available in this session");
 		});
 
 		it("should route delegate_agent list through the cli tool when the delegate option is set", async () => {
-			// Main-agent-style cli tool: delegate_agent routes to the delegate_agent definition.
+			// cli tool with delegate option: delegate_agent routes to the delegate_agent definition.
 			const tool = createBashTool(process.cwd(), { delegateAgent: { agentDir: "/tmp/no-such-agent-dir" } });
 			const result = await tool.execute("test-delegate-list", { command: "_delegate_agent list" });
 			const output = getTextOutput(result);
