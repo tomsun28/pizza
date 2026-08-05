@@ -2177,19 +2177,21 @@ pub async fn git_status(cwd: String) -> Result<GitStatusSummary, String> {
 	let inside = run_git_capture(&cwd, &["rev-parse", "--is-inside-work-tree"]);
 	let is_repo = match inside {
 		Ok(s) => s.trim() == "true",
-		Err(_) => return Ok(GitStatusSummary {
-			is_repo: false,
-			branch: String::new(),
-			head: String::new(),
-			head_subject: String::new(),
-			upstream: String::new(),
-			ahead: 0,
-			behind: 0,
-			entries: Vec::new(),
-			untracked: 0,
-			staged: 0,
-			unstaged: 0,
-		}),
+		Err(_) => {
+			return Ok(GitStatusSummary {
+				is_repo: false,
+				branch: String::new(),
+				head: String::new(),
+				head_subject: String::new(),
+				upstream: String::new(),
+				ahead: 0,
+				behind: 0,
+				entries: Vec::new(),
+				untracked: 0,
+				staged: 0,
+				unstaged: 0,
+			})
+		}
 	};
 	if !is_repo {
 		return Ok(GitStatusSummary {
@@ -2228,16 +2230,19 @@ pub async fn git_status(cwd: String) -> Result<GitStatusSummary, String> {
 
 	// Ahead/behind counts relative to upstream, e.g. "5\t2".
 	let (ahead, behind) = if !upstream.is_empty() {
-		run_git_capture(&cwd, &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"])
-			.ok()
-			.and_then(|s| {
-				let s = s.trim();
-				let (a, b) = s.split_once('\t')?;
-				let a = a.parse::<u32>().ok()?;
-				let b = b.parse::<u32>().ok()?;
-				Some((a, b))
-			})
-			.unwrap_or((0, 0))
+		run_git_capture(
+			&cwd,
+			&["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
+		)
+		.ok()
+		.and_then(|s| {
+			let s = s.trim();
+			let (a, b) = s.split_once('\t')?;
+			let a = a.parse::<u32>().ok()?;
+			let b = b.parse::<u32>().ok()?;
+			Some((a, b))
+		})
+		.unwrap_or((0, 0))
 	} else {
 		(0, 0)
 	};
@@ -2389,7 +2394,7 @@ mod tests {
 	fn parse_numstat_reads_counts_and_renames() {
 		// Plain entries are "adds\tdels\tpath"; renames leave the path field
 		// empty and follow with <old>\0<new>.
-		let raw = "3\t1\tsrc/a.ts\0-\t-\tassets/logo.png\0" .to_string()
+		let raw = "3\t1\tsrc/a.ts\0-\t-\tassets/logo.png\0".to_string()
 			+ "5\t2\t\0src/old.ts\0src/new.ts\0";
 		let map = parse_numstat(&raw);
 		assert_eq!(map.get("src/a.ts"), Some(&(3, 1)));
@@ -2407,7 +2412,11 @@ mod tests {
 		// naive split would mistake it for another record.
 		let raw = " M src/a.ts\0R  src/new.ts\0src/old.ts\0?? notes.md\0";
 		let entries = parse_porcelain(raw, &stats);
-		assert_eq!(entries.len(), 3, "the rename's old path must not become an entry");
+		assert_eq!(
+			entries.len(),
+			3,
+			"the rename's old path must not become an entry"
+		);
 
 		assert_eq!(entries[0].xy, " M");
 		assert_eq!(entries[0].path, "src/a.ts");
