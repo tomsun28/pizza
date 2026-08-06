@@ -538,6 +538,28 @@ export interface ProviderInfo {
 	name?: string;
 	has_api_key: boolean;
 	auth_type: string | null;
+	is_custom?: boolean;
+	protocol?: "openai" | "anthropic" | null;
+	model_count?: number;
+}
+
+export interface CustomProviderInput {
+	id: string;
+	name?: string;
+	protocol: "openai" | "anthropic";
+	base_url: string;
+	api_key: string;
+	models: Array<{ id: string; name?: string }>;
+}
+
+export interface CustomProviderTestResult {
+	ok: boolean;
+	protocol: "openai" | "anthropic";
+	model: string;
+	message: string;
+	response?: string | null;
+	status?: number | null;
+	duration_ms: number;
 }
 
 export async function listProviders(): Promise<ProviderInfo[]> {
@@ -574,6 +596,57 @@ export async function removeProviderApiKey(provider: string): Promise<void> {
 	}
 	const core = await import("@tauri-apps/api/core");
 	await core.invoke("remove_provider_api_key", { provider });
+}
+
+export async function saveCustomProvider(input: CustomProviderInput): Promise<void> {
+	if (!isTauri()) {
+		const resp = await fetch("/rpc/custom-provider", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(input),
+		});
+		if (!resp.ok) {
+			const body = await resp.json().catch(() => ({}));
+			throw new Error(body.error ?? "Failed to save custom provider");
+		}
+		return;
+	}
+	const core = await import("@tauri-apps/api/core");
+	await core.invoke("save_custom_provider", { input });
+}
+
+export async function testCustomProvider(input: CustomProviderInput): Promise<CustomProviderTestResult> {
+	if (!isTauri()) {
+		const resp = await fetch("/rpc/custom-provider/test", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(input),
+		});
+		if (!resp.ok) {
+			const body = await resp.json().catch(() => ({}));
+			throw new Error(body.error ?? "Failed to test custom provider");
+		}
+		return resp.json();
+	}
+	const core = await import("@tauri-apps/api/core");
+	return core.invoke<CustomProviderTestResult>("test_custom_provider", { input });
+}
+
+export async function removeCustomProvider(provider: string): Promise<void> {
+	if (!isTauri()) {
+		const resp = await fetch("/rpc/custom-provider", {
+			method: "DELETE",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ provider }),
+		});
+		if (!resp.ok) {
+			const body = await resp.json().catch(() => ({}));
+			throw new Error(body.error ?? "Failed to remove custom provider");
+		}
+		return;
+	}
+	const core = await import("@tauri-apps/api/core");
+	await core.invoke("remove_custom_provider", { provider });
 }
 
 /**
