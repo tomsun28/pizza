@@ -1,5 +1,5 @@
 use base64::Engine;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -1498,6 +1498,248 @@ pub struct ProviderInfo {
 	name: String,
 	has_api_key: bool,
 	auth_type: Option<String>, // "api_key" | "oauth"
+	is_custom: bool,
+	protocol: Option<String>,
+	model_count: usize,
+}
+
+#[derive(Deserialize)]
+pub struct CustomProviderModelInput {
+	id: String,
+	name: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct CustomProviderInput {
+	id: String,
+	name: Option<String>,
+	protocol: String,
+	base_url: String,
+	api_key: String,
+	models: Vec<CustomProviderModelInput>,
+}
+
+#[derive(Serialize)]
+pub struct CustomProviderTestResult {
+	ok: bool,
+	protocol: String,
+	model: String,
+	message: String,
+	response: Option<String>,
+	status: Option<u16>,
+	duration_ms: u128,
+}
+
+fn agent_dir() -> Result<PathBuf, String> {
+	let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
+	Ok(PathBuf::from(&home).join(".pizza").join("agent"))
+}
+
+fn auth_path() -> Result<PathBuf, String> {
+	Ok(agent_dir()?.join("auth.json"))
+}
+
+fn models_path() -> Result<PathBuf, String> {
+	Ok(agent_dir()?.join("models.json"))
+}
+
+fn ensure_agent_dir() -> Result<PathBuf, String> {
+	let dir = agent_dir()?;
+	if !dir.exists() {
+		std::fs::create_dir_all(&dir).map_err(|e| format!("create_dir: {e}"))?;
+	}
+	Ok(dir)
+}
+
+fn read_json_object(path: &PathBuf) -> serde_json::Map<String, Value> {
+	if !path.exists() {
+		return serde_json::Map::new();
+	}
+	let Ok(raw) = std::fs::read_to_string(path) else {
+		return serde_json::Map::new();
+	};
+	let Ok(parsed) = serde_json::from_str::<Value>(&raw) else {
+		return serde_json::Map::new();
+	};
+	parsed.as_object().cloned().unwrap_or_default()
+}
+
+fn write_json_object(path: &PathBuf, data: serde_json::Map<String, Value>) -> Result<(), String> {
+	let json = serde_json::to_string_pretty(&Value::Object(data))
+		.map_err(|e| format!("serialize: {e}"))?;
+	std::fs::write(path, &json).map_err(|e| format!("write: {e}"))?;
+	#[cfg(unix)]
+	{
+		use std::os::unix::fs::PermissionsExt;
+		let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+	}
+	Ok(())
+}
+
+fn read_models_providers() -> serde_json::Map<String, Value> {
+	let Ok(path) = models_path() else {
+		return serde_json::Map::new();
+	};
+	let root = read_json_object(&path);
+	root.get("providers")
+		.and_then(|v| v.as_object())
+		.cloned()
+		.unwrap_or_default()
+}
+
+fn write_models_providers(providers: serde_json::Map<String, Value>) -> Result<(), String> {
+	ensure_agent_dir()?;
+	let path = models_path()?;
+	let mut root = read_json_object(&path);
+	root.insert("providers".to_string(), Value::Object(providers));
+	write_json_object(&path, root)
+}
+
+fn normalize_provider_id(value: &str) -> Result<String, String> {
+	let trimmed = value.trim();
+	if trimmed.is_empty() {
+		return Err("Provider id is required".to_string());
+	}
+	let valid = trimmed
+		.chars()
+		.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.');
+	if !valid {
+		return Err("Provider id may only contain letters, numbers, dot, dash, and underscore".to_string());
+	}
+	Ok(trimmed.to_string())
+}
+
+fn api_for_protocol(protocol: &str) -> Result<&'static str, String> {
+	match protocol.trim() {
+		"openai" => Ok("openai-completions"),
+		"anthropic" => Ok("anthropic-messages"),
+		other => Err(format!("Unsupported custom provider protocol: {other}")),
+	}
+}
+
+fn protocol_for_api(api: &str) -> Option<String> {
+	match api {
+		"openai-completions" | "openai-responses" => Some("openai".to_string()),
+		"anthropic-messages" => Some("anthropic".to_string()),
+		_ => None,
+	}
+}
+
+fn normalize_base_url(value: &str) -> Result<String, String> {
+	let trimmed = value.trim();
+	if !(trimmed.starts_with("https://") || trimmed.starts_with("http://")) {
+		return Err("Base URL must start with http:// or https://".to_string());
+	}
+	if trimmed.chars().any(|c| c.is_whitespace()) {
+		return Err("Base URL cannot contain whitespace".to_string());
+	}
+	Ok(trimmed.trim_end_matches('/').to_string())
+}
+
+fn first_custom_model_id(input: &CustomProviderInput) -> Result<String, String> {
+	input
+		.models
+		.iter()
+		.map(|model| model.id.trim())
+		.find(|id| !id.is_empty())
+		.map(|id| id.to_string())
+		.ok_or_else(|| "At least one model id is required".to_string())
+}
+
+fn join_api_path(base_url: &str, suffix: &str) -> String {
+	let base = base_url.trim_end_matches('/');
+	if base.ends_with("/v1") && suffix.starts_with("/v1/") {
+		format!("{}{}", base, &suffix[3..])
+	} else {
+		format!("{}{}", base, suffix)
+	}
+}
+
+fn shorten_response_text(value: &str) -> String {
+	const MAX_CHARS: usize = 360;
+	let trimmed = value.trim();
+	if trimmed.chars().count() <= MAX_CHARS {
+		return trimmed.to_string();
+	}
+	let shortened: String = trimmed.chars().take(MAX_CHARS).collect();
+	format!("{shortened}...")
+}
+
+fn extract_anthropic_text(value: &Value) -> Option<String> {
+	value
+		.get("content")
+		.and_then(|content| content.as_array())
+		.and_then(|blocks| {
+			blocks.iter().find_map(|block| {
+				block
+					.get("text")
+					.and_then(|text| text.as_str())
+					.map(shorten_response_text)
+			})
+		})
+}
+
+fn extract_openai_text(value: &Value) -> Option<String> {
+	value
+		.get("choices")
+		.and_then(|choices| choices.as_array())
+		.and_then(|choices| choices.first())
+		.and_then(|choice| choice.get("message"))
+		.and_then(|message| message.get("content"))
+		.and_then(|content| content.as_str())
+		.map(shorten_response_text)
+}
+
+fn extract_error_text(value: &Value) -> Option<String> {
+	if let Some(message) = value
+		.get("error")
+		.and_then(|error| error.get("message").or_else(|| error.get("type")))
+		.and_then(|message| message.as_str())
+	{
+		return Some(shorten_response_text(message));
+	}
+	value
+		.get("message")
+		.and_then(|message| message.as_str())
+		.map(shorten_response_text)
+}
+
+fn custom_provider_info(
+	id: &str,
+	config: &Value,
+	auth_data: &serde_json::Map<String, Value>,
+) -> Option<ProviderInfo> {
+	let obj = config.as_object()?;
+	let models = obj
+		.get("models")
+		.and_then(|v| v.as_array())
+		.map(|arr| arr.len())
+		.unwrap_or(0);
+	if models == 0 {
+		return None;
+	}
+	let api = obj.get("api").and_then(|v| v.as_str()).unwrap_or("");
+	let protocol = protocol_for_api(api);
+	let name = obj
+		.get("name")
+		.and_then(|v| v.as_str())
+		.filter(|v| !v.trim().is_empty())
+		.unwrap_or(id)
+		.to_string();
+	let cred = auth_data.get(id);
+	let auth_type = cred
+		.and_then(|c| c.get("type"))
+		.and_then(|t| t.as_str())
+		.map(|s| s.to_string());
+	Some(ProviderInfo {
+		id: id.to_string(),
+		name,
+		has_api_key: cred.is_some(),
+		auth_type,
+		is_custom: true,
+		protocol,
+		model_count: models,
+	})
 }
 
 /// Load built-in provider {id -> display name} map from the generated
@@ -1546,22 +1788,8 @@ fn load_builtin_providers(app: &AppHandle) -> HashMap<String, String> {
 /// in the catalog (custom providers) are appended with their raw id as name.
 #[tauri::command]
 pub async fn list_providers(app: AppHandle) -> Result<Vec<ProviderInfo>, String> {
-	let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
-	let auth_path = PathBuf::from(&home)
-		.join(".pizza")
-		.join("agent")
-		.join("auth.json");
-
-	let mut auth_data: serde_json::Map<String, Value> = serde_json::Map::new();
-	if auth_path.exists() {
-		if let Ok(raw) = std::fs::read_to_string(&auth_path) {
-			if let Ok(parsed) = serde_json::from_str::<Value>(&raw) {
-				if let Some(obj) = parsed.as_object() {
-					auth_data = obj.clone();
-				}
-			}
-		}
-	}
+	let auth_data = read_json_object(&auth_path()?);
+	let model_providers = read_models_providers();
 
 	// Built-in providers: { id -> display name } from pi-ai (generated JSON).
 	// Preserve catalog order by reading the file as an ordered map.
@@ -1587,12 +1815,27 @@ pub async fn list_providers(app: AppHandle) -> Result<Vec<ProviderInfo>, String>
 				.unwrap_or_else(|| (*id).clone()),
 			has_api_key,
 			auth_type,
+			is_custom: false,
+			protocol: None,
+			model_count: 0,
 		});
 	}
 
-	// Add any custom providers from auth.json not in builtin list.
+	// Add custom providers declared in models.json.
+	let mut custom_ids: Vec<&String> = model_providers.keys().collect();
+	custom_ids.sort();
+	for id in custom_ids {
+		if builtin_names.contains_key(id) {
+			continue;
+		}
+		if let Some(info) = custom_provider_info(id, &model_providers[id], &auth_data) {
+			providers.push(info);
+		}
+	}
+
+	// Add any auth-only custom providers not in builtin/models list.
 	for (key, _val) in &auth_data {
-		if !builtin_names.contains_key(key) {
+		if !builtin_names.contains_key(key) && !model_providers.contains_key(key) {
 			let cred = auth_data.get(key);
 			let auth_type = cred
 				.and_then(|c| c.get("type"))
@@ -1603,6 +1846,9 @@ pub async fn list_providers(app: AppHandle) -> Result<Vec<ProviderInfo>, String>
 				name: key.clone(),
 				has_api_key: true,
 				auth_type,
+				is_custom: true,
+				protocol: None,
+				model_count: 0,
 			});
 		}
 	}
@@ -1617,26 +1863,9 @@ pub async fn set_provider_api_key(
 	provider: String,
 	api_key: String,
 ) -> Result<(), String> {
-	let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
-	let auth_dir = PathBuf::from(&home).join(".pizza").join("agent");
-	let auth_path = auth_dir.join("auth.json");
-
-	// Ensure directory exists
-	if !auth_dir.exists() {
-		std::fs::create_dir_all(&auth_dir).map_err(|e| format!("create_dir: {e}"))?;
-	}
-
-	// Read existing auth.json
-	let mut auth_data: serde_json::Map<String, Value> = serde_json::Map::new();
-	if auth_path.exists() {
-		if let Ok(raw) = std::fs::read_to_string(&auth_path) {
-			if let Ok(parsed) = serde_json::from_str::<Value>(&raw) {
-				if let Some(obj) = parsed.as_object() {
-					auth_data = obj.clone();
-				}
-			}
-		}
-	}
+	ensure_agent_dir()?;
+	let auth_path = auth_path()?;
+	let mut auth_data = read_json_object(&auth_path);
 
 	// Set the API key
 	auth_data.insert(
@@ -1644,17 +1873,7 @@ pub async fn set_provider_api_key(
 		serde_json::json!({ "type": "api_key", "key": api_key }),
 	);
 
-	// Write back
-	let json = serde_json::to_string_pretty(&Value::Object(auth_data))
-		.map_err(|e| format!("serialize: {e}"))?;
-	std::fs::write(&auth_path, &json).map_err(|e| format!("write: {e}"))?;
-
-	// Set file permissions to 600
-	#[cfg(unix)]
-	{
-		use std::os::unix::fs::PermissionsExt;
-		let _ = std::fs::set_permissions(&auth_path, std::fs::Permissions::from_mode(0o600));
-	}
+	write_json_object(&auth_path, auth_data)?;
 
 	log_file(&format!("set_provider_api_key: set key for {}", provider));
 	// auth.json is shared across all workspaces: tell every running sidecar
@@ -1669,11 +1888,7 @@ pub async fn remove_provider_api_key(
 	state: tauri::State<'_, BridgeState>,
 	provider: String,
 ) -> Result<(), String> {
-	let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
-	let auth_path = PathBuf::from(&home)
-		.join(".pizza")
-		.join("agent")
-		.join("auth.json");
+	let auth_path = auth_path()?;
 
 	if !auth_path.exists() {
 		return Ok(()); // Nothing to remove
@@ -1695,6 +1910,220 @@ pub async fn remove_provider_api_key(
 	));
 	// Notify every sidecar so they drop the now-removed credential from
 	// their in-memory cache (otherwise auth still resolves as configured).
+	broadcast_to_all_sidecars(&state, "reload_providers");
+	Ok(())
+}
+
+#[tauri::command]
+pub async fn save_custom_provider(
+	state: tauri::State<'_, BridgeState>,
+	input: CustomProviderInput,
+) -> Result<(), String> {
+	ensure_agent_dir()?;
+
+	let provider_id = normalize_provider_id(&input.id)?;
+	let api = api_for_protocol(&input.protocol)?;
+	let base_url = normalize_base_url(&input.base_url)?;
+	let api_key = input.api_key.trim();
+	if api_key.is_empty() {
+		return Err("API key is required".to_string());
+	}
+
+	let mut models: Vec<Value> = Vec::new();
+	for model in input.models {
+		let id = model.id.trim();
+		if id.is_empty() {
+			continue;
+		}
+		let model_name = model
+			.name
+			.as_deref()
+			.map(str::trim)
+			.filter(|value| !value.is_empty())
+			.unwrap_or(id);
+		models.push(serde_json::json!({
+			"id": id,
+			"name": model_name,
+			"reasoning": false,
+			"input": ["text"],
+			"contextWindow": 128000,
+			"maxTokens": 16384
+		}));
+	}
+	if models.is_empty() {
+		return Err("At least one model id is required".to_string());
+	}
+
+	let display_name = input
+		.name
+		.as_deref()
+		.map(str::trim)
+		.filter(|value| !value.is_empty())
+		.unwrap_or(&provider_id);
+	let mut providers = read_models_providers();
+	providers.insert(
+		provider_id.clone(),
+		serde_json::json!({
+			"name": display_name,
+			"baseUrl": base_url,
+			"api": api,
+			"models": models
+		}),
+	);
+	write_models_providers(providers)?;
+
+	let auth_path = auth_path()?;
+	let mut auth_data = read_json_object(&auth_path);
+	auth_data.insert(
+		provider_id.clone(),
+		serde_json::json!({ "type": "api_key", "key": api_key }),
+	);
+	write_json_object(&auth_path, auth_data)?;
+
+	log_file(&format!("save_custom_provider: saved {}", provider_id));
+	broadcast_to_all_sidecars(&state, "reload_providers");
+	Ok(())
+}
+
+#[tauri::command]
+pub async fn test_custom_provider(input: CustomProviderInput) -> Result<CustomProviderTestResult, String> {
+	let protocol = input.protocol.trim().to_string();
+	let _api = api_for_protocol(&protocol)?;
+	let base_url = normalize_base_url(&input.base_url)?;
+	let api_key = input.api_key.trim().to_string();
+	if api_key.is_empty() {
+		return Err("API key is required".to_string());
+	}
+	let model_id = first_custom_model_id(&input)?;
+	let started = std::time::Instant::now();
+	let client = reqwest::Client::builder()
+		.timeout(Duration::from_secs(60))
+		.build()
+		.map_err(|e| format!("create client: {e}"))?;
+
+	let (url, request) = if protocol == "anthropic" {
+		let url = join_api_path(&base_url, "/v1/messages");
+		let body = serde_json::json!({
+			"model": model_id,
+			"max_tokens": 32,
+			"messages": [{ "role": "user", "content": "hi" }]
+		});
+		(url.clone(), client
+			.post(url)
+			.header("x-api-key", api_key)
+			.header("anthropic-version", "2023-06-01")
+			.json(&body))
+	} else {
+		let url = join_api_path(&base_url, "/chat/completions");
+		let body = serde_json::json!({
+			"model": model_id,
+			"max_tokens": 32,
+			"stream": false,
+			"messages": [{ "role": "user", "content": "hi" }]
+		});
+		(url.clone(), client
+			.post(url)
+			.bearer_auth(api_key)
+			.json(&body))
+	};
+
+	let response = match request.send().await {
+		Ok(response) => response,
+		Err(error) => {
+			return Ok(CustomProviderTestResult {
+				ok: false,
+				protocol,
+				model: model_id,
+				message: format!("Failed to connect to API: {error}"),
+				response: None,
+				status: None,
+				duration_ms: started.elapsed().as_millis(),
+			});
+		}
+	};
+	let status = response.status();
+	let status_code = status.as_u16();
+	let raw_text = match response.text().await {
+		Ok(text) => text,
+		Err(error) => {
+			return Ok(CustomProviderTestResult {
+				ok: false,
+				protocol,
+				model: model_id,
+				message: format!("API responded, but the response body could not be read: {error}"),
+				response: None,
+				status: Some(status_code),
+				duration_ms: started.elapsed().as_millis(),
+			});
+		}
+	};
+	let parsed = serde_json::from_str::<Value>(&raw_text).ok();
+
+	if !status.is_success() {
+		let detail = parsed
+			.as_ref()
+			.and_then(extract_error_text)
+			.unwrap_or_else(|| shorten_response_text(&raw_text));
+		return Ok(CustomProviderTestResult {
+			ok: false,
+			protocol,
+			model: model_id,
+			message: format!("API returned HTTP {status_code}: {detail}"),
+			response: None,
+			status: Some(status_code),
+			duration_ms: started.elapsed().as_millis(),
+		});
+	}
+
+	let extracted = parsed.as_ref().and_then(|value| {
+		if protocol == "anthropic" {
+			extract_anthropic_text(value)
+		} else {
+			extract_openai_text(value)
+		}
+	});
+	match extracted {
+		Some(text) if !text.is_empty() => Ok(CustomProviderTestResult {
+			ok: true,
+			protocol,
+			model: model_id,
+			message: "Test completed successfully".to_string(),
+			response: Some(text),
+			status: Some(status_code),
+			duration_ms: started.elapsed().as_millis(),
+		}),
+		_ => Ok(CustomProviderTestResult {
+			ok: false,
+			protocol,
+			model: model_id,
+			message: format!(
+				"API connected at {url}, but the response format did not match the selected protocol."
+			),
+			response: Some(shorten_response_text(&raw_text)),
+			status: Some(status_code),
+			duration_ms: started.elapsed().as_millis(),
+		}),
+	}
+}
+
+#[tauri::command]
+pub async fn remove_custom_provider(
+	state: tauri::State<'_, BridgeState>,
+	provider: String,
+) -> Result<(), String> {
+	let provider_id = normalize_provider_id(&provider)?;
+	let mut providers = read_models_providers();
+	providers.remove(&provider_id);
+	write_models_providers(providers)?;
+
+	let auth_path = auth_path()?;
+	if auth_path.exists() {
+		let mut auth_data = read_json_object(&auth_path);
+		auth_data.remove(&provider_id);
+		write_json_object(&auth_path, auth_data)?;
+	}
+
+	log_file(&format!("remove_custom_provider: removed {}", provider_id));
 	broadcast_to_all_sidecars(&state, "reload_providers");
 	Ok(())
 }

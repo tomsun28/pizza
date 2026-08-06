@@ -59,6 +59,7 @@ export function buildLlmClientFromStreamFn(
 			// runtime changes via /thinking or setThinkingLevel() are honored.
 			// pi-ai's streamSimple expects this on options.reasoning.
 			const reasoning = options?.getThinkingLevel?.();
+			const providerReasoning = reasoning && reasoning !== "off" ? reasoning : undefined;
 			const streamTools = tools?.map((tool) => ({
 				name: tool.name,
 				description: tool.description ?? "",
@@ -98,7 +99,7 @@ export function buildLlmClientFromStreamFn(
 					// Pass the live thinking level so pi-ai maps it into the provider
 					// payload (zai/openrouter/etc.). Without this, streamSimple sees
 					// options.reasoning === undefined and always emits thinking disabled.
-					...(reasoning !== undefined ? { reasoning } : {}),
+					...(providerReasoning !== undefined ? { reasoning: providerReasoning } : {}),
 				} as any,
 			);
 
