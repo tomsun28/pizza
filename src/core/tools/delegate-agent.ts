@@ -38,18 +38,26 @@ export type DelegateAgentAction = (typeof DELEGATE_AGENT_ACTIONS)[number];
  *
  *   delegate_agent list
  *   delegate_agent run <cwd> <task>
+ *   delegate_agent run --name <workspace-name> --task "..."
  *   delegate_agent run --cwd <path> --task "..." [--timeout 120000]
  */
 const delegateAgentSchema = Type.Object({
 	action: Type.Union([Type.Literal("list"), Type.Literal("run")], {
 		description:
 			"list: show known workspace agents (project directories previously visited). " +
-			"run: delegate a task to a sub-agent in a target project directory (requires cwd and task).",
+			"run: delegate a task to a sub-agent in a target project directory (requires cwd or name, and task).",
 	}),
 	cwd: Type.Optional(
 		Type.String({
 			description:
-				"Target project directory for the sub-agent (required for run). Relative paths are resolved. Omit for list.",
+				"Target project directory for the sub-agent (alternative to --name). Relative paths are resolved. Omit for list.",
+		}),
+	),
+	name: Type.Optional(
+		Type.String({
+			description:
+				"Workspace name — the last path component of a known workspace (e.g. \"web\" for /path/to/web). " +
+				"Alternative to --cwd; resolved via _delegate_agent list. Case-insensitive, matches uniquely.",
 		}),
 	),
 	task: Type.Optional(
@@ -107,13 +115,34 @@ function formatWorkspaceList(workspaces: KnownWorkspace[]): string {
 	const lines = workspaces.map((ws, index) => {
 		const last = ws.last_accessed_at > 0 ? new Date(ws.last_accessed_at).toISOString() : "unknown";
 		const db = ws.has_event_db ? "yes" : "no";
-		return `${index + 1}. cwd: ${ws.cwd}\n   workspace_id: ${ws.workspace_id}\n   last_accessed: ${last}\n   has_event_db: ${db}`;
+		const name = ws.cwd.replace(/\/+$/, "").split("/").pop() ?? ws.cwd;
+		return `${index + 1}. name: ${name}\n   cwd: ${ws.cwd}\n   workspace_id: ${ws.workspace_id}\n   last_accessed: ${last}\n   has_event_db: ${db}`;
 	});
-	return `Known workspace agents (${workspaces.length}):\n\n${lines.join("\n\n")}`;
+	return `Known workspace agents (${workspaces.length}):\n\n${lines.join("\n\n")}\n\nUse --name <name> or --cwd <cwd> with \`_delegate_agent run\`.`;
 }
 
 function textResult(text: string): { content: Array<{ type: "text"; text: string }>; details: undefined } {
 	return { content: [{ type: "text", text }], details: undefined };
+}
+
+/**
+ * Resolve a workspace name (the last path component, e.g. "web" for
+ * "/Users/tom/code/web") to its full cwd by looking up known workspaces.
+ *
+ * Matching is case-insensitive. If multiple workspaces share the same last
+ * component, the most recently accessed one wins (listKnownWorkspaces sorts
+ * by last_accessed_at descending). Returns null if no match is found.
+ */
+function resolveWorkspaceName(name: string, agentDir: string, excludeCwd?: string): string | null {
+	const workspaces = listKnownWorkspaces(agentDir, excludeCwd);
+	const lower = name.toLowerCase();
+	for (const ws of workspaces) {
+		const lastComponent = ws.cwd.replace(/\/+$/, "").split("/").pop() ?? ws.cwd;
+		if (lastComponent.toLowerCase() === lower) {
+			return ws.cwd;
+		}
+	}
+	return null;
 }
 
 /**
@@ -133,15 +162,16 @@ export function createDelegateAgentToolDefinition(
 		name: "delegate_agent",
 		label: "delegate_agent",
 		description:
-			"Delegate a task to a sub-agent running in another project directory. " +
+			"Delegate a task to a sub-agent running in another project directory (workspace). " +
 			"The sub-agent runs in its own workspace (independent event store / compaction) and " +
 			"only its final reply is returned — intermediate output does not enter this context. " +
-			"Use the `list` action to discover which project directories are available as delegation targets, " +
-			"then `run` with a target cwd and task.",
-		promptSnippet: "_delegate_agent: run a sub-agent in another project directory and return only its final reply",
+			"Use the `list` action to discover which workspaces are available as delegation targets, " +
+			"then `run` with either `--name` (workspace name from list) or `--cwd` (project directory), plus a task.",
+		promptSnippet: "_delegate_agent: run a sub-agent in another workspace and return only its final reply",
 		promptGuidelines: [
 			"Use _delegate_agent to hand cross-project tasks to a sub-agent instead of handling another project's code in this context.",
-			"Before delegating to an unfamiliar project, call `_delegate_agent list` to see which project directories are known.",
+			"Before delegating to an unfamiliar project, call `_delegate_agent list` to see which workspaces are known. The list shows each workspace's name (last path component), cwd, and metadata.",
+			"You can use `--name <name>` (the workspace name from the list) instead of `--cwd <path>` — both are accepted by `_delegate_agent run`.",
 			"_delegate_agent returns only the sub-agent's final reply — intermediate steps stay out of this context. If you need progress, ask the sub-agent to summarize in its final message.",
 			"_delegate_agent is synchronous and blocks until the sub-agent finishes; prefer it for bounded tasks. Avoid delegating very long-running work.",
 		],
@@ -154,14 +184,34 @@ export function createDelegateAgentToolDefinition(
 			}
 
 			// action === "run"
-			if (!params.cwd || !params.task) {
+			if (!params.task) {
 				return textResult(
-				"_delegate_agent run requires both `cwd` and `task`. " +
-					"Use `_delegate_agent list` to see known project directories, or provide an explicit cwd.",
+				"_delegate_agent run requires a `task`. " +
+					"Also provide either `cwd` (a project directory) or `name` (a workspace name from `_delegate_agent list`).",
+				);
+			}
+			if (!params.cwd && !params.name) {
+				return textResult(
+				"_delegate_agent run requires either `cwd` (a project directory) or `name` (a workspace name). " +
+					"Use `_delegate_agent list` to see known workspaces and their names.",
 				);
 			}
 
-			const targetCwd = resolve(params.cwd);
+			// Resolve the target cwd: if --name is given, look it up in known
+			// workspaces; otherwise use --cwd directly.
+			let targetCwd: string;
+			if (params.name) {
+				const resolved = resolveWorkspaceName(params.name, agentDir, mainDir);
+				if (!resolved) {
+					return textResult(
+						`Workspace "${params.name}" not found. Use \`_delegate_agent list\` to see known workspaces ` +
+						"(the name is the last path component of each cwd).",
+					);
+				}
+				targetCwd = resolved;
+			} else {
+				targetCwd = resolve(params.cwd!);
+			}
 			const timeout = params.timeout ?? 120_000;
 
 			const { cliPath, binary } = resolveCliSpawn();

@@ -79,6 +79,7 @@ export type ParsedBuiltinToolInput =
 			input: {
 				action: "list" | "run";
 				cwd?: string;
+				name?: string;
 				task?: string;
 				timeout?: number;
 			};
@@ -379,20 +380,23 @@ type DelegateAgentAction = (typeof DELEGATE_AGENT_ACTIONS)[number];
  * Parse the `delegate_agent` command's args:
  *   delegate_agent list
  *   delegate_agent run <cwd> <task>
+ *   delegate_agent run --name <workspace-name> --task "..."
  *   delegate_agent run --cwd <path> --task "..." [--timeout N]
  *
  * For `run`, the first positional after the action is the cwd and the rest is
- * joined into the task; `--cwd` / `--task` flags override the positionals. A
- * heredoc (when present) supplies the task for `run`.
+ * joined into the task; `--cwd` / `--name` / `--task` flags override the
+ * positionals. A heredoc (when present) supplies the task for `run`.
  */
 function parseDelegateAgentInput(args: string[], heredoc?: string): {
 	action: DelegateAgentAction;
 	cwd?: string;
+	name?: string;
 	task?: string;
 	timeout?: number;
 } {
 	let action: DelegateAgentAction | undefined;
 	let cwd: string | undefined;
+	let name: string | undefined;
 	let task: string | undefined;
 	let timeout: number | undefined;
 	const positional: string[] = [];
@@ -401,6 +405,8 @@ function parseDelegateAgentInput(args: string[], heredoc?: string): {
 		const arg = args[i];
 		if (arg === "--cwd" || arg === "-d") {
 			cwd = args[++i];
+		} else if (arg === "--name" || arg === "-n") {
+			name = args[++i];
 		} else if (arg === "--task" || arg === "-t") {
 			task = args[++i];
 		} else if (arg === "--timeout") {
@@ -427,7 +433,7 @@ function parseDelegateAgentInput(args: string[], heredoc?: string): {
 	// For `run`, the remaining positionals are <cwd> <task...>.
 	if (action === "run") {
 		const rest = positional.slice(1);
-		if (cwd === undefined && rest.length > 0) {
+		if (cwd === undefined && name === undefined && rest.length > 0) {
 			cwd = rest[0];
 		}
 		if (task === undefined) {
@@ -439,7 +445,7 @@ function parseDelegateAgentInput(args: string[], heredoc?: string): {
 		}
 	}
 
-	return { action, cwd, task, timeout };
+	return { action, cwd, name, task, timeout };
 }
 
 function parseSkillInput(args: string[]): {
@@ -785,22 +791,23 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 			].join("\n");
 		case "delegate_agent":
 			return [
-				"_delegate_agent - Delegate a task to a sub-agent in another project directory",
+				"_delegate_agent - Delegate a task to a sub-agent in another workspace",
 				"",
 				"Description:",
-				"  Hand a bounded task to a sub-agent running in another project directory. The",
-				"  sub-agent runs in its own workspace (independent event store / compaction) and",
+				"  Hand a bounded task to a sub-agent running in another project directory (workspace).",
+				"  The sub-agent runs in its own workspace (independent event store / compaction) and",
 				"  only its final reply is returned — intermediate output stays out of this context.",
 				"  Only available to the main (persistent) agent.",
 				"",
 				"Actions:",
-				"  list              Show known workspace agents (project directories previously visited).",
+				"  list              Show known workspaces (name, cwd, workspace_id, last_accessed, has_event_db).",
 				"  run <cwd> <task>  Delegate a task to a sub-agent in <cwd>; blocks until it finishes.",
 				"",
 				"Parameters:",
-				"  cwd               Target project directory (required for run). Resolved from the working directory.",
+				"  cwd               Target project directory (required for run, unless --name is given).",
 				"  task              Task description to hand to the sub-agent (required for run).",
 				"  --cwd, -d         Target project directory (alternative to positional).",
+				"  --name, -n        Workspace name (last path component from `list`). Alternative to --cwd.",
 				"  --task, -t        Task description (alternative to positional).",
 				"  --timeout         Timeout in milliseconds (default 120000).",
 				"  <<EOF             Heredoc form for the task (multi-line).",
@@ -808,6 +815,7 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"",
 				"Examples:",
 				"  _delegate_agent list",
+				"  _delegate_agent run --name web --task \"fix the auth bug\"",
 				"  _delegate_agent run ../other-project \"fix the auth bug and summarize the change\"",
 				"  _delegate_agent run --cwd ../other-project --task \"fix the auth bug\" --timeout 60000",
 				"  _delegate_agent run ../other-project <<EOF",

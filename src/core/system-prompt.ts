@@ -253,6 +253,8 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		"  _session_split [reason] [name]                Split promptly when the user starts a new task or topic",
 		"  _history_tree <action> [session_id]           Browse past sessions: list, view, jump, fork",
 		"  _delegate_agent <action> [cwd] [task]         Main agent only: list known workspaces, run a sub-agent",
+		"  _delegate_agent run --name <name> --task \"..\"  Use workspace name (last path component) instead of cwd",
+		"  _skill <action> [--name <name>] [--file <f>]   Discover and load Agent Skills: list, load, read",
 		"",
 		"IMPORTANT: built-in commands are pure single commands. They do NOT support shell operators",
 		"(no pipes |, redirects > <, chaining ; & &&, command substitution, or newlines). A built-in",

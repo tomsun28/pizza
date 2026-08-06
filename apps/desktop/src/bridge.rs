@@ -1604,7 +1604,9 @@ fn normalize_provider_id(value: &str) -> Result<String, String> {
 		.chars()
 		.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.');
 	if !valid {
-		return Err("Provider id may only contain letters, numbers, dot, dash, and underscore".to_string());
+		return Err(
+			"Provider id may only contain letters, numbers, dot, dash, and underscore".to_string(),
+		);
 	}
 	Ok(trimmed.to_string())
 }
@@ -1986,7 +1988,9 @@ pub async fn save_custom_provider(
 }
 
 #[tauri::command]
-pub async fn test_custom_provider(input: CustomProviderInput) -> Result<CustomProviderTestResult, String> {
+pub async fn test_custom_provider(
+	input: CustomProviderInput,
+) -> Result<CustomProviderTestResult, String> {
 	let protocol = input.protocol.trim().to_string();
 	let _api = api_for_protocol(&protocol)?;
 	let base_url = normalize_base_url(&input.base_url)?;
@@ -2008,11 +2012,14 @@ pub async fn test_custom_provider(input: CustomProviderInput) -> Result<CustomPr
 			"max_tokens": 32,
 			"messages": [{ "role": "user", "content": "hi" }]
 		});
-		(url.clone(), client
-			.post(url)
-			.header("x-api-key", api_key)
-			.header("anthropic-version", "2023-06-01")
-			.json(&body))
+		(
+			url.clone(),
+			client
+				.post(url)
+				.header("x-api-key", api_key)
+				.header("anthropic-version", "2023-06-01")
+				.json(&body),
+		)
 	} else {
 		let url = join_api_path(&base_url, "/chat/completions");
 		let body = serde_json::json!({
@@ -2021,10 +2028,10 @@ pub async fn test_custom_provider(input: CustomProviderInput) -> Result<CustomPr
 			"stream": false,
 			"messages": [{ "role": "user", "content": "hi" }]
 		});
-		(url.clone(), client
-			.post(url)
-			.bearer_auth(api_key)
-			.json(&body))
+		(
+			url.clone(),
+			client.post(url).bearer_auth(api_key).json(&body),
+		)
 	};
 
 	let response = match request.send().await {
@@ -2788,7 +2795,15 @@ pub async fn git_branches(cwd: String) -> Result<Vec<GitBranchEntry>, String> {
 	}
 
 	// `--all` includes remote-tracking branches; `-z` NUL-separates for safe parsing.
-	let raw = run_git_capture(&cwd, &["branch", "--all", "-z", "--format=%(HEAD) %(refname:short) %(upstream:short)"])?;
+	let raw = run_git_capture(
+		&cwd,
+		&[
+			"branch",
+			"--all",
+			"-z",
+			"--format=%(HEAD) %(refname:short) %(upstream:short)",
+		],
+	)?;
 	let mut branches = Vec::new();
 	for field in raw.split('\0').filter(|f| !f.is_empty()) {
 		let trimmed = field.trim();
@@ -2804,7 +2819,8 @@ pub async fn git_branches(cwd: String) -> Result<Vec<GitBranchEntry>, String> {
 			continue;
 		}
 		let is_current = head_marker == "*";
-		let is_remote = name.contains('/') && (name.starts_with("origin/") || name.starts_with("remotes/"));
+		let is_remote =
+			name.contains('/') && (name.starts_with("origin/") || name.starts_with("remotes/"));
 		// Strip the remotes/ prefix for display.
 		let clean_name = name.strip_prefix("remotes/").unwrap_or(name).to_string();
 		branches.push(GitBranchEntry {

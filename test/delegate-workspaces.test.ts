@@ -170,7 +170,7 @@ describe("createDelegateAgentToolDefinition", () => {
 
 		expect(result.content).toHaveLength(1);
 		const text = (result.content[0] as { type: string; text: string }).text;
-		expect(text).toContain("requires both");
+		expect(text).toContain("requires a `task`");
 	});
 
 	test("run with cwd+task but a non-existent target returns an error result (no throw)", async () => {
