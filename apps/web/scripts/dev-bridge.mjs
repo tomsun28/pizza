@@ -39,6 +39,10 @@ function authPath() {
 	return path.join(os.homedir(), ".pizza", "agent", "auth.json");
 }
 
+function modelsPath() {
+	return path.join(os.homedir(), ".pizza", "agent", "models.json");
+}
+
 function readAuth() {
 	try {
 		const raw = fs.readFileSync(authPath(), "utf8");
@@ -55,9 +59,259 @@ function writeAuth(data) {
 	fs.writeFileSync(authPath(), JSON.stringify(data, null, 2), { mode: 0o600 });
 }
 
+function readModelsConfig() {
+	try {
+		const raw = fs.readFileSync(modelsPath(), "utf8");
+		const parsed = JSON.parse(raw);
+		return parsed && typeof parsed === "object" ? parsed : {};
+	} catch {
+		return {};
+	}
+}
+
+function writeModelsConfig(data) {
+	const dir = path.dirname(modelsPath());
+	fs.mkdirSync(dir, { recursive: true });
+	fs.writeFileSync(modelsPath(), JSON.stringify(data, null, 2), { mode: 0o600 });
+}
+
+function normalizeProviderId(value) {
+	const trimmed = String(value ?? "").trim();
+	if (!trimmed) throw new Error("provider id required");
+	if (!/^[A-Za-z0-9_.-]+$/.test(trimmed)) {
+		throw new Error("provider id may only contain letters, numbers, dot, dash, and underscore");
+	}
+	return trimmed;
+}
+
+function normalizeBaseUrl(value) {
+	const trimmed = String(value ?? "").trim().replace(/\/+$/, "");
+	if (!/^https?:\/\//.test(trimmed)) throw new Error("baseUrl must start with http:// or https://");
+	if (/\s/.test(trimmed)) throw new Error("baseUrl cannot contain whitespace");
+	return trimmed;
+}
+
+function apiForProtocol(protocol) {
+	if (protocol === "openai") return "openai-completions";
+	if (protocol === "anthropic") return "anthropic-messages";
+	throw new Error(`unsupported protocol: ${protocol}`);
+}
+
+function firstCustomModelId(input) {
+	const model = (input.models ?? [])
+		.map((item) => String(item.id ?? "").trim())
+		.find(Boolean);
+	if (!model) throw new Error("at least one model id required");
+	return model;
+}
+
+function joinApiPath(baseUrl, suffix) {
+	const base = normalizeBaseUrl(baseUrl);
+	if (base.endsWith("/v1") && suffix.startsWith("/v1/")) {
+		return base + suffix.slice(3);
+	}
+	return base + suffix;
+}
+
+function shortenResponseText(value) {
+	const text = String(value ?? "").trim();
+	return text.length > 360 ? `${text.slice(0, 360)}...` : text;
+}
+
+function extractErrorText(value) {
+	const error = value?.error;
+	if (error?.message) return shortenResponseText(error.message);
+	if (error?.type) return shortenResponseText(error.type);
+	if (value?.message) return shortenResponseText(value.message);
+	return null;
+}
+
+function extractAnthropicText(value) {
+	const blocks = Array.isArray(value?.content) ? value.content : [];
+	const block = blocks.find((item) => typeof item?.text === "string");
+	return block ? shortenResponseText(block.text) : null;
+}
+
+function extractOpenAIText(value) {
+	const content = value?.choices?.[0]?.message?.content;
+	return typeof content === "string" ? shortenResponseText(content) : null;
+}
+
+async function testCustomProvider(input) {
+	const protocol = input.protocol;
+	apiForProtocol(protocol);
+	const baseUrl = normalizeBaseUrl(input.base_url ?? input.baseUrl);
+	const apiKey = String(input.api_key ?? input.apiKey ?? "").trim();
+	if (!apiKey) throw new Error("apiKey required");
+	const model = firstCustomModelId(input);
+	const started = Date.now();
+
+	const request =
+		protocol === "anthropic"
+			? {
+				url: joinApiPath(baseUrl, "/v1/messages"),
+				headers: {
+					"content-type": "application/json",
+					"x-api-key": apiKey,
+					"anthropic-version": "2023-06-01",
+				},
+				body: {
+					model,
+					max_tokens: 32,
+					messages: [{ role: "user", content: "hi" }],
+				},
+			}
+			: {
+				url: joinApiPath(baseUrl, "/chat/completions"),
+				headers: {
+					"content-type": "application/json",
+					authorization: `Bearer ${apiKey}`,
+				},
+				body: {
+					model,
+					max_tokens: 32,
+					stream: false,
+					messages: [{ role: "user", content: "hi" }],
+				},
+			};
+
+	let response;
+	try {
+		response = await fetch(request.url, {
+			method: "POST",
+			headers: request.headers,
+			body: JSON.stringify(request.body),
+			signal: AbortSignal.timeout(60000),
+		});
+	} catch (error) {
+		return {
+			ok: false,
+			protocol,
+			model,
+			message: `Failed to connect to API: ${error.message}`,
+			response: null,
+			status: null,
+			duration_ms: Date.now() - started,
+		};
+	}
+
+	const rawText = await response.text();
+	let parsed = null;
+	try {
+		parsed = rawText ? JSON.parse(rawText) : null;
+	} catch {}
+
+	if (!response.ok) {
+		const detail = extractErrorText(parsed) ?? shortenResponseText(rawText);
+		return {
+			ok: false,
+			protocol,
+			model,
+			message: `API returned HTTP ${response.status}: ${detail}`,
+			response: null,
+			status: response.status,
+			duration_ms: Date.now() - started,
+		};
+	}
+
+	const text = protocol === "anthropic" ? extractAnthropicText(parsed) : extractOpenAIText(parsed);
+	if (text) {
+		return {
+			ok: true,
+			protocol,
+			model,
+			message: "Test completed successfully",
+			response: text,
+			status: response.status,
+			duration_ms: Date.now() - started,
+		};
+	}
+	return {
+		ok: false,
+		protocol,
+		model,
+		message: `API connected at ${request.url}, but the response format did not match the selected protocol.`,
+		response: shortenResponseText(rawText),
+		status: response.status,
+		duration_ms: Date.now() - started,
+	};
+}
+
+function protocolForApi(api) {
+	if (api === "openai-completions" || api === "openai-responses") return "openai";
+	if (api === "anthropic-messages") return "anthropic";
+	return null;
+}
+
+function customProviderInfo(id, config, auth) {
+	if (!config || typeof config !== "object") return null;
+	const models = Array.isArray(config.models) ? config.models : [];
+	if (models.length === 0) return null;
+	const cred = auth[id];
+	return {
+		id,
+		name: typeof config.name === "string" && config.name.trim() ? config.name : id,
+		has_api_key: cred != null,
+		auth_type: cred?.type ?? null,
+		is_custom: true,
+		protocol: protocolForApi(config.api),
+		model_count: models.length,
+	};
+}
+
+function saveCustomProvider(input) {
+	const providerId = normalizeProviderId(input.id);
+	const baseUrl = normalizeBaseUrl(input.base_url ?? input.baseUrl);
+	const apiKey = String(input.api_key ?? input.apiKey ?? "").trim();
+	if (!apiKey) throw new Error("apiKey required");
+	const models = (input.models ?? [])
+		.map((model) => ({
+			id: String(model.id ?? "").trim(),
+			name: String(model.name ?? model.id ?? "").trim(),
+		}))
+		.filter((model) => model.id);
+	if (models.length === 0) throw new Error("at least one model id required");
+
+	const modelsConfig = readModelsConfig();
+	const providers = modelsConfig.providers && typeof modelsConfig.providers === "object" ? modelsConfig.providers : {};
+	providers[providerId] = {
+		name: String(input.name ?? providerId).trim() || providerId,
+		baseUrl,
+		api: apiForProtocol(input.protocol),
+		models: models.map((model) => ({
+			id: model.id,
+			name: model.name || model.id,
+			reasoning: false,
+			input: ["text"],
+			contextWindow: 128000,
+			maxTokens: 16384,
+		})),
+	};
+	modelsConfig.providers = providers;
+	writeModelsConfig(modelsConfig);
+
+	const auth = readAuth();
+	auth[providerId] = { type: "api_key", key: apiKey };
+	writeAuth(auth);
+}
+
+function removeCustomProvider(provider) {
+	const providerId = normalizeProviderId(provider);
+	const modelsConfig = readModelsConfig();
+	const providers = modelsConfig.providers && typeof modelsConfig.providers === "object" ? modelsConfig.providers : {};
+	delete providers[providerId];
+	modelsConfig.providers = providers;
+	writeModelsConfig(modelsConfig);
+
+	const auth = readAuth();
+	delete auth[providerId];
+	writeAuth(auth);
+}
+
 async function listProviders() {
 	const auth = readAuth();
 	const names = await loadProviderNames();
+	const modelProviders = readModelsConfig().providers ?? {};
 	// Stable display order: built-in providers sorted by id, then custom ones.
 	const builtinIds = Object.keys(names).sort();
 	const providers = [];
@@ -68,11 +322,27 @@ async function listProviders() {
 			name: names[id] ?? id,
 			has_api_key: cred != null,
 			auth_type: cred?.type ?? null,
+			is_custom: false,
+			protocol: null,
+			model_count: 0,
 		});
 	}
+	for (const id of Object.keys(modelProviders).sort()) {
+		if (names[id]) continue;
+		const info = customProviderInfo(id, modelProviders[id], auth);
+		if (info) providers.push(info);
+	}
 	for (const key of Object.keys(auth)) {
-		if (!names[key]) {
-			providers.push({ id: key, name: key, has_api_key: true, auth_type: auth[key]?.type ?? null });
+		if (!names[key] && !modelProviders[key]) {
+			providers.push({
+				id: key,
+				name: key,
+				has_api_key: true,
+				auth_type: auth[key]?.type ?? null,
+				is_custom: true,
+				protocol: null,
+				model_count: 0,
+			});
 		}
 	}
 	return providers;
@@ -262,7 +532,48 @@ export function pizzaRpcBridge() {
 							auth[provider] = { type: "api_key", key: apiKey };
 						}
 						writeAuth(auth);
+						if (child?.stdin?.writable) {
+							child.stdin.write(JSON.stringify({ type: "reload_providers", id: `providers-${Date.now()}` }) + "\n");
+						}
 						sendJson(res, 200, { ok: true });
+					}).catch((e) => sendJson(res, 400, { error: e.message }));
+					return;
+				}
+				res.statusCode = 405;
+				res.end("Method Not Allowed");
+			});
+
+			server.middlewares.use("/rpc/custom-provider", (req, res) => {
+				if (req.method === "POST") {
+					readJsonBody(req).then((body) => {
+						saveCustomProvider(body);
+						if (child?.stdin?.writable) {
+							child.stdin.write(JSON.stringify({ type: "reload_providers", id: `custom-provider-${Date.now()}` }) + "\n");
+						}
+						sendJson(res, 200, { ok: true });
+					}).catch((e) => sendJson(res, 400, { error: e.message }));
+					return;
+				}
+				if (req.method === "DELETE") {
+					readJsonBody(req).then((body) => {
+						if (!body.provider) return sendJson(res, 400, { error: "provider required" });
+						removeCustomProvider(body.provider);
+						if (child?.stdin?.writable) {
+							child.stdin.write(JSON.stringify({ type: "reload_providers", id: `custom-provider-${Date.now()}` }) + "\n");
+						}
+						sendJson(res, 200, { ok: true });
+					}).catch((e) => sendJson(res, 400, { error: e.message }));
+					return;
+				}
+				res.statusCode = 405;
+				res.end("Method Not Allowed");
+			});
+
+			server.middlewares.use("/rpc/custom-provider/test", (req, res) => {
+				if (req.method === "POST") {
+					readJsonBody(req).then(async (body) => {
+						const result = await testCustomProvider(body);
+						sendJson(res, 200, result);
 					}).catch((e) => sendJson(res, 400, { error: e.message }));
 					return;
 				}
