@@ -20,6 +20,11 @@ export {
 export { withFileMutationQueue } from "./file-mutation-queue.js";
 export { createHistoryTreeToolDefinition, type HistoryTreeToolInput } from "./history-tree.js";
 export {
+	createSkillToolDefinition,
+	type SkillToolInput,
+	type SkillToolOptions,
+} from "./skill.js";
+export {
 	createFindTool,
 	createFindToolDefinition,
 	type FindOperations,

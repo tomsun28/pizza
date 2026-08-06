@@ -335,6 +335,14 @@ export async function createSessionFacade(
 	if (agentDir) {
 		cliToolOptions.delegateAgent = { agentDir, mainDir };
 	}
+	// The `skill` built-in command is wired into the cli tool whenever skills
+	// are available — it lets the LLM discover and load skills on demand via
+	// `_skill list` / `_skill load` / `_skill read` instead of having the full
+	// skills list injected into the system prompt.
+	const loadedSkills = resourceLoader.getSkills().skills;
+	if (loadedSkills.length > 0) {
+		cliToolOptions.skill = { skills: loadedSkills };
+	}
 	const toolOptions = {
 		read: { autoResizeImages },
 		cli: cliToolOptions,

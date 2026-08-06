@@ -82,6 +82,15 @@ export type ParsedBuiltinToolInput =
 				task?: string;
 				timeout?: number;
 			};
+	  }
+	| {
+			command: "skill";
+			input: {
+				action: "list" | "load" | "read";
+				name?: string;
+				query?: string;
+				file?: string;
+			};
 	  };
 
 /**
@@ -174,6 +183,8 @@ export function parseBuiltinToolInput(
 			return { command: "history_tree", input: parseHistoryTreeInput(args) };
 		case "delegate_agent":
 			return { command: "delegate_agent", input: parseDelegateAgentInput(args, heredoc) };
+		case "skill":
+			return { command: "skill", input: parseSkillInput(args) };
 		default:
 			return null;
 	}
@@ -429,6 +440,64 @@ function parseDelegateAgentInput(args: string[], heredoc?: string): {
 	}
 
 	return { action, cwd, task, timeout };
+}
+
+function parseSkillInput(args: string[]): {
+	action: "list" | "load" | "read";
+	name?: string;
+	query?: string;
+	file?: string;
+} {
+	let action: "list" | "load" | "read" | undefined;
+	let name: string | undefined;
+	let query: string | undefined;
+	let file: string | undefined;
+	const positional: string[] = [];
+
+	for (let i = 0; i < args.length; i++) {
+		const arg = args[i];
+		if (arg === "--name" || arg === "-n") {
+			name = args[++i];
+		} else if (arg === "--query" || arg === "-q") {
+			query = args[++i];
+		} else if (arg === "--file" || arg === "-f") {
+			file = args[++i];
+		} else {
+			positional.push(arg);
+		}
+	}
+
+	if (positional.length > 0 && action === undefined) {
+		const candidate = positional[0].toLowerCase();
+		if (candidate === "list" || candidate === "load" || candidate === "read") {
+			action = candidate;
+		} else {
+			throw new Error(
+				`skill: unknown action "${positional[0]}". Valid actions: list, load, read`,
+			);
+		}
+	}
+
+	if (!action) {
+		throw new Error(`skill: action required. Valid actions: list, load, read`);
+	}
+
+	// For load: positional[1] is the skill name.
+	// For read: positional[1] is the skill name, positional[2] is the file.
+	if (action === "load") {
+		if (name === undefined && positional.length > 1) {
+			name = positional[1];
+		}
+	} else if (action === "read") {
+		if (name === undefined && positional.length > 1) {
+			name = positional[1];
+		}
+		if (file === undefined && positional.length > 2) {
+			file = positional[2];
+		}
+	}
+
+	return { action, name, query, file };
 }
 
 function parseEditInput(
@@ -745,6 +814,35 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"  Refactor the auth module and write a short summary of what changed.",
 				"  EOF",
 			].join("\n");
+		case "skill":
+			return [
+				"_skill - Discover and load Agent Skills",
+				"",
+				"Description:",
+				"  Skills provide specialized instructions for specific tasks. Use list to discover",
+				"  available skills, load to read a skill's full SKILL.md instructions, and read to",
+				"  access supplementary files referenced by a skill (resolved relative to the skill's",
+				"  own directory, with path traversal protection).",
+				"",
+				"Actions:",
+				"  list              Show all available skills (name, description, source, location).",
+				"  load <name>       Load and return the full content of a skill's SKILL.md.",
+				"  read <name> <file> Read a supplementary file from a skill's directory.",
+				"",
+				"Parameters:",
+				"  --name, -n        Skill name (required for load and read).",
+				"  --query, -q       Optional filter for list (matches name or description, case-insensitive).",
+				"  --file, -f        Relative file path within a skill's directory (required for read).",
+				"  -h, --help        Show this help.",
+				"",
+				"Examples:",
+				"  _skill list",
+				"  _skill list --query \"git\"",
+				"  _skill load --name devin-cli",
+				"  _skill load devin-cli",
+				"  _skill read --name devin-cli --file docs/config.md",
+				"  _skill read devin-cli docs/config.md",
+			].join("\n");
 		default:
 			return undefined;
 	}
@@ -965,6 +1063,13 @@ export async function executeBuiltinCommand(
 				exitCode: 1,
 			};
 		}
+		case "skill": {
+			return {
+				stdout: "",
+				stderr: "skill requires loaded skills and is executed through the cli tool.",
+				exitCode: 1,
+			};
+		}
 
 		default:
 			return {
@@ -975,7 +1080,7 @@ export async function executeBuiltinCommand(
 	}
 }
 
-export const BUILTIN_COMMANDS = ["_read", "_write", "_edit", "_session_split", "_history_tree", "_delegate_agent"] as const;
+export const BUILTIN_COMMANDS = ["_read", "_write", "_edit", "_session_split", "_history_tree", "_delegate_agent", "_skill"] as const;
 export type BuiltinCommand = (typeof BUILTIN_COMMANDS)[number];
 
 // ============================================================================
