@@ -3,11 +3,12 @@
  * Lists categorised items (files, branches, workspaces, skills, scheduled
  * tasks) that can be inserted as references into the message.
  *
- * The Composer owns the data fetching and the `@` detection; this component
- * is purely presentational: it renders a filtered, keyboard-navigable list
- * and calls `onSelect` when the user picks an item.
+ * The Composer owns the data fetching, filtering, and keyboard navigation;
+ * this component is purely presentational. It receives an already-filtered
+ * flat list and a `selectedIndex`, and calls `onSelect`/`onNavigate` on user
+ * interaction.
  */
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import {
 	File as FileIcon,
@@ -34,18 +35,14 @@ export interface MentionItem {
 }
 
 interface MentionMenuProps {
-	/** All items gathered by the Composer, across every category. */
+	/** Already-filtered flat list of items to display. */
 	items: MentionItem[];
-	/** The active filter query (text after `@`). */
-	query: string;
-	/** Currently selected index (controlled). */
+	/** Currently selected index (controlled by the Composer). */
 	selectedIndex: number;
 	/** Called when the user picks an item (click or Enter). */
 	onSelect: (item: MentionItem) => void;
-	/** Called when the user navigates with arrow keys. */
+	/** Called when the user hovers an item with the mouse. */
 	onNavigate: (index: number) => void;
-	/** Called when the user dismisses the menu (Escape / outside click). */
-	onClose: () => void;
 }
 
 const CATEGORY_ICON: Record<MentionCategory, typeof FileIcon> = {
@@ -64,78 +61,58 @@ const CATEGORY_KEY: Record<MentionCategory, string> = {
 	schedule: "mention.schedules",
 };
 
+/**
+ * Pre-compute the render rows: a flat array of either "header" or "item" rows,
+ * where each "item" row carries its flat index. This avoids the `let runningIndex`
+ * anti-pattern in JSX (which double-counts under React StrictMode) and makes
+ * scrollIntoView target the correct DOM node.
+ */
+type Row =
+	| { kind: "header"; category: MentionCategory; key: string }
+	| { kind: "item"; item: MentionItem; flatIndex: number; key: string };
+
+function buildRows(items: MentionItem[]): Row[] {
+	const rows: Row[] = [];
+	let lastCategory: MentionCategory | null = null;
+	let flatIndex = 0;
+	for (const item of items) {
+		if (item.category !== lastCategory) {
+			rows.push({ kind: "header", category: item.category, key: `header-${item.category}` });
+			lastCategory = item.category;
+		}
+		rows.push({ kind: "item", item, flatIndex, key: `item-${item.category}-${item.label}` });
+		flatIndex++;
+	}
+	return rows;
+}
+
 export function MentionMenu({
 	items,
-	query,
 	selectedIndex,
 	onSelect,
 	onNavigate,
-	onClose,
 }: MentionMenuProps) {
 	const { t } = useTranslation();
-	const listRef = useRef<HTMLDivElement>(null);
+	// Ref store mapping flatIndex → DOM button, for scrollIntoView.
+	const itemRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
 
-	// Filter items by the query (case-insensitive substring on label + description).
-	const filtered = useMemo(() => {
-		const q = query.toLowerCase().trim();
-		if (!q) return items;
-		return items.filter(
-			(item) =>
-				item.label.toLowerCase().includes(q) ||
-				(item.description?.toLowerCase().includes(q) ?? false),
-		);
-	}, [items, query]);
+	// Pre-compute rows once per render (cheap, and avoids StrictMode issues).
+	const rows = buildRows(items);
 
-	// Clamp the selected index whenever the filtered list changes.
-	const clampedIndex = Math.min(selectedIndex, Math.max(0, filtered.length - 1));
+	// Clamp selectedIndex to the valid range of flat items.
+	const itemCount = items.length;
+	const clampedIndex = itemCount > 0 ? Math.min(selectedIndex, itemCount - 1) : 0;
 
-	// Scroll the selected item into view.
+	// Scroll the selected item into view when the index changes.
 	useEffect(() => {
-		const list = listRef.current;
-		if (!list) return;
-		const el = list.children[clampedIndex] as HTMLElement | undefined;
+		const el = itemRefs.current.get(clampedIndex);
 		el?.scrollIntoView({ block: "nearest" });
 	}, [clampedIndex]);
 
-	// Group items by category, preserving filtered order.
-	const grouped = useMemo(() => {
-		const map = new Map<MentionCategory, MentionItem[]>();
-		for (const item of filtered) {
-			const arr = map.get(item.category) ?? [];
-			arr.push(item);
-			map.set(item.category, arr);
-		}
-		return map;
-	}, [filtered]);
+	// Clear the ref map on unmount / before rebuild to avoid stale entries.
+	itemRefs.current.clear();
 
-	// Flat index → item map for keyboard navigation.
-	const flatItems = filtered;
-
-	// Handle keyboard events at the menu level (the Composer also forwards
-	// arrow/enter/escape from the textarea, but this is a safety net for
-	// when the menu itself has focus).
-	useEffect(() => {
-		const onKeyDown = (e: KeyboardEvent) => {
-			if (e.key === "ArrowDown") {
-				e.preventDefault();
-				onNavigate(Math.min(clampedIndex + 1, flatItems.length - 1));
-			} else if (e.key === "ArrowUp") {
-				e.preventDefault();
-				onNavigate(Math.max(clampedIndex - 1, 0));
-			} else if (e.key === "Enter") {
-				e.preventDefault();
-				const item = flatItems[clampedIndex];
-				if (item) onSelect(item);
-			} else if (e.key === "Escape") {
-				e.preventDefault();
-				onClose();
-			}
-		};
-		document.addEventListener("keydown", onKeyDown);
-		return () => document.removeEventListener("keydown", onKeyDown);
-	}, [clampedIndex, flatItems, onNavigate, onSelect, onClose]);
-
-	if (flatItems.length === 0) {
+	if (itemCount === 0) {
 		return (
 			<div className="absolute bottom-full left-0 z-50 mb-2 w-80 rounded-xl border border-border bg-surface p-3 shadow-xl">
 				<div className="flex items-center gap-2 text-xs text-muted">
@@ -146,49 +123,51 @@ export function MentionMenu({
 		);
 	}
 
-	// Build a flat render list with category headers, tracking the running
-	// flat index so we can highlight the selected item.
-	let runningIndex = 0;
-
 	return (
 		<div
-			ref={listRef}
 			className="absolute bottom-full left-0 z-50 mb-2 max-h-72 w-80 overflow-y-auto rounded-xl border border-border bg-surface p-1 shadow-xl"
 		>
-			{Array.from(grouped.entries()).map(([category, categoryItems]) => (
-				<div key={category}>
-					<div className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted">
-						{t(CATEGORY_KEY[category])}
-					</div>
-					{categoryItems.map((item) => {
-						const idx = runningIndex++;
-						const Icon = CATEGORY_ICON[item.category];
-						const isSelected = idx === clampedIndex;
-						return (
-							<button
-								key={`${item.category}:${item.label}`}
-								type="button"
-								onClick={() => onSelect(item)}
-								onMouseEnter={() => onNavigate(idx)}
-								className={cn(
-									"flex w-full items-start gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs transition-colors",
-									isSelected ? "bg-surface-2" : "hover:bg-surface-2",
-								)}
-							>
-								<Icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted" />
-								<span className="min-w-0 flex-1">
-									<span className="block truncate text-fg">{item.label}</span>
-									{item.description && (
-										<span className="block truncate text-[10px] text-muted">
-											{item.description}
-										</span>
-									)}
+			{rows.map((row) => {
+				if (row.kind === "header") {
+					return (
+						<div key={row.key} className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted">
+							{t(CATEGORY_KEY[row.category])}
+						</div>
+					);
+				}
+				const { item, flatIndex } = row;
+				const Icon = CATEGORY_ICON[item.category];
+				const isSelected = flatIndex === clampedIndex;
+				return (
+					<button
+						key={row.key}
+						ref={(el) => {
+							if (el) itemRefs.current.set(flatIndex, el);
+						}}
+						type="button"
+						onClick={() => onSelect(item)}
+						// Use onMouseMove (not onMouseEnter) so the highlight only
+						// changes when the user actually moves the mouse — not when
+						// items re-render under a stationary cursor during keyboard
+						// navigation.
+						onMouseMove={() => onNavigate(flatIndex)}
+						className={cn(
+							"flex w-full items-start gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs transition-colors",
+							isSelected ? "bg-surface-2" : "hover:bg-surface-2",
+						)}
+					>
+						<Icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted" />
+						<span className="min-w-0 flex-1">
+							<span className="block truncate text-fg">{item.label}</span>
+							{item.description && (
+								<span className="block truncate text-[10px] text-muted">
+									{item.description}
 								</span>
-							</button>
-						);
-					})}
-				</div>
-			))}
+							)}
+						</span>
+					</button>
+				);
+			})}
 		</div>
 	);
 }

@@ -263,6 +263,16 @@ export function Composer({
 	const [mentionBranches, setMentionBranches] = useState<GitBranchEntry[]>([]);
 	const [mentionSchedules, setMentionSchedules] = useState<ScheduledTaskSummary[]>([]);
 	const mentionDataLoadedRef = useRef(false);
+	// Track the last mention query so we only reset the selected index when
+	// the query actually changes — not on every cursor re-evaluation.
+	// Initialized to null (not "") so the first `@` (empty query) still
+	// triggers a reset.
+	const mentionQueryRef = useRef<string | null>(null);
+	// Refs mirroring mention state for use inside the textarea onKeyDown
+	// handler — this avoids stale closures when the handler captures values
+	// from a render where data hadn't loaded yet.
+	const mentionActiveRef = useRef(false);
+	const mentionSelectedIndexRef = useRef(0);
 
 	// Only show models whose provider has valid auth. Models without auth
 	// (hasAuth === false) are hidden from the selector entirely — they can't
@@ -421,7 +431,7 @@ export function Composer({
 				category: "skill",
 				label: s.name,
 				description: s.description,
-				insertText: `/${s.command}`,
+				insertText: `@skill:${s.name}`,
 			});
 		}
 
@@ -438,34 +448,72 @@ export function Composer({
 		return items;
 	}, [mentionFiles, mentionBranches, workspaces, skills, mentionSchedules, workspace, t]);
 
+	// Keep refs in sync with state so the onKeyDown handler always sees the
+	// latest values, even if its closure was created during a render where
+	// the data hadn't arrived yet.
+	mentionActiveRef.current = mentionActive;
+	mentionSelectedIndexRef.current = mentionSelectedIndex;
+
+	// Compute the filtered list once and share it between the onKeyDown
+	// handler and the MentionMenu via a ref — this guarantees both use the
+	// same list, even across rapid re-renders.
+	const filteredMentionItems = useMemo(() => {
+		const q = mentionQuery.toLowerCase().trim();
+		if (!q) return mentionItems;
+		return mentionItems.filter(
+			(item) =>
+				item.label.toLowerCase().includes(q) ||
+				(item.description?.toLowerCase().includes(q) ?? false),
+		);
+	}, [mentionItems, mentionQuery]);
+	const filteredMentionItemsRef = useRef(filteredMentionItems);
+	filteredMentionItemsRef.current = filteredMentionItems;
+
+	// Close the mention menu and reset the query ref so the next `@` always
+	// starts with a fresh selected index.
+	const closeMention = useCallback(() => {
+		setMentionActive(false);
+		mentionQueryRef.current = null;
+	}, []);
+
 	// Detect `@` at the start of input or after a whitespace, and track the
-	// query text between `@` and the cursor.
+	// query text between `@` and the cursor. Only resets the selected index
+	// when the query actually changes — so arrow-key navigation (which may
+	// re-trigger detectMention via onKeyUp/onClick) doesn't jump the selection
+	// back to 0 mid-navigation.
 	const detectMention = useCallback((value: string, cursorPos: number) => {
 		// Search backwards from the cursor for an `@` that is either at the
 		// start of the text or preceded by whitespace.
 		const before = value.slice(0, cursorPos);
 		const atIdx = before.lastIndexOf("@");
 		if (atIdx < 0) {
-			setMentionActive(false);
+			closeMention();
 			return;
 		}
 		// `@` must be at position 0 or after a whitespace character.
 		if (atIdx > 0 && !/\s/.test(before[atIdx - 1])) {
-			setMentionActive(false);
+			closeMention();
 			return;
 		}
 		// The query is the text between `@` and the cursor. If it contains
 		// whitespace, the mention is "closed" — stop showing the menu.
 		const query = value.slice(atIdx + 1, cursorPos);
 		if (/\s/.test(query)) {
-			setMentionActive(false);
+			closeMention();
 			return;
 		}
 		setMentionActive(true);
-		setMentionQuery(query);
 		setMentionStart(atIdx);
-		setMentionSelectedIndex(0);
-	}, []);
+		// Only reset the selected index when the query text actually changes.
+		// Uses a ref to avoid nesting setState calls (an anti-pattern that can
+		// cause unexpected re-renders and selection jumps during keyboard nav).
+		if (mentionQueryRef.current !== query) {
+			mentionQueryRef.current = query;
+			setMentionQuery(query);
+			setMentionSelectedIndex(0);
+		}
+		// When the menu closes, reset the ref so the next open always resets.
+	}, [closeMention]);
 
 	// When the mention menu opens, lazily fetch the data it needs.
 	useEffect(() => {
@@ -731,7 +779,7 @@ ${insert}`;
 	// attachment so the agent can read it.
 	const handleMentionSelect = useCallback(
 		(item: MentionItem) => {
-			setMentionActive(false);
+			closeMention();
 			setMentionQuery("");
 			setMentionStart(-1);
 
@@ -759,7 +807,7 @@ ${insert}`;
 				return next;
 			});
 		},
-		[mentionStart, mentionQuery, addPathFiles],
+		[mentionStart, mentionQuery, addPathFiles, closeMention],
 	);
 
 	useEffect(() => {
@@ -1044,35 +1092,37 @@ ${insert}`;
 							onPaste={handlePaste}
 							onKeyDown={(e) => {
 								// When the mention menu is open, intercept navigation keys.
-								if (mentionActive) {
+								// Use refs to read the latest state — the inline handler
+								// closure can be stale if it was created during a render
+								// where the filtered list was still empty (data loading).
+								if (mentionActiveRef.current) {
+									const filtered = filteredMentionItemsRef.current;
 									if (e.key === "ArrowDown") {
 										e.preventDefault();
-										setMentionSelectedIndex((prev) => Math.min(prev + 1, mentionItems.length - 1));
+										e.stopPropagation();
+										if (filtered.length === 0) return;
+										setMentionSelectedIndex((prev) => Math.min(prev + 1, filtered.length - 1));
 										return;
 									}
 									if (e.key === "ArrowUp") {
 										e.preventDefault();
+										e.stopPropagation();
+										if (filtered.length === 0) return;
 										setMentionSelectedIndex((prev) => Math.max(prev - 1, 0));
 										return;
 									}
 									if (e.key === "Enter" || e.key === "Tab") {
 										e.preventDefault();
-										// Find the filtered item at the current index.
-										const q = mentionQuery.toLowerCase().trim();
-										const filtered = q
-											? mentionItems.filter(
-													(item) =>
-														item.label.toLowerCase().includes(q) ||
-														(item.description?.toLowerCase().includes(q) ?? false),
-												)
-											: mentionItems;
-										const item = filtered[Math.min(mentionSelectedIndex, filtered.length - 1)];
+										e.stopPropagation();
+										if (filtered.length === 0) return;
+										const idx = Math.min(mentionSelectedIndexRef.current, filtered.length - 1);
+										const item = filtered[idx];
 										if (item) handleMentionSelect(item);
 										return;
 									}
 									if (e.key === "Escape") {
 										e.preventDefault();
-										setMentionActive(false);
+										closeMention();
 										return;
 									}
 								}
@@ -1084,12 +1134,10 @@ ${insert}`;
 						/>
 						{mentionActive && (
 							<MentionMenu
-								items={mentionItems}
-								query={mentionQuery}
+								items={filteredMentionItems}
 								selectedIndex={mentionSelectedIndex}
 								onSelect={handleMentionSelect}
 								onNavigate={setMentionSelectedIndex}
-								onClose={() => setMentionActive(false)}
 							/>
 						)}
 					</div>
