@@ -34,6 +34,7 @@ import { createReadToolDefinition, type ReadToolDetails, type ReadToolInput, typ
 import { createHistoryTreeToolDefinition, type HistoryTreeToolInput } from "./history-tree.js";
 import { createSessionSplitToolDefinition, type SessionSplitToolInput } from "./session-split.js";
 import { createDelegateAgentToolDefinition, type DelegateAgentToolInput, type DelegateAgentToolOptions } from "./delegate-agent.js";
+import { createSkillToolDefinition, type SkillToolInput, type SkillToolOptions } from "./skill.js";
 import { createWriteToolDefinition, type WriteToolInput, type WriteToolOptions } from "./write.js";
 
 /**
@@ -86,6 +87,11 @@ export type BashBuiltinDetails =
 	| {
 			name: "delegate_agent";
 			args: DelegateAgentToolInput;
+			details?: undefined;
+	  }
+	| {
+			name: "skill";
+			args: SkillToolInput;
 			details?: undefined;
 	  };
 
@@ -208,6 +214,8 @@ export interface BashToolOptions {
 	edit?: EditToolOptions;
 	/** Options for the built-in delegate_agent command. When set, the cli tool routes `delegate_agent` to the delegate_agent definition. */
 	delegateAgent?: DelegateAgentToolOptions;
+	/** Options for the built-in skill command. When set, the cli tool routes `skill` to the skill definition. */
+	skill?: SkillToolOptions;
 	/** Command prefix prepended to every command (for example shell setup commands) */
 	commandPrefix?: string;
 	/** Optional explicit shell path from settings */
@@ -488,7 +496,8 @@ export function createBashToolDefinition(
 	const sessionSplitDefinition = createSessionSplitToolDefinition();
 	const historyTreeDefinition = createHistoryTreeToolDefinition();
 	const delegateAgentDefinition = options?.delegateAgent ? createDelegateAgentToolDefinition(options.delegateAgent) : undefined;
-	/** Map of built-in command name → definition. delegate_agent is present when the agent dir is available. */
+	const skillDefinition = options?.skill ? createSkillToolDefinition(options.skill) : undefined;
+	/** Map of built-in command name → definition. delegate_agent/skill are present when their options are configured. */
 	const builtinDefinitions: Record<string, ToolDefinition<any, any, any> | undefined> = {
 		read: readDefinition,
 		write: writeDefinition,
@@ -496,12 +505,13 @@ export function createBashToolDefinition(
 		session_split: sessionSplitDefinition,
 		history_tree: historyTreeDefinition,
 		delegate_agent: delegateAgentDefinition,
+		skill: skillDefinition,
 	};
 	return {
 		name: "cli",
 		label: "cli",
-		description: `Execute a CLI command in the current working directory. Built-in commands are prefixed with an underscore and handled internally (they never fall back to the shell): _read, _write, _edit, _session_split, _history_tree, and _delegate_agent. The underscore prefix avoids collisions with real shell commands (e.g. bash's own read/write builtins). IMPORTANT: built-in commands do NOT support shell operators — no pipes (|), redirects (> <), chaining (; & &&), command substitution, or newlines; issue each as a single pure command. To use a pipeline or redirection, run a plain shell command instead (grep, find, ls, cat, sed, git, npm, etc.). For _edit/_write, a value containing quotes, multiple spaces, or newlines must go through a verbatim channel — _edit with --edits JSON (e.g. --edits '[{"op":"replace","range":"12#ab","new":"line1\nline2"}]'), _write with --content or a <<EOF heredoc, or wrap the whole value in quotes. Do NOT pass such a value as bare positional tokens — its inner quotes/spaces get silently mangled. Output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB.`,
-		promptSnippet: "Execute CLI commands: built-ins are prefixed with _ (_read/_write/_edit/_session_split/_history_tree/_delegate_agent) and are pure single commands with NO shell operators; use shell commands (grep, find, ls, cat, git, npm) for pipes/redirections",
+		description: `Execute a CLI command in the current working directory. Built-in commands are prefixed with an underscore and handled internally (they never fall back to the shell): _read, _write, _edit, _session_split, _history_tree, _delegate_agent, and _skill. The underscore prefix avoids collisions with real shell commands (e.g. bash's own read/write builtins). IMPORTANT: built-in commands do NOT support shell operators — no pipes (|), redirects (> <), chaining (; & &&), command substitution, or newlines; issue each as a single pure command. To use a pipeline or redirection, run a plain shell command instead (grep, find, ls, cat, sed, git, npm, etc.). For _edit/_write, a value containing quotes, multiple spaces, or newlines must go through a verbatim channel — _edit with --edits JSON (e.g. --edits '[{"op":"replace","range":"12#ab","new":"line1\nline2"}]'), _write with --content or a <<EOF heredoc, or wrap the whole value in quotes. Do NOT pass such a value as bare positional tokens — its inner quotes/spaces get silently mangled. Output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB.`,
+		promptSnippet: "Execute CLI commands: built-ins are prefixed with _ (_read/_write/_edit/_session_split/_history_tree/_delegate_agent/_skill) and are pure single commands with NO shell operators; use shell commands (grep, find, ls, cat, git, npm) for pipes/redirections",
 		parameters: bashSchema,
 		async execute(
 			toolCallId,
@@ -627,6 +637,25 @@ export function createBashToolDefinition(
 							return {
 								content: result.content,
 								details: { builtin: { name: "delegate_agent", args: builtin.input, details: result.details } },
+							};
+						}
+						case "skill": {
+							if (!skillDefinition) {
+								return {
+									content: [
+										{
+											type: "text",
+											text: "skill is not available in this session (no skills loaded). " +
+												"It cannot be used here.",
+										},
+									],
+									details: undefined,
+								};
+							}
+							const result = await skillDefinition.execute(toolCallId, builtin.input, signal, undefined, ctx as never);
+							return {
+								content: result.content,
+								details: { builtin: { name: "skill", args: builtin.input, details: result.details } },
 							};
 						}
 					}

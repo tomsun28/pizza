@@ -346,6 +346,7 @@ function AppInner() {
 									sidecarReady={sidecarReady}
 									sidecarExitCode={sidecarExitCode}
 				workspace={workspace}
+				workspaces={workspaces}
 				onRefreshState={refreshState}
 								/>
 							}

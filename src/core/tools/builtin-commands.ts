@@ -79,8 +79,18 @@ export type ParsedBuiltinToolInput =
 			input: {
 				action: "list" | "run";
 				cwd?: string;
+				name?: string;
 				task?: string;
 				timeout?: number;
+			};
+	  }
+	| {
+			command: "skill";
+			input: {
+				action: "list" | "load" | "read";
+				name?: string;
+				query?: string;
+				file?: string;
 			};
 	  };
 
@@ -174,6 +184,8 @@ export function parseBuiltinToolInput(
 			return { command: "history_tree", input: parseHistoryTreeInput(args) };
 		case "delegate_agent":
 			return { command: "delegate_agent", input: parseDelegateAgentInput(args, heredoc) };
+		case "skill":
+			return { command: "skill", input: parseSkillInput(args) };
 		default:
 			return null;
 	}
@@ -368,20 +380,23 @@ type DelegateAgentAction = (typeof DELEGATE_AGENT_ACTIONS)[number];
  * Parse the `delegate_agent` command's args:
  *   delegate_agent list
  *   delegate_agent run <cwd> <task>
+ *   delegate_agent run --name <workspace-name> --task "..."
  *   delegate_agent run --cwd <path> --task "..." [--timeout N]
  *
  * For `run`, the first positional after the action is the cwd and the rest is
- * joined into the task; `--cwd` / `--task` flags override the positionals. A
- * heredoc (when present) supplies the task for `run`.
+ * joined into the task; `--cwd` / `--name` / `--task` flags override the
+ * positionals. A heredoc (when present) supplies the task for `run`.
  */
 function parseDelegateAgentInput(args: string[], heredoc?: string): {
 	action: DelegateAgentAction;
 	cwd?: string;
+	name?: string;
 	task?: string;
 	timeout?: number;
 } {
 	let action: DelegateAgentAction | undefined;
 	let cwd: string | undefined;
+	let name: string | undefined;
 	let task: string | undefined;
 	let timeout: number | undefined;
 	const positional: string[] = [];
@@ -390,6 +405,8 @@ function parseDelegateAgentInput(args: string[], heredoc?: string): {
 		const arg = args[i];
 		if (arg === "--cwd" || arg === "-d") {
 			cwd = args[++i];
+		} else if (arg === "--name" || arg === "-n") {
+			name = args[++i];
 		} else if (arg === "--task" || arg === "-t") {
 			task = args[++i];
 		} else if (arg === "--timeout") {
@@ -416,7 +433,7 @@ function parseDelegateAgentInput(args: string[], heredoc?: string): {
 	// For `run`, the remaining positionals are <cwd> <task...>.
 	if (action === "run") {
 		const rest = positional.slice(1);
-		if (cwd === undefined && rest.length > 0) {
+		if (cwd === undefined && name === undefined && rest.length > 0) {
 			cwd = rest[0];
 		}
 		if (task === undefined) {
@@ -428,7 +445,65 @@ function parseDelegateAgentInput(args: string[], heredoc?: string): {
 		}
 	}
 
-	return { action, cwd, task, timeout };
+	return { action, cwd, name, task, timeout };
+}
+
+function parseSkillInput(args: string[]): {
+	action: "list" | "load" | "read";
+	name?: string;
+	query?: string;
+	file?: string;
+} {
+	let action: "list" | "load" | "read" | undefined;
+	let name: string | undefined;
+	let query: string | undefined;
+	let file: string | undefined;
+	const positional: string[] = [];
+
+	for (let i = 0; i < args.length; i++) {
+		const arg = args[i];
+		if (arg === "--name" || arg === "-n") {
+			name = args[++i];
+		} else if (arg === "--query" || arg === "-q") {
+			query = args[++i];
+		} else if (arg === "--file" || arg === "-f") {
+			file = args[++i];
+		} else {
+			positional.push(arg);
+		}
+	}
+
+	if (positional.length > 0 && action === undefined) {
+		const candidate = positional[0].toLowerCase();
+		if (candidate === "list" || candidate === "load" || candidate === "read") {
+			action = candidate;
+		} else {
+			throw new Error(
+				`skill: unknown action "${positional[0]}". Valid actions: list, load, read`,
+			);
+		}
+	}
+
+	if (!action) {
+		throw new Error(`skill: action required. Valid actions: list, load, read`);
+	}
+
+	// For load: positional[1] is the skill name.
+	// For read: positional[1] is the skill name, positional[2] is the file.
+	if (action === "load") {
+		if (name === undefined && positional.length > 1) {
+			name = positional[1];
+		}
+	} else if (action === "read") {
+		if (name === undefined && positional.length > 1) {
+			name = positional[1];
+		}
+		if (file === undefined && positional.length > 2) {
+			file = positional[2];
+		}
+	}
+
+	return { action, name, query, file };
 }
 
 function parseEditInput(
@@ -716,22 +791,23 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 			].join("\n");
 		case "delegate_agent":
 			return [
-				"_delegate_agent - Delegate a task to a sub-agent in another project directory",
+				"_delegate_agent - Delegate a task to a sub-agent in another workspace",
 				"",
 				"Description:",
-				"  Hand a bounded task to a sub-agent running in another project directory. The",
-				"  sub-agent runs in its own workspace (independent event store / compaction) and",
+				"  Hand a bounded task to a sub-agent running in another project directory (workspace).",
+				"  The sub-agent runs in its own workspace (independent event store / compaction) and",
 				"  only its final reply is returned — intermediate output stays out of this context.",
 				"  Only available to the main (persistent) agent.",
 				"",
 				"Actions:",
-				"  list              Show known workspace agents (project directories previously visited).",
+				"  list              Show known workspaces (name, cwd, workspace_id, last_accessed, has_event_db).",
 				"  run <cwd> <task>  Delegate a task to a sub-agent in <cwd>; blocks until it finishes.",
 				"",
 				"Parameters:",
-				"  cwd               Target project directory (required for run). Resolved from the working directory.",
+				"  cwd               Target project directory (required for run, unless --name is given).",
 				"  task              Task description to hand to the sub-agent (required for run).",
 				"  --cwd, -d         Target project directory (alternative to positional).",
+				"  --name, -n        Workspace name (last path component from `list`). Alternative to --cwd.",
 				"  --task, -t        Task description (alternative to positional).",
 				"  --timeout         Timeout in milliseconds (default 120000).",
 				"  <<EOF             Heredoc form for the task (multi-line).",
@@ -739,11 +815,41 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"",
 				"Examples:",
 				"  _delegate_agent list",
+				"  _delegate_agent run --name web --task \"fix the auth bug\"",
 				"  _delegate_agent run ../other-project \"fix the auth bug and summarize the change\"",
 				"  _delegate_agent run --cwd ../other-project --task \"fix the auth bug\" --timeout 60000",
 				"  _delegate_agent run ../other-project <<EOF",
 				"  Refactor the auth module and write a short summary of what changed.",
 				"  EOF",
+			].join("\n");
+		case "skill":
+			return [
+				"_skill - Discover and load Agent Skills",
+				"",
+				"Description:",
+				"  Skills provide specialized instructions for specific tasks. Use list to discover",
+				"  available skills, load to read a skill's full SKILL.md instructions, and read to",
+				"  access supplementary files referenced by a skill (resolved relative to the skill's",
+				"  own directory, with path traversal protection).",
+				"",
+				"Actions:",
+				"  list              Show all available skills (name, description, source, location).",
+				"  load <name>       Load and return the full content of a skill's SKILL.md.",
+				"  read <name> <file> Read a supplementary file from a skill's directory.",
+				"",
+				"Parameters:",
+				"  --name, -n        Skill name (required for load and read).",
+				"  --query, -q       Optional filter for list (matches name or description, case-insensitive).",
+				"  --file, -f        Relative file path within a skill's directory (required for read).",
+				"  -h, --help        Show this help.",
+				"",
+				"Examples:",
+				"  _skill list",
+				"  _skill list --query \"git\"",
+				"  _skill load --name devin-cli",
+				"  _skill load devin-cli",
+				"  _skill read --name devin-cli --file docs/config.md",
+				"  _skill read devin-cli docs/config.md",
 			].join("\n");
 		default:
 			return undefined;
@@ -965,6 +1071,13 @@ export async function executeBuiltinCommand(
 				exitCode: 1,
 			};
 		}
+		case "skill": {
+			return {
+				stdout: "",
+				stderr: "skill requires loaded skills and is executed through the cli tool.",
+				exitCode: 1,
+			};
+		}
 
 		default:
 			return {
@@ -975,7 +1088,7 @@ export async function executeBuiltinCommand(
 	}
 }
 
-export const BUILTIN_COMMANDS = ["_read", "_write", "_edit", "_session_split", "_history_tree", "_delegate_agent"] as const;
+export const BUILTIN_COMMANDS = ["_read", "_write", "_edit", "_session_split", "_history_tree", "_delegate_agent", "_skill"] as const;
 export type BuiltinCommand = (typeof BUILTIN_COMMANDS)[number];
 
 // ============================================================================

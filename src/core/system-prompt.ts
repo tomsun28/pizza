@@ -4,7 +4,30 @@
 
 import { existsSync } from "fs";
 import { execSync } from "child_process";
-import { formatSkillsForPrompt, type Skill } from "./skills.js";
+import { type Skill } from "./skills.js";
+
+/**
+ * Build a compact skills hint for the system prompt.
+ *
+ * Instead of injecting the full skills list (name + description + location for
+ * every skill), we emit a one-line summary with the count and instruct the LLM
+ * to use `_skill list` / `_skill load` to discover and read skills on demand.
+ * This saves prompt tokens — the LLM only loads a skill's full content when it
+ * actually needs it.
+ */
+function formatSkillsHint(skills: Skill[]): string {
+	const visible = skills.filter((s) => !s.disableModelInvocation);
+	if (visible.length === 0) return "";
+	const names = visible.map((s) => s.name).join(", ");
+	return (
+		`\n\n# Skills\n\n` +
+		`${visible.length} skill${visible.length > 1 ? "s" : ""} available: ${names}.\n` +
+		`Use \`_skill list\` to see details (name, description, source, location), ` +
+		`\`_skill load --name <name>\` to read a skill's full instructions, ` +
+		`and \`_skill read --name <name> --file <path>\` to read supplementary files ` +
+		`referenced by a skill (resolved relative to the skill's directory).`
+	);
+}
 
 /**
  * Check if the current directory is a git repository
@@ -151,10 +174,12 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 			}
 		}
 
-		// Append skills section (only if read tool is available)
-		const customPromptHasRead = !selectedTools || selectedTools.includes("read");
-		if (customPromptHasRead && skills.length > 0) {
-			prompt += formatSkillsForPrompt(skills);
+		// Append skills hint — the full skills list is no longer injected into
+		// the prompt. Instead, the LLM discovers and loads skills on demand via
+		// the `_skill` built-in command (routed through the `cli` tool).
+		const customPromptHasCli = !selectedTools || selectedTools.includes("cli") || selectedTools.includes("bash");
+		if (customPromptHasCli && skills.length > 0) {
+			prompt += formatSkillsHint(skills);
 		}
 
 		// Add date and working directory last
@@ -194,11 +219,10 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	};
 
 	const hasCli = tools.includes("cli") || tools.includes("bash");
-	const hasRead = tools.includes("read");
 
 	// File exploration guidelines
 	if (hasCli) {
-		addGuideline("The cli tool has exactly these built-in commands (underscore-prefixed, handled internally, never sent to the shell): _read, _write, _edit, _session_split, _history_tree, and _delegate_agent. Everything else — including grep, find, ls, cat, sed, git, npm — is a native shell command run through the same cli tool.");
+		addGuideline("The cli tool has exactly these built-in commands (underscore-prefixed, handled internally, never sent to the shell): _read, _write, _edit, _session_split, _history_tree, _delegate_agent, and _skill. Everything else — including grep, find, ls, cat, sed, git, npm — is a native shell command run through the same cli tool.");
 		addGuideline("Built-in commands are NOT a shell: never use pipes (|), redirects (> <), chaining (; & &&), command substitution, or newlines with them. A built-in only works as the FIRST word of its own single cli() call — buried after &&/||/;/| it is passed to the shell, which has no such command. Issue each built-in as its own separate call; do not prefix it with cd && since the working directory is already set. For pipelines, redirections, or globs, use a plain shell command instead (grep, find, ls, cat, sed, git, npm, etc.).");
 	}
 
@@ -229,6 +253,8 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		"  _session_split [reason] [name]                Split promptly when the user starts a new task or topic",
 		"  _history_tree <action> [session_id]           Browse past sessions: list, view, jump, fork",
 		"  _delegate_agent <action> [cwd] [task]         Main agent only: list known workspaces, run a sub-agent",
+		"  _delegate_agent run --name <name> --task \"..\"  Use workspace name (last path component) instead of cwd",
+		"  _skill <action> [--name <name>] [--file <f>]   Discover and load Agent Skills: list, load, read",
 		"",
 		"IMPORTANT: built-in commands are pure single commands. They do NOT support shell operators",
 		"(no pipes |, redirects > <, chaining ; & &&, command substitution, or newlines). A built-in",
@@ -291,9 +317,11 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		}
 	}
 
-	// Append skills section (only if read tool is available)
-	if (hasRead && skills.length > 0) {
-		prompt += formatSkillsForPrompt(skills);
+	// Append skills hint — the full skills list is no longer injected into
+	// the prompt. Instead, the LLM discovers and loads skills on demand via
+	// the `_skill` built-in command (routed through the `cli` tool).
+	if (hasCli && skills.length > 0) {
+		prompt += formatSkillsHint(skills);
 	}
 
 	// Add environment section at the end

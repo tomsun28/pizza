@@ -88,6 +88,19 @@
     "scheduledTask": "定时任务",
     "scheduledTaskHint": "在指定时间自动执行任务"
   },
+  "mention": {
+    "files": "文件",
+    "branches": "分支",
+    "workspaces": "工作区",
+    "skills": "技能",
+    "schedules": "定时任务",
+    "noResults": "无匹配项",
+    "currentBranch": "当前",
+    "remoteBranch": "远程",
+    "scheduleEnabled": "已启用",
+    "scheduleDisabled": "已禁用",
+    "hint": "输入 @ 可提及文件、分支、工作区、技能和任务"
+  },
   "schedule": {
     "title": "定时任务",
     "subtitle": "管理 {{scope}} 的自动化任务",

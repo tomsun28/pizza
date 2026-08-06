@@ -512,6 +512,24 @@ export async function gitDiff(cwd: string, path: string, mode: GitDiffMode): Pro
 	return core.invoke<string>("git_diff", { cwd, path, mode });
 }
 
+export interface GitBranchEntry {
+	/** Branch name (without remotes/ prefix). */
+	name: string;
+	/** True if this is the current branch (HEAD). */
+	is_current: boolean;
+	/** True if this is a remote-tracking branch. */
+	is_remote: boolean;
+	/** Upstream tracking ref, if any. */
+	upstream?: string | null;
+}
+
+/** List all git branches (local + remote) in the repo at `cwd`. Empty if not a repo. */
+export async function gitBranches(cwd: string): Promise<GitBranchEntry[]> {
+	if (!isTauri()) return [];
+	const core = await import("@tauri-apps/api/core");
+	return core.invoke<GitBranchEntry[]>("git_branches", { cwd });
+}
+
 // --- Provider management (Tauri only) ---
 
 export interface ProviderInfo {

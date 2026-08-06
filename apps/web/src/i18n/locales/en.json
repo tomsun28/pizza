@@ -88,6 +88,19 @@
     "scheduledTask": "Scheduled task",
     "scheduledTaskHint": "Run a task automatically at the right time"
   },
+  "mention": {
+    "files": "Files",
+    "branches": "Branches",
+    "workspaces": "Workspaces",
+    "skills": "Skills",
+    "schedules": "Scheduled tasks",
+    "noResults": "No matches",
+    "currentBranch": "current",
+    "remoteBranch": "remote",
+    "scheduleEnabled": "enabled",
+    "scheduleDisabled": "disabled",
+    "hint": "Type @ to mention files, branches, workspaces, skills and tasks"
+  },
   "schedule": {
     "title": "Scheduled tasks",
     "subtitle": "Manage automated tasks in {{scope}}",
