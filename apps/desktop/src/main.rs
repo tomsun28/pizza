@@ -34,6 +34,7 @@ fn main() {
 			bridge::reveal_path,
 			bridge::git_status,
 			bridge::git_diff,
+			bridge::git_branches,
 			bridge::fetch_skills_sh,
 		])
 		.setup(|app| {

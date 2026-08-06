@@ -2335,6 +2335,59 @@ pub async fn git_diff(cwd: String, path: String, mode: String) -> Result<String,
 	run_git_capture(&cwd, &args)
 }
 
+/// One entry from `git branch --list`, with its name and tracking info.
+#[derive(serde::Serialize)]
+pub struct GitBranchEntry {
+	/// Branch name (without the `*` or `remotes/` prefix).
+	pub name: String,
+	/// True if this is the current branch (HEAD).
+	pub is_current: bool,
+	/// True if this is a remote-tracking branch (e.g. `origin/main`).
+	pub is_remote: bool,
+	/// Upstream tracking ref, if any (e.g. `origin/main`).
+	pub upstream: Option<String>,
+}
+
+/// List all branches (local + remote) in the repo at `cwd`. If `cwd` is not a
+/// git repo, returns an empty list (no error) so the UI can hide the option.
+#[tauri::command]
+pub async fn git_branches(cwd: String) -> Result<Vec<GitBranchEntry>, String> {
+	// Cheap repo check — non-repo returns empty list, not an error.
+	let inside = run_git_capture(&cwd, &["rev-parse", "--is-inside-work-tree"]);
+	if !matches!(inside, Ok(s) if s.trim() == "true") {
+		return Ok(Vec::new());
+	}
+
+	// `--all` includes remote-tracking branches; `-z` NUL-separates for safe parsing.
+	let raw = run_git_capture(&cwd, &["branch", "--all", "-z", "--format=%(HEAD) %(refname:short) %(upstream:short)"])?;
+	let mut branches = Vec::new();
+	for field in raw.split('\0').filter(|f| !f.is_empty()) {
+		let trimmed = field.trim();
+		if trimmed.is_empty() {
+			continue;
+		}
+		// Format: "* branch-name upstream" or "  branch-name upstream"
+		let mut parts = trimmed.splitn(3, ' ');
+		let head_marker = parts.next().unwrap_or("");
+		let name = parts.next().unwrap_or("");
+		let upstream = parts.next().filter(|s| !s.is_empty());
+		if name.is_empty() {
+			continue;
+		}
+		let is_current = head_marker == "*";
+		let is_remote = name.contains('/') && (name.starts_with("origin/") || name.starts_with("remotes/"));
+		// Strip the remotes/ prefix for display.
+		let clean_name = name.strip_prefix("remotes/").unwrap_or(name).to_string();
+		branches.push(GitBranchEntry {
+			name: clean_name,
+			is_current,
+			is_remote,
+			upstream: upstream.map(|s| s.to_string()),
+		});
+	}
+	Ok(branches)
+}
+
 /// Fetch the skills.sh leaderboard HTML page via Rust (bypasses CORS).
 /// Returns the raw HTML so the frontend can parse skill links.
 #[tauri::command]

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type DragEvent as ReactDragEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from "react";
 import { ArrowUp, Square, Mic, Plus, ChevronDown, Check, X, Loader2, Shield, ShieldCheck, Paperclip, Sparkles, MessageSquarePlus, FolderOpen, Clock } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -10,11 +10,14 @@ import {
 } from "@/lib/file-attachment";
 import { FileAttachmentIcon } from "@/components/FileAttachmentIcon";
 import { ScheduleMenu } from "@/components/ScheduleMenu";
+import { MentionMenu, type MentionItem } from "@/components/MentionMenu";
 import { formatFileSize } from "@/lib/file-format";
 
 export type { LoadedFileAttachment } from "@/lib/file-attachment";
-import { sendCommandAwait, setSafeMode, newSession, getSkills, invoke, type SkillInfo } from "@/lib/transport";
+import { sendCommandAwait, setSafeMode, newSession, getSkills, invoke, listDir, gitBranches, listScheduledTasks, type SkillInfo, type GitBranchEntry } from "@/lib/transport";
 import type { RpcSessionState, RpcContextUsage, RpcTokenUsage, ModelInfo } from "@/lib/types";
+import type { WorkspaceMeta, ScheduledTaskSummary } from "@/lib/types";
+import { resolveScheduleScope } from "@/lib/schedule-scope";
 
 function isTauri(): boolean {
 	return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -174,6 +177,7 @@ export function Composer({
 	isRunning,
 	state,
 	workspace,
+	workspaces,
 	onSend,
 	onAbort,
 	onRefreshState,
@@ -182,6 +186,8 @@ export function Composer({
 	isRunning: boolean;
 	state: RpcSessionState | null;
 	workspace?: string | null;
+	/** All known workspaces — used for @workspace mentions. */
+	workspaces?: WorkspaceMeta[];
 	/**
 	 * Send the composed message. `images` become base64 image attachments;
 	 * `files` become path references the agent can read with its own file tools.
@@ -240,6 +246,23 @@ export function Composer({
 	// button open the exact same surface instead of diverging.
 	const [scheduleMenuOpen, setScheduleMenuOpen] = useState(false);
 	const [skills, setSkills] = useState<SkillInfo[]>([]);
+
+	// --- @ mention state --------------------------------------------------
+	// When the user types `@` in the textarea we show a popup listing files,
+	// branches, workspaces, skills and scheduled tasks. The popup is driven by
+	// `mentionActive`; `mentionQuery` is the text after `@` (up to the cursor);
+	// `mentionStart` is the character index of `@` so we can replace it on
+	// selection. `mentionSelectedIndex` tracks keyboard navigation.
+	const [mentionActive, setMentionActive] = useState(false);
+	const [mentionQuery, setMentionQuery] = useState("");
+	const [mentionStart, setMentionStart] = useState(-1);
+	const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
+	// Cached data for the mention popup — fetched lazily the first time the
+	// menu opens, then refreshed on workspace change.
+	const [mentionFiles, setMentionFiles] = useState<{ name: string; path: string; is_dir: boolean }[]>([]);
+	const [mentionBranches, setMentionBranches] = useState<GitBranchEntry[]>([]);
+	const [mentionSchedules, setMentionSchedules] = useState<ScheduledTaskSummary[]>([]);
+	const mentionDataLoadedRef = useRef(false);
 
 	// Only show models whose provider has valid auth. Models without auth
 	// (hasAuth === false) are hidden from the selector entirely — they can't
@@ -323,6 +346,133 @@ export function Composer({
 			cancelled = true;
 		};
 	}, [sidecarReady, state?.sessionId]);
+
+	// --- @ mention data fetching ------------------------------------------
+	// Lazily load files, branches and schedules the first time the mention
+	// menu opens. Skills come from the effect above; workspaces come from the
+	// prop. We reset the cache on workspace switch so stale data from another
+	// workspace never leaks into the popup.
+	useEffect(() => {
+		mentionDataLoadedRef.current = false;
+		setMentionFiles([]);
+		setMentionBranches([]);
+		setMentionSchedules([]);
+	}, [workspace]);
+
+	const ensureMentionData = useCallback(async () => {
+		if (mentionDataLoadedRef.current) return;
+		mentionDataLoadedRef.current = true;
+		const cwd = workspace ?? "";
+		// Fetch files, branches and schedules in parallel.
+		const [fileEntries, branches, schedules] = await Promise.all([
+			listDir(cwd).catch(() => []),
+			gitBranches(cwd).catch(() => []),
+			(async () => {
+				const { scope, workspaceId } = resolveScheduleScope(cwd);
+				return listScheduledTasks(scope, workspaceId).catch(() => []);
+			})(),
+		]);
+		setMentionFiles(fileEntries.map((e) => ({ name: e.name, path: e.path, is_dir: e.is_dir })));
+		setMentionBranches(branches);
+		setMentionSchedules(schedules as ScheduledTaskSummary[]);
+	}, [workspace]);
+
+	// Build the full mention items list from all data sources.
+	const mentionItems = useMemo<MentionItem[]>(() => {
+		const items: MentionItem[] = [];
+		const cwd = (workspace ?? "").replace(/\/+$/, "");
+
+		// Files (root-level entries from listDir).
+		for (const f of mentionFiles) {
+			const abs = cwd ? `${cwd}/${f.path}` : f.path;
+			items.push({
+				category: "file",
+				label: f.name,
+				description: f.path,
+				insertText: `@${f.name}`,
+				absolutePath: abs,
+			});
+		}
+
+		// Branches.
+		for (const b of mentionBranches) {
+			items.push({
+				category: "branch",
+				label: b.name,
+				description: b.is_current ? t("mention.currentBranch") : b.is_remote ? t("mention.remoteBranch") : undefined,
+				insertText: `@branch:${b.name}`,
+			});
+		}
+
+		// Workspaces.
+		for (const ws of workspaces ?? []) {
+			const name = ws.cwd.replace(/\/+$/, "").split("/").pop() ?? ws.cwd;
+			items.push({
+				category: "workspace",
+				label: name,
+				description: ws.cwd,
+				insertText: `@workspace:${name}`,
+			});
+		}
+
+		// Skills.
+		for (const s of skills) {
+			items.push({
+				category: "skill",
+				label: s.name,
+				description: s.description,
+				insertText: `/${s.command}`,
+			});
+		}
+
+		// Scheduled tasks.
+		for (const task of mentionSchedules) {
+			items.push({
+				category: "schedule",
+				label: task.name,
+				description: task.enabled ? t("mention.scheduleEnabled") : t("mention.scheduleDisabled"),
+				insertText: `@schedule:${task.name}`,
+			});
+		}
+
+		return items;
+	}, [mentionFiles, mentionBranches, workspaces, skills, mentionSchedules, workspace, t]);
+
+	// Detect `@` at the start of input or after a whitespace, and track the
+	// query text between `@` and the cursor.
+	const detectMention = useCallback((value: string, cursorPos: number) => {
+		// Search backwards from the cursor for an `@` that is either at the
+		// start of the text or preceded by whitespace.
+		const before = value.slice(0, cursorPos);
+		const atIdx = before.lastIndexOf("@");
+		if (atIdx < 0) {
+			setMentionActive(false);
+			return;
+		}
+		// `@` must be at position 0 or after a whitespace character.
+		if (atIdx > 0 && !/\s/.test(before[atIdx - 1])) {
+			setMentionActive(false);
+			return;
+		}
+		// The query is the text between `@` and the cursor. If it contains
+		// whitespace, the mention is "closed" — stop showing the menu.
+		const query = value.slice(atIdx + 1, cursorPos);
+		if (/\s/.test(query)) {
+			setMentionActive(false);
+			return;
+		}
+		setMentionActive(true);
+		setMentionQuery(query);
+		setMentionStart(atIdx);
+		setMentionSelectedIndex(0);
+	}, []);
+
+	// When the mention menu opens, lazily fetch the data it needs.
+	useEffect(() => {
+		if (mentionActive) {
+			void ensureMentionData();
+		}
+	}, [mentionActive, ensureMentionData]);
 
 	// Close + menu on outside click.
 	useEffect(() => {
@@ -575,6 +725,42 @@ ${insert}`;
 			]);
 		}
 	}, []);
+
+	// Handle mention selection: replace `@query` in the input with the
+	// mention's insert text, and for file mentions also add the file as an
+	// attachment so the agent can read it.
+	const handleMentionSelect = useCallback(
+		(item: MentionItem) => {
+			setMentionActive(false);
+			setMentionQuery("");
+			setMentionStart(-1);
+
+			// For file mentions, add the file as an attachment (same as drag-drop).
+			if (item.category === "file" && item.absolutePath) {
+				void addPathFiles([item.absolutePath]);
+			}
+
+			// Replace `@query` in the input with the insert text.
+			setInput((prev) => {
+				if (mentionStart < 0) return prev;
+				const before = prev.slice(0, mentionStart);
+				const after = prev.slice(mentionStart + 1 + mentionQuery.length);
+				const insert = item.insertText;
+				const next = `${before}${insert}${after}`;
+				// Restore focus and place cursor after the inserted text.
+				requestAnimationFrame(() => {
+					const el = textareaRef.current;
+					if (el) {
+						const pos = before.length + insert.length;
+						el.focus();
+						el.setSelectionRange(pos, pos);
+					}
+				});
+				return next;
+			});
+		},
+		[mentionStart, mentionQuery, addPathFiles],
+	);
 
 	useEffect(() => {
 		if (!sidecarReady || !isTauri()) return;
@@ -834,21 +1020,79 @@ ${insert}`;
 							</ul>
 						</div>
 					)}
-					<textarea
-						ref={textareaRef}
-						className="w-full resize-none bg-transparent px-1 py-1 text-sm text-fg outline-none placeholder:text-muted min-h-[2.5rem] max-h-80"
-						placeholder={sidecarReady ? t("composer.placeholder") : t("composer.waitingForSidecar")}
-						value={input}
-						disabled={!sidecarReady}
-						onChange={(e) => setInput(e.target.value)}
-						onPaste={handlePaste}
-						onKeyDown={(e) => {
-							if (e.key === "Enter" && !e.shiftKey) {
-								e.preventDefault();
-								handleSend();
-							}
-						}}
-					/>
+					<div className="relative">
+						<textarea
+							ref={textareaRef}
+							className="w-full resize-none bg-transparent px-1 py-1 text-sm text-fg outline-none placeholder:text-muted min-h-[2.5rem] max-h-80"
+							placeholder={sidecarReady ? t("composer.placeholder") : t("composer.waitingForSidecar")}
+							value={input}
+							disabled={!sidecarReady}
+							onChange={(e) => {
+								setInput(e.target.value);
+								detectMention(e.target.value, e.target.selectionStart ?? 0);
+							}}
+							onKeyUp={(e) => {
+								// Re-detect on cursor movement keys (arrows, Home, End).
+								if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Home" || e.key === "End") {
+									detectMention(e.currentTarget.value, e.currentTarget.selectionStart ?? 0);
+								}
+							}}
+							onClick={(e) => {
+								// Clicking moves the cursor — re-evaluate mention state.
+								detectMention(e.currentTarget.value, e.currentTarget.selectionStart ?? 0);
+							}}
+							onPaste={handlePaste}
+							onKeyDown={(e) => {
+								// When the mention menu is open, intercept navigation keys.
+								if (mentionActive) {
+									if (e.key === "ArrowDown") {
+										e.preventDefault();
+										setMentionSelectedIndex((prev) => Math.min(prev + 1, mentionItems.length - 1));
+										return;
+									}
+									if (e.key === "ArrowUp") {
+										e.preventDefault();
+										setMentionSelectedIndex((prev) => Math.max(prev - 1, 0));
+										return;
+									}
+									if (e.key === "Enter" || e.key === "Tab") {
+										e.preventDefault();
+										// Find the filtered item at the current index.
+										const q = mentionQuery.toLowerCase().trim();
+										const filtered = q
+											? mentionItems.filter(
+													(item) =>
+														item.label.toLowerCase().includes(q) ||
+														(item.description?.toLowerCase().includes(q) ?? false),
+												)
+											: mentionItems;
+										const item = filtered[Math.min(mentionSelectedIndex, filtered.length - 1)];
+										if (item) handleMentionSelect(item);
+										return;
+									}
+									if (e.key === "Escape") {
+										e.preventDefault();
+										setMentionActive(false);
+										return;
+									}
+								}
+								if (e.key === "Enter" && !e.shiftKey) {
+									e.preventDefault();
+									handleSend();
+								}
+							}}
+						/>
+						{mentionActive && (
+							<MentionMenu
+								items={mentionItems}
+								query={mentionQuery}
+								selectedIndex={mentionSelectedIndex}
+								onSelect={handleMentionSelect}
+								onNavigate={setMentionSelectedIndex}
+								onClose={() => setMentionActive(false)}
+							/>
+						)}
+					</div>
 					<div className="mt-1 flex items-center justify-between gap-2">
 						{/* Left cluster */}
 						<div className="flex items-center gap-1">

@@ -242,12 +242,14 @@ export default function AgentView({
 	sidecarReady,
 	sidecarExitCode,
 	workspace,
+	workspaces,
 	onRefreshState,
 }: {
 	state: RpcSessionState | null;
 	sidecarReady: boolean;
 	sidecarExitCode: number | null;
 	workspace?: string | null;
+	workspaces?: import("@/lib/types").WorkspaceMeta[];
 	onRefreshState?: () => void;
 }) {
 	const { sidebarCollapsed } = useOutletContext<LayoutOutletContext>() ?? { sidebarCollapsed: false };
@@ -920,6 +922,7 @@ export default function AgentView({
 			<Composer
 				state={state}
 				workspace={workspace}
+				workspaces={workspaces}
 				sidecarReady={sidecarReady}
 				isRunning={isRunning}
 				onSend={handleSend}
