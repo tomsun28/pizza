@@ -386,4 +386,109 @@ mod tests {
 		assert!(inbox.lock().unwrap().iter().any(|m| matches!(m, ChannelMessage::AttachOk { .. })));
 		assert!(inbox.lock().unwrap().iter().any(|m| matches!(m, ChannelMessage::Error(_))));
 	}
+
+	#[cfg(test)]
+	mod live_tests {
+		use super::*;
+		use std::os::unix::net::UnixListener;
+		use std::path::PathBuf;
+		use std::thread;
+
+		fn tmp_sock() -> PathBuf {
+			let p = std::env::temp_dir().join(format!(
+				"pizza-gw-test-{}-{}-{}.sock",
+				std::process::id(),
+				line!(),
+				random_u32()
+			));
+			let _ = std::fs::remove_file(&p);
+			p
+		}
+
+		fn random_u32() -> u32 {
+			use std::time::SystemTime;
+			let dur = SystemTime::now()
+				.duration_since(std::time::UNIX_EPOCH)
+				.unwrap();
+			dur.subsec_nanos().wrapping_mul(2654435761)
+		}
+
+		/// A scripted step: optionally wait for one incoming line, then send a reply.
+		struct Step {
+			consume_input: bool,
+			reply: String,
+		}
+
+		/// A fake gateway: accept one connection, then play a scripted conversation.
+		fn spawn_fake_server(sock: PathBuf, script: Vec<Step>) {
+			thread::spawn(move || {
+				let listener = match UnixListener::bind(&sock) {
+					Ok(l) => l,
+					Err(_) => return,
+				};
+				let (mut stream, _) = match listener.accept() {
+					Ok(s) => s,
+					Err(_) => return,
+				};
+				let reader = BufReader::new(stream.try_clone().unwrap());
+				let mut lines = reader.lines();
+				for step in script {
+					if step.consume_input {
+						let _ = lines.next();
+					}
+					let _ = writeln!(stream, "{}", step.reply);
+					let _ = stream.flush();
+				}
+				thread::sleep(std::time::Duration::from_millis(200));
+			});
+			thread::sleep(std::time::Duration::from_millis(50));
+		}
+
+		#[test]
+		fn connect_attach_rpc_and_event_over_real_socket() {
+			let sock = tmp_sock();
+			// Script: reply to attach with attach_ok, to rpc with an id-matched
+			// response, then push a fanned-out event.
+			spawn_fake_server(
+				sock.clone(),
+				vec![
+					Step { consume_input: true, reply: r#"{"type":"attach_ok","workspace":"/proj"}"#.to_string() },
+					Step { consume_input: true, reply: r#"{"type":"rpc","workspace":"/proj","frame":{"id":"r1","type":"response","command":"get_state","success":true}}"#.to_string() },
+					Step { consume_input: false, reply: r#"{"type":"rpc","workspace":"/proj","frame":{"type":"AGENT_MESSAGE","text":"hi"}}"#.to_string() },
+				],
+			);
+
+			let client = GatewayChannel::connect(&sock).expect("connect");
+			let cwd = client.attach("/proj").expect("attach");
+			assert_eq!(cwd, "/proj");
+
+			let resp = client
+				.rpc("/proj", json!({ "id": "r1", "type": "get_state" }))
+				.expect("rpc");
+			assert_eq!(resp.get("id").and_then(|v| v.as_str()), Some("r1"));
+			assert_eq!(resp.get("type").and_then(|v| v.as_str()), Some("response"));
+
+			// The event should land in the inbox.
+			let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+			let mut got_event = false;
+			while std::time::Instant::now() < deadline {
+				let drained = client.drain_events();
+				if drained
+					.iter()
+					.any(|m| matches!(m, ChannelMessage::Event { frame, .. } if frame.get("type").and_then(|v| v.as_str()) == Some("AGENT_MESSAGE")))
+				{
+					got_event = true;
+					break;
+				}
+				std::thread::sleep(std::time::Duration::from_millis(20));
+			}
+			assert!(got_event, "fan-out event should reach the inbox");
+		}
+
+		#[test]
+		fn connect_error_on_missing_socket() {
+			let sock = tmp_sock();
+			assert!(GatewayChannel::connect(&sock).is_err());
+		}
+	}
 }

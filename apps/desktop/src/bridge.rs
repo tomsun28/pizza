@@ -1,4 +1,5 @@
 use base64::Engine;
+use crate::gateway_channel;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -235,6 +236,8 @@ pub struct FileAttachmentInfo {
 }
 
 pub struct BridgeState {
+	/// Gateway channels keyed by cwd (gateway-mode only; PIZZA_DESKTOP_GATEWAY).
+	channels: Mutex<HashMap<String, gateway_channel::GatewayChannel>>,
 	/// Sidecars keyed by cwd.
 	sidecars: Mutex<HashMap<String, SidecarEntry>>,
 	/// Active cwd per window label.
@@ -249,6 +252,7 @@ pub struct BridgeState {
 impl Default for BridgeState {
 	fn default() -> Self {
 		Self {
+			channels: Mutex::new(HashMap::new()),
 			sidecars: Mutex::new(HashMap::new()),
 			active: Mutex::new(HashMap::new()),
 			restarting: Mutex::new(HashSet::new()),
@@ -750,6 +754,12 @@ pub async fn init_sidecar(
 		return Err(format!("Directory does not exist: {}", cwd));
 	}
 
+	// Gateway-mode opt-in: route through the broker instead of spawning a sidecar.
+	// Default OFF — current spawn behavior is unchanged until a GUI smoke test flips it.
+	if gateway_mode_enabled() {
+		return init_sidecar_via_gateway(window.app_handle().clone(), state, window_label, cwd).await;
+	}
+
 	// Check if sidecar for this cwd already exists.
 	let already_running = {
 		let sidecars = state.sidecars.lock().unwrap();
@@ -1143,7 +1153,7 @@ pub fn rpc_command(
 		obj.insert("id".to_string(), Value::String(id.clone()));
 		id
 	};
-	let line = serde_json::to_string(&Value::Object(obj)).map_err(|e| e.to_string())?;
+	let line = serde_json::to_string(&Value::Object(obj.clone())).map_err(|e| e.to_string())?;
 	log_file(&format!("rpc_command [{}] sending: {}", window_label, line));
 
 	// Route to the active sidecar for this window.
@@ -1152,6 +1162,12 @@ pub fn rpc_command(
 		active.get(window_label).cloned()
 	};
 	let cwd = cwd.ok_or("No active workspace for this window")?;
+
+	// Gateway-mode: forward via the channel instead of the sidecar stdin.
+	if let Some(channel) = state.channels.lock().unwrap().get(&cwd).cloned() {
+		channel.rpc(&cwd, Value::Object(obj)).map_err(|e| e.to_string())?;
+		return Ok(id);
+	}
 
 	let mut sidecars = state.sidecars.lock().unwrap();
 	let sidecar = sidecars.get_mut(&cwd).ok_or("Sidecar is not running")?;
@@ -1165,6 +1181,123 @@ pub fn rpc_command(
 		.map_err(|e| format!("write nl: {e}"))?;
 	sidecar.stdin.flush().map_err(|e| format!("flush: {e}"))?;
 	Ok(id)
+}
+
+/// True when the desktop should route workspaces through the gateway broker
+/// instead of spawning per-cwd sidecars. Gated by env so the default behavior
+/// (spawn) is unchanged until a GUI smoke test flips it.
+fn gateway_mode_enabled() -> bool {
+	std::env::var("PIZZA_DESKTOP_GATEWAY")
+		.map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+		.unwrap_or(false)
+}
+
+/// Emit one parsed Layer-0 frame to every window, tagged with `_cwd`, mirroring
+/// the sidecar reader's contract: response→rpc_response, extension_ui_request
+/// as-is, everything else→rpc_event.
+fn emit_frame_to_windows(app: &AppHandle, cwd: &str, mut parsed: Value) {
+	let etype = parsed
+		.get("type")
+		.and_then(|t| t.as_str())
+		.unwrap_or("")
+		.to_string();
+	if etype == "response" {
+		if let Some(obj) = parsed.as_object_mut() {
+			obj.insert("_cwd".to_string(), Value::String(cwd.to_string()));
+		}
+	}
+	let state = app.state::<BridgeState>();
+	let active_map = state.active.lock().unwrap();
+	for (label, _ac_cwd) in active_map.iter() {
+		if let Some(win) = app.get_webview_window(label) {
+			match etype.as_str() {
+				"response" => {
+					let mut tagged = parsed.clone();
+					if let Some(obj) = tagged.as_object_mut() {
+						obj.insert("_cwd".to_string(), Value::String(cwd.to_string()));
+					}
+					let _ = win.emit("rpc_response", tagged);
+				}
+				"extension_ui_request" => {
+					let _ = win.emit("extension_ui_request", parsed.clone());
+				}
+				_ => {
+					let mut tagged = parsed.clone();
+					if let Some(obj) = tagged.as_object_mut() {
+						obj.insert("_cwd".to_string(), Value::String(cwd.to_string()));
+					}
+					let _ = win.emit("rpc_event", tagged);
+				}
+			}
+		}
+	}
+}
+
+/// Gateway-mode init: ensure the gateway is up, open one channel per workspace,
+/// attach, fetch initial state, store the channel, and spawn a drainer that fans
+/// the agent's events out to windows. Returns get_state JSON (same shape as
+/// init_sidecar's first-line response).
+async fn init_sidecar_via_gateway(
+	app: AppHandle,
+	state: tauri::State<'_, BridgeState>,
+	window_label: String,
+	cwd: String,
+) -> Result<String, String> {
+	log_file(&format!("init_sidecar_via_gateway: cwd={}", cwd));
+	// Already attached? Just switch the active pointer and re-fetch state.
+	if state.channels.lock().unwrap().contains_key(&cwd) {
+		state.active.lock().unwrap().insert(window_label, cwd.clone());
+		if let Some(ch) = state.channels.lock().unwrap().get(&cwd).cloned() {
+			let frame = serde_json::json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "get_state" });
+			if let Ok(resp) = ch.rpc(&cwd, frame) {
+				emit_frame_to_windows(&app, &cwd, resp);
+			}
+		}
+		return Ok(serde_json::json!({}).to_string());
+	}
+
+	let socket = gateway_channel::gateway_socket_path()
+		.ok_or_else(|| "HOME not set; cannot resolve gateway socket".to_string())?;
+	let (program, args) = resolve_pizza_command(&app);
+	gateway_channel::ensure_gateway(&socket, (&program, &args))?;
+
+	let channel = gateway_channel::GatewayChannel::connect(&socket)?;
+	let resolved_cwd = channel.attach(&cwd)?;
+	log_file(&format!("init_sidecar_via_gateway: attached resolved={}", resolved_cwd));
+
+	// Initial state via the channel, emitted as rpc_response for the frontend.
+	let id = uuid::Uuid::new_v4().to_string();
+	let state_resp = channel
+		.rpc(&cwd, serde_json::json!({ "id": id, "type": "get_state" }))
+		.map_err(|e| e.to_string())?;
+	emit_frame_to_windows(&app, &resolved_cwd, state_resp);
+
+	state.channels.lock().unwrap().insert(cwd.clone(), channel.clone());
+	state.active.lock().unwrap().insert(window_label, cwd.clone());
+
+	// Drain fanned-out events → windows. Exits when the channel disconnects.
+	let app_for_drain = app.clone();
+	let drain_cwd = resolved_cwd.clone();
+	std::thread::spawn(move || {
+		loop {
+			let messages = channel.drain_events();
+			let disconnected = messages
+				.iter()
+				.any(|m| matches!(m, gateway_channel::ChannelMessage::Disconnected));
+			for msg in messages {
+				if let gateway_channel::ChannelMessage::Event { frame, .. } = msg {
+					emit_frame_to_windows(&app_for_drain, &drain_cwd, frame);
+				}
+			}
+			if disconnected {
+				log_file(&format!("gateway channel disconnected cwd={}", drain_cwd));
+				break;
+			}
+			std::thread::sleep(std::time::Duration::from_millis(50));
+		}
+	});
+
+	Ok(serde_json::json!({}).to_string())
 }
 
 /// Create a new workspace window with its own independent sidecar.
