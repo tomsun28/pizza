@@ -19,24 +19,12 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { serializeJsonLine } from "./jsonl.js";
 import { gatewaySocketPath } from "./gateway-server.js";
+import { resolveCliSpawn } from "../rpc/cli-spawn.js";
 
 /** How long to wait for a freshly-spawned gateway to bind its socket (ms). */
 const GATEWAY_BOOT_TIMEOUT = 15_000;
 /** How often to poll for the socket / ping the gateway (ms). */
 const GATEWAY_POLL_INTERVAL = 100;
-
-/**
- * Resolve the CLI entry point for spawning the gateway daemon. Same logic as
- * gateway-server.ts.
- */
-function resolveCliSpawn(): { cliPath: string; binary: boolean } {
-	const argv1 = process.argv[1] ?? "";
-	const isBinary = !argv1.endsWith(".js");
-	return {
-		cliPath: isBinary ? process.execPath : argv1,
-		binary: isBinary,
-	};
-}
 
 /** PING the gateway at `socketPath`. Returns true if it responds with pong. */
 async function pingGateway(socketPath: string, timeoutMs = 2_000): Promise<boolean> {

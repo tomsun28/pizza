@@ -22,6 +22,7 @@ import { platform } from "node:os";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { RpcClient } from "../rpc/rpc-client.js";
+import { resolveCliSpawn } from "../rpc/cli-spawn.js";
 import { listKnownWorkspaces } from "../../src/core/event-store/workspace.js";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
 import {
@@ -29,23 +30,6 @@ import {
 	type GatewayTellRequest,
 	GATEWAY_DEFAULT_TELL_TIMEOUT,
 } from "./protocol.js";
-
-/**
- * Resolve the CLI entry point for spawning a sub-agent.
- *
- * In node mode `process.argv[1]` is the absolute path to the running `cli.js`.
- * In binary mode (bun `--compile`) `process.execPath` is the compiled binary
- * itself and `process.argv[1]` does not end in `.js` — the binary must be
- * spawned directly without a `node` prefix.
- */
-function resolveCliSpawn(): { cliPath: string; binary: boolean } {
-	const argv1 = process.argv[1] ?? "";
-	const isBinary = !argv1.endsWith(".js");
-	return {
-		cliPath: isBinary ? process.execPath : argv1,
-		binary: isBinary,
-	};
-}
 
 /**
  * Resolve the gateway socket path. On Unix it is
