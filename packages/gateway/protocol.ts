@@ -58,7 +58,7 @@ export interface GatewayPingRequest extends GatewayMessageBase {
 	type: "ping";
 }
 
-export type GatewayRequest = GatewayTellRequest | GatewayPingRequest;
+export type GatewayRequest = GatewayTellRequest | GatewayPingRequest | GatewayChannelRequest;
 
 // ── Gateway → Client ─────────────────────────────────────────────────────
 
@@ -90,7 +90,7 @@ export interface GatewayError extends GatewayMessageBase {
 	message: string;
 }
 
-export type GatewayResponse = GatewayTellResult | GatewayPong | GatewayError;
+export type GatewayResponse = GatewayTellResult | GatewayPong | GatewayError | GatewayChannelResponse;
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -98,14 +98,14 @@ export type GatewayResponse = GatewayTellResult | GatewayPong | GatewayError;
 export function isGatewayRequest(value: unknown): value is GatewayRequest {
 	if (typeof value !== "object" || value === null) return false;
 	const type = (value as { type?: unknown }).type;
-	return type === "tell" || type === "ping";
+	return type === "tell" || type === "ping" || type === "attach" || type === "detach" || type === "rpc" || type === "list";
 }
 
 /** Is the value a valid {@link GatewayResponse}? Structural check. */
 export function isGatewayResponse(value: unknown): value is GatewayResponse {
 	if (typeof value !== "object" || value === null) return false;
 	const type = (value as { type?: unknown }).type;
-	return type === "tell_result" || type === "pong" || type === "error";
+	return type === "tell_result" || type === "pong" || type === "error" || type === "attach_ok" || type === "rpc" || type === "list_result";
 }
 
 /** Default tell timeout (ms) when the client omits one. */
@@ -113,3 +113,94 @@ export const GATEWAY_DEFAULT_TELL_TIMEOUT = 120_000;
 
 /** Protocol version — bump on breaking wire changes. */
 export const GATEWAY_PROTOCOL_VERSION = 1;
+// ── Channel protocol (Layer 1) ───────────────────────────────────────────
+//
+// The gateway multiplexes many channels over a single connection. A channel
+// addresses a workspace by name-or-cwd and exchanges Layer-0 RPC frames with
+// the workspace's agent. The agent speaks only Layer 0 (it never sees these
+// envelopes); the gateway adds/strips the workspace address.
+//
+//   Channel → Gateway:
+//     { "type": "attach", "workspace": "<cwd|name>" [, "cursor": N] }
+//     { "type": "detach", "workspace": "<cwd|name>" }
+//     { "type": "rpc",    "workspace": "<cwd|name>", "frame": <Layer-0 command> }
+//     { "type": "list" }
+//
+//   Gateway → Channel:
+//     { "type": "attach_ok", "workspace": "<cwd>" }
+//     { "type": "rpc",       "workspace": "<cwd>", "frame": <Layer-0 response|event> }
+//     { "type": "list_result", "workspaces": [...] }
+//
+// Responses are routed back to the originating channel by `frame.id`; events
+// (no id) are fanned out to every channel attached to that workspace.
+
+/** A Layer-0 RPC frame — an opaque command, response, or event the gateway forwards verbatim. */
+export type GatewayRpcFrame = Record<string, unknown> & { type?: string; id?: string };
+
+/** `attach` — subscribe to a workspace's event stream and claim it for this connection. */
+export interface GatewayAttachRequest extends GatewayMessageBase {
+	type: "attach";
+	/** Destination workspace: a cwd (absolute path) or a workspace name (last path component). */
+	workspace: string;
+	/** Optional event-log cursor to resume from (reserved for the log-tail upgrade). */
+	cursor?: number;
+}
+
+/** `detach` — stop receiving events for a workspace on this connection. */
+export interface GatewayDetachRequest extends GatewayMessageBase {
+	type: "detach";
+	workspace: string;
+}
+
+/** `rpc` (channel → gateway) — forward a Layer-0 command to a workspace's agent. */
+export interface GatewayRpcRequest extends GatewayMessageBase {
+	type: "rpc";
+	workspace: string;
+	frame: GatewayRpcFrame;
+}
+
+/** `list` — enumerate known workspaces (name, cwd, workspace_id, last_accessed). */
+export interface GatewayListRequest extends GatewayMessageBase {
+	type: "list";
+}
+
+/** Any channel-originated request. */
+export type GatewayChannelRequest =
+	| GatewayAttachRequest
+	| GatewayDetachRequest
+	| GatewayRpcRequest
+	| GatewayListRequest;
+
+/** `attach_ok` — confirms a subscription; carries the resolved cwd as the canonical workspace id. */
+export interface GatewayAttachOk extends GatewayMessageBase {
+	type: "attach_ok";
+	workspace: string;
+}
+
+/** `rpc` (gateway → channel) — a Layer-0 response (id-routed) or event (fan-out). */
+export interface GatewayRpcDelivery extends GatewayMessageBase {
+	type: "rpc";
+	workspace: string;
+	frame: GatewayRpcFrame;
+}
+
+/** A workspace entry in a `list_result`. */
+export interface GatewayWorkspaceInfo {
+	workspace_id: string;
+	cwd: string;
+	name: string;
+	last_accessed_at: number;
+}
+
+/** `list_result` — the known workspaces. */
+export interface GatewayListResult extends GatewayMessageBase {
+	type: "list_result";
+	workspaces: GatewayWorkspaceInfo[];
+}
+
+/** Any gateway-originated message on a channel connection (broadened beyond tell-only). */
+export type GatewayChannelResponse =
+	| GatewayAttachOk
+	| GatewayRpcDelivery
+	| GatewayListResult
+	| GatewayError;

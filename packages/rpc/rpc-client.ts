@@ -495,13 +495,19 @@ export class RpcClient {
 		}
 	}
 
-	private async send(command: RpcCommandBody): Promise<RpcResponse> {
+	/**
+	 * Send a Layer-0 command that already carries its own `id` (used by the
+	 * gateway to forward a channel frame verbatim — the response keeps the
+	 * same id so the originating channel can correlate it). Public so the
+	 * gateway multiplexer can forward arbitrary frames without a per-command
+	 * typed wrapper.
+	 */
+	async sendCommand(command: RpcCommand): Promise<RpcResponse> {
 		if (!this.process?.stdin) {
 			throw new Error("Client not started");
 		}
-
-		const id = `req_${++this.requestId}`;
-		const fullCommand = { ...command, id } as RpcCommand;
+		const id = command.id ?? `req_${++this.requestId}`;
+		const fullCommand = (command.id === undefined ? { ...command, id } : command) as RpcCommand;
 
 		return new Promise((resolve, reject) => {
 			this.pendingRequests.set(id, { resolve, reject });
@@ -524,6 +530,10 @@ export class RpcClient {
 
 			this.process!.stdin!.write(serializeJsonLine(fullCommand));
 		});
+	}
+
+	private send(command: RpcCommandBody): Promise<RpcResponse> {
+		return this.sendCommand({ ...command, id: `req_${++this.requestId}` } as RpcCommand);
 	}
 
 	private getData<T>(response: RpcResponse): T {

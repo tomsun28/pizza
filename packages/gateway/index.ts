@@ -18,6 +18,15 @@ export {
 
 export { GatewayClient, type GatewayClientOptions } from "./gateway-client.js";
 
+export {
+	type ChannelTransport,
+	type ChannelFrame,
+	type ChannelEvent,
+	DirectTransport,
+	GatewayTransport,
+	type GatewayTransportOptions,
+} from "./channel-client.js";
+
 export { ensureGateway } from "./gateway-lifecycle.js";
 
 export {
@@ -28,6 +37,17 @@ export {
 	type GatewayTellResult,
 	type GatewayPong,
 	type GatewayError,
+	type GatewayChannelRequest,
+	type GatewayAttachRequest,
+	type GatewayDetachRequest,
+	type GatewayRpcRequest,
+	type GatewayListRequest,
+	type GatewayChannelResponse,
+	type GatewayAttachOk,
+	type GatewayRpcDelivery,
+	type GatewayRpcFrame,
+	type GatewayWorkspaceInfo,
+	type GatewayListResult,
 	GATEWAY_DEFAULT_TELL_TIMEOUT,
 	GATEWAY_PROTOCOL_VERSION,
 	isGatewayRequest,

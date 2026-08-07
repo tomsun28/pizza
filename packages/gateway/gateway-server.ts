@@ -28,8 +28,12 @@ import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
 import {
 	type GatewayResponse,
 	type GatewayTellRequest,
+	type GatewayChannelRequest,
+	type GatewayRpcFrame,
+	type GatewayWorkspaceInfo,
 	GATEWAY_DEFAULT_TELL_TIMEOUT,
 } from "./protocol.js";
+import type { RpcCommand } from "../rpc/rpc-types.js";
 
 /**
  * Resolve the gateway socket path. On Unix it is
@@ -119,6 +123,35 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 	let shuttingDown = false;
 	const { cliPath, binary } = resolveCliSpawn();
 
+	// ── channel subscriptions ─────────────────────────────────────────────
+	// Each workspace can have many channel connections watching it. The gateway
+	// fans agent events out to every subscriber; responses are routed back to the
+	// originating channel by frame.id inside handleChannelRequest.
+	type ConnWriter = (obj: GatewayResponse) => void;
+	/** workspace cwd → set of connection writers currently subscribed. */
+	const subscribers = new Map<string, Set<ConnWriter>>();
+	/** workspace cwd → unsubscribe fn for the agent onEvent forwarder (attached once). */
+	const eventForwarders = new Map<string, () => void>();
+
+	/** Fan an agent event out to every channel subscribed to `cwd`. */
+	function broadcastEvent(cwd: string, frame: GatewayRpcFrame): void {
+		const subs = subscribers.get(cwd);
+		if (!subs || subs.size === 0) return;
+		const envelope: GatewayResponse = { type: "rpc", workspace: cwd, frame };
+		for (const writer of subs) {
+			writer(envelope);
+		}
+	}
+
+	/** Attach the (single) event forwarder for a workspace's agent, if not already. */
+	function ensureForwarder(cwd: string, entry: PoolEntry): void {
+		if (eventForwarders.has(cwd)) return;
+		const unsubscribe = entry.client.onEvent((event) => {
+			broadcastEvent(cwd, event as unknown as GatewayRpcFrame);
+		});
+		eventForwarders.set(cwd, unsubscribe);
+	}
+
 	// ── workspace resolution ──────────────────────────────────────────────
 
 	/**
@@ -178,6 +211,7 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 		};
 		pool.set(cwd, entry);
 		scheduleIdleEviction(entry);
+		ensureForwarder(cwd, entry);
 		emitter.emit("agentSpawned", cwd as never);
 		return entry;
 	}
@@ -208,6 +242,13 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 			waiter.reject(new Error(`agent for ${cwd} was torn down before the message was delivered`));
 		}
 		entry.queue.length = 0;
+		// Stop fanning this workspace's events out and drop its subscriber set.
+		const forwarder = eventForwarders.get(cwd);
+		if (forwarder) {
+			forwarder();
+			eventForwarders.delete(cwd);
+		}
+		subscribers.delete(cwd);
 		await entry.client.stop().catch(() => {});
 		emitter.emit("agentClosed", cwd as never);
 	}
@@ -311,17 +352,95 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 		}
 	}
 
+	// ── channel request handling ─────────────────────────────────────────
+
+	/**
+	 * Handle a Layer-1 channel request from a connection. `write` is that
+	 * connection's writer (used both for direct replies and for subscribing to
+	 * event fan-out). `subscribedCwds` tracks this connection's subscriptions so
+	 * they can be cleaned up on disconnect.
+	 */
+	async function handleChannelRequest(
+		request: GatewayChannelRequest,
+		write: ConnWriter,
+		subscribedCwds: Set<string>,
+	): Promise<void> {
+		switch (request.type) {
+			case "attach": {
+				const cwd = resolveDestination(request.workspace);
+				if (!cwd) {
+					write({ type: "error", message: `Unknown workspace "${request.workspace}". Use a project path (cwd) or a workspace name from list.` });
+					return;
+				}
+				try {
+					const entry = await getOrCreateAgent(cwd);
+					ensureForwarder(cwd, entry);
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					write({ type: "error", message: `Failed to start agent for ${cwd}: ${message}` });
+					return;
+				}
+				let subs = subscribers.get(cwd);
+				if (!subs) {
+					subs = new Set();
+					subscribers.set(cwd, subs);
+				}
+				subs.add(write);
+				subscribedCwds.add(cwd);
+				write({ type: "attach_ok", workspace: cwd });
+				return;
+			}
+			case "detach": {
+				const cwd = resolveDestination(request.workspace);
+				if (!cwd) return;
+				const subs = subscribers.get(cwd);
+				if (subs) {
+					subs.delete(write);
+					if (subs.size === 0) subscribers.delete(cwd);
+				}
+				subscribedCwds.delete(cwd);
+				return;
+			}
+			case "rpc": {
+				const cwd = resolveDestination(request.workspace);
+				if (!cwd) {
+					write({ type: "error", message: `Unknown workspace "${request.workspace}".` });
+					return;
+				}
+				const entry = await getOrCreateAgent(cwd);
+				const response = await entry.client.sendCommand(request.frame as RpcCommand);
+				// Route the response back to THIS channel only (events fan out separately).
+				write({ type: "rpc", workspace: cwd, frame: response as GatewayRpcFrame });
+				return;
+			}
+			case "list": {
+				const known = listKnownWorkspaces(agentDir, mainDir);
+				const workspaces: GatewayWorkspaceInfo[] = known.map((ws) => ({
+					workspace_id: ws.workspace_id,
+					cwd: ws.cwd,
+					name: ws.cwd.replace(/\\+$/, "").split("/").pop() ?? ws.cwd,
+					last_accessed_at: ws.last_accessed_at,
+				}));
+				write({ type: "list_result", workspaces });
+				return;
+			}
+		}
+	}
+
 	// ── connection handling ───────────────────────────────────────────────
 
 	function handleConnection(socket: Socket): void {
 		const remote = `${socket.remoteAddress ?? "?"}:${socket.remotePort ?? "?"}`;
 		emitter.emit("connection", remote as never);
 
-		const write = (obj: GatewayResponse): void => {
+		const write: ConnWriter = (obj: GatewayResponse): void => {
 			if (!socket.destroyed) {
 				socket.write(`${serializeJsonLine(obj)}\n`);
 			}
 		};
+
+		// Workspaces this connection is subscribed to — cleaned up on disconnect.
+		const subscribedCwds = new Set<string>();
 
 		const detach = attachJsonlLineReader(socket, (line) => {
 			let parsed: unknown;
@@ -337,29 +456,49 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 				write({ type: "pong" });
 				return;
 			}
-			if (type !== "tell") {
-				write({ type: "error", message: `Unknown message type: ${type ?? "?"}` });
+			if (type === "tell") {
+				const request = parsed as GatewayTellRequest;
+				if (!request.id || typeof request.id !== "string") {
+					write({ type: "error", message: "tell requires a string `id`" });
+					return;
+				}
+				// Fire-and-forget; the result is written when the promise settles.
+				void handleTell(request).then(write).catch((error: unknown) => {
+					write({
+						type: "tell_result",
+						id: request.id,
+						ok: false,
+						error: error instanceof Error ? error.message : String(error),
+					});
+				});
 				return;
 			}
 
-			const request = parsed as GatewayTellRequest;
-			if (!request.id || typeof request.id !== "string") {
-				write({ type: "error", message: "tell requires a string `id`" });
+			// Channel protocol: attach / detach / rpc / list.
+			if (type === "attach" || type === "detach" || type === "rpc" || type === "list") {
+				void handleChannelRequest(parsed as GatewayChannelRequest, write, subscribedCwds).catch((error: unknown) => {
+					write({ type: "error", message: error instanceof Error ? error.message : String(error) });
+				});
 				return;
 			}
-			// Fire-and-forget; the result is written when the promise settles.
-			void handleTell(request).then(write).catch((error: unknown) => {
-				write({
-					type: "tell_result",
-					id: request.id,
-					ok: false,
-					error: error instanceof Error ? error.message : String(error),
-				});
-			});
+
+			write({ type: "error", message: `Unknown message type: ${type ?? "?"}` });
 		});
 
-		socket.on("close", () => detach());
-		socket.on("error", () => detach());
+		const cleanup = (): void => {
+			detach();
+			// Remove this connection from every workspace it was watching.
+			for (const cwd of subscribedCwds) {
+				const subs = subscribers.get(cwd);
+				if (subs) {
+					subs.delete(write);
+					if (subs.size === 0) subscribers.delete(cwd);
+				}
+			}
+			subscribedCwds.clear();
+		};
+		socket.on("close", cleanup);
+		socket.on("error", cleanup);
 	}
 
 	// ── lifecycle ─────────────────────────────────────────────────────────
