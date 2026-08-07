@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod bridge;
+mod gateway_channel;
 
 use tauri::{DragDropEvent, Emitter, Manager, WindowEvent};
 
