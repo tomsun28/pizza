@@ -11,7 +11,7 @@
 import { join } from "node:path";
 import { type Model, streamSimple } from "@earendil-works/pi-ai/compat";
 import { APP_NAME, getAgentDir, getDocsPath, getMainMemoryDir, getMainSoulPath } from "../config.js";
-import { getMainAgentGuidelines, isSoulUninitialized } from "./main-agent.js";
+import { acquireWorkspaceLock, getMainAgentGuidelines, isSoulUninitialized } from "./main-agent.js";
 import type { AgentMessage, AgentTool, ThinkingLevel } from "./agent/index.js";
 import { AuthStorage } from "./auth-storage.js";
 import { estimateContextTokens } from "./compaction/index.js";
@@ -28,7 +28,7 @@ import {
 import type { EventBase, ImageContent } from "./event-store/types.js";
 import type { EventAppendInput } from "./event-store/store.js";
 import { SqliteEventStore } from "./event-store/sqlite-store.js";
-import { deriveWorkspaceId, ensureWorkspaceMeta, getEventDatabasePath } from "./event-store/workspace.js";
+import { deriveWorkspaceId, ensureWorkspaceMeta, getEventDatabasePath, getWorkspaceDir } from "./event-store/workspace.js";
 import { createToolRegistry } from "./intent/tool-adapter.js";
 import { ModelRegistry } from "./model-registry.js";
 import { findInitialModel } from "./model-resolver.js";
@@ -291,6 +291,18 @@ export async function createSessionFacade(
 	const workspaceId = options.workspaceId ?? deriveWorkspaceId(cwd);
 	if (options.storagePath !== ":memory:") {
 		ensureWorkspaceMeta(workspaceId, cwd, options.agentDir);
+	}
+	// Single-writer lease: only one Pizza process may actively drive a workspace
+	// session at a time. Skipped for the main agent (it has its own main lock)
+	// and for in-memory/test sessions. A stale lock whose owner died is reclaimed
+	// automatically; a LIVE owner makes us refuse to start — mirroring the main
+	// agent's single-instance behavior and preventing concurrent-turn corruption.
+	let workspaceLock = null;
+	if (!isMainAgent && options.storagePath !== ":memory:" && agentDir) {
+		workspaceLock = acquireWorkspaceLock(getWorkspaceDir(workspaceId, agentDir));
+		if (!workspaceLock) {
+			throw new Error(`Another Pizza process is already using workspace ${workspaceId} (cwd ${cwd}). Stop it first, or run in a different directory.`);
+		}
 	}
 	const store = new SqliteEventStore(
 		workspaceId,
@@ -750,7 +762,7 @@ export async function createSessionFacade(
 		modelRegistry,
 		extensionRunner,
 		resourceLoader,
-		disposers: [extensionEventUnsubscribe],
+		disposers: workspaceLock ? [extensionEventUnsubscribe, workspaceLock.release] : [extensionEventUnsubscribe],
 	});
 
 	return { facade, runtime, model, thinkingLevel, extensionsResult, modelFallbackMessage };

@@ -311,17 +311,18 @@ function isProcessAlive(pid: number): boolean {
 }
 
 /**
- * Acquire a best-effort single-instance lock for the main agent.
- * Returns a lock handle on success, or null if another live instance holds it.
- * A stale lock (owning process no longer alive) is reclaimed automatically.
+ * Core single-writer lockfile: write our pid to `lockPath` (exclusive create),
+ * reclaiming it if the recorded owner is no longer alive. The returned handle
+ * releases on call, on `exit`, and on SIGINT/SIGTERM/SIGHUP — so a process
+ * killed by a signal (e.g. the Bun --compile sidecar) still frees the lock.
  *
- * The create path uses `flag: "wx"` (exclusive create) to avoid the TOCTOU
- * race between `existsSync` and `writeFileSync`.
+ * Returns null if another LIVE process holds it. Best-effort: a permission
+ * error or an unreadable lock gives up (null) rather than throwing.
+ *
+ * Shared by {@link acquireMainLock} (one main agent) and
+ * {@link acquireWorkspaceLock} (one active driver per workspace).
  */
-export function acquireMainLock(mainDir: string): MainAgentLock | null {
-	mkdirSync(mainDir, { recursive: true });
-	const lockPath = join(mainDir, ".lock");
-
+export function acquirePidLock(lockPath: string): MainAgentLock | null {
 	// Fast path: atomically create the lock file. If it does not exist yet,
 	// `wx` succeeds and we own the lock.
 	try {
@@ -374,7 +375,7 @@ export function acquireMainLock(mainDir: string): MainAgentLock | null {
 	// Belt-and-suspenders: in some runtimes (notably the Bun --compile binary
 	// used as the desktop sidecar) `process.on("exit")` can be skipped or
 	// fired late if the process is killed by a signal. Hook SIGINT/SIGTERM/
-	// SIGHUP explicitly so the lock is released promptly and a fresh sidecar
+	// SIGHUP explicitly so the lock is released promptly and a fresh process
 	// can take over without hitting a stale-lock path. The `release()`
 	// guard makes the redundant exit-path call a no-op.
 	const onSignal = (): void => release();
@@ -383,4 +384,33 @@ export function acquireMainLock(mainDir: string): MainAgentLock | null {
 	process.once("SIGHUP", onSignal);
 
 	return { release };
+}
+
+/**
+ * Acquire a best-effort single-instance lock for the main agent.
+ * Returns a lock handle on success, or null if another live instance holds it.
+ * A stale lock (owning process no longer alive) is reclaimed automatically.
+ *
+ * The create path uses `flag: "wx"` (exclusive create) to avoid the TOCTOU
+ * race between `existsSync` and `writeFileSync`.
+ */
+export function acquireMainLock(mainDir: string): MainAgentLock | null {
+	mkdirSync(mainDir, { recursive: true });
+	return acquirePidLock(join(mainDir, ".lock"));
+}
+
+/**
+ * Acquire a single-writer lock for a workspace — ensures only one Pizza
+ * process actively drives a given workspace's session at a time. Without this,
+ * a direct-mode sidecar and a gateway-pooled agent (or two CLI runs) on the
+ * same workspace would both write turns concurrently and interleave events.
+ *
+ * `workspaceDir` is the per-workspace directory (e.g.
+ * `~/.pizza/agent/workspaces/<id>/`); the caller is responsible for creating
+ * it. The lock lives at `<workspaceDir>/.lock`, auto-released on exit/signal,
+ * and stale locks are reclaimed via pid liveness — same machinery as the main
+ * agent lock. Returns null if another live process holds it.
+ */
+export function acquireWorkspaceLock(workspaceDir: string): MainAgentLock | null {
+	return acquirePidLock(join(workspaceDir, ".lock"));
 }
