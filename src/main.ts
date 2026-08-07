@@ -93,7 +93,7 @@ function isTruthyEnvFlag(value: string | undefined): boolean {
 	return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
 }
 
-type AppMode = "interactive" | "print" | "json" | "rpc" | "gui";
+type AppMode = "interactive" | "print" | "json" | "rpc" | "gui" | "gateway";
 
 function resolveAppMode(parsed: Args, stdinIsTTY: boolean): AppMode {
 	if (parsed.mode === "gui") {
@@ -101,6 +101,9 @@ function resolveAppMode(parsed: Args, stdinIsTTY: boolean): AppMode {
 	}
 	if (parsed.mode === "rpc") {
 		return "rpc";
+	}
+	if (parsed.mode === "gateway") {
+		return "gateway";
 	}
 	if (parsed.mode === "json") {
 		return "json";
@@ -111,7 +114,7 @@ function resolveAppMode(parsed: Args, stdinIsTTY: boolean): AppMode {
 	return "interactive";
 }
 
-function toPrintOutputMode(appMode: AppMode): Exclude<Mode, "rpc" | "gui"> {
+function toPrintOutputMode(appMode: AppMode): Exclude<Mode, "rpc" | "gui" | "gateway"> {
 	return appMode === "json" ? "json" : "text";
 }
 
@@ -440,6 +443,48 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 	time("parseArgs");
 	let appMode = resolveAppMode(parsed, process.stdin.isTTY);
+
+	// ── Gateway daemon mode ─────────────────────────────────────────────────
+	// `pizza --mode gateway` starts the agent-to-agent messaging daemon. It is
+	// a lightweight process — no session facade, no LLM, no theme. It only needs
+	// the agent dir (for spawning sub-agents) and the socket path. Auto-started
+	// on demand by ensureGateway() (packages/gateway/gateway-lifecycle.ts).
+	if (appMode === "gateway") {
+		const { createGatewayServer, gatewaySocketPath } = await import("../packages/gateway/index.js");
+		const agentDir = getAgentDir();
+		// The socket path is set by ensureGateway() via PIZZA_GATEWAY_SOCKET, or
+		// falls back to the standard location.
+		const socketPath = process.env.PIZZA_GATEWAY_SOCKET ?? gatewaySocketPath();
+		const mainDir = parsed.main ? getMainDir(parsed.mainDir) : undefined;
+		const server = createGatewayServer({ socketPath, agentDir, mainDir });
+		server.on("listening", (sock: string) => {
+			console.error(chalk.green(`🍕 Gateway listening on ${sock}`));
+		});
+		server.on("error", (error: Error) => {
+			console.error(chalk.red(`Gateway error: ${error.message}`));
+		});
+		server.on("agentSpawned", (cwd: string) => {
+			console.error(chalk.dim(`Gateway: spawned agent for ${cwd}`));
+		});
+		server.on("agentClosed", (cwd: string) => {
+			console.error(chalk.dim(`Gateway: closed agent for ${cwd}`));
+		});
+		// Graceful shutdown on SIGINT / SIGTERM.
+		const shutdown = async () => {
+			await server.stop();
+			process.exit(0);
+		};
+		process.on("SIGINT", shutdown);
+		process.on("SIGTERM", shutdown);
+		try {
+			await server.start();
+		} catch (error) {
+			console.error(chalk.red(`Failed to start gateway: ${error instanceof Error ? error.message : String(error)}`));
+			process.exit(1);
+		}
+		// Keep the process alive.
+		return;
+	}
 	const shouldTakeOverStdout = appMode !== "interactive" && appMode !== "gui";
 	if (shouldTakeOverStdout) {
 		takeOverStdout();

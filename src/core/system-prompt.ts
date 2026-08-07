@@ -25,7 +25,9 @@ function formatSkillsHint(skills: Skill[]): string {
 		`Use \`_skill list\` to see details (name, description, source, location), ` +
 		`\`_skill load --name <name>\` to read a skill's full instructions, ` +
 		`and \`_skill read --name <name> --file <path>\` to read supplementary files ` +
-		`referenced by a skill (resolved relative to the skill's directory).`
+		`referenced by a skill (resolved relative to the skill's directory).\n\n` +
+		`If an installed skill fits the current task, prefer using it over ` +
+		`hand-rolled code or raw API calls.`
 	);
 }
 

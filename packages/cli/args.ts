@@ -7,7 +7,7 @@ import chalk from "chalk";
 import { APP_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR } from "../../src/config.js";
 import type { ExtensionFlag } from "../../src/core/extensions/types.js";
 
-export type Mode = "text" | "json" | "rpc" | "gui";
+export type Mode = "text" | "json" | "rpc" | "gui" | "gateway";
 
 export interface Args {
 	provider?: string;
@@ -80,7 +80,7 @@ export function parseArgs(args: string[]): Args {
 			result.version = true;
 		} else if (arg === "--mode" && i + 1 < args.length) {
 			const mode = args[++i];
-			if (mode === "text" || mode === "json" || mode === "rpc" || mode === "gui") {
+			if (mode === "text" || mode === "json" || mode === "rpc" || mode === "gui" || mode === "gateway") {
 				result.mode = mode;
 			}
 		} else if (arg === "--rewind") {
@@ -237,7 +237,7 @@ ${chalk.bold("Options:")}
   --api-key <key>                API key (defaults to env vars)
   --system-prompt <text>         System prompt (default: coding assistant prompt)
   --append-system-prompt <text>  Append text or file contents to the system prompt (can be used multiple times)
-  --mode <mode>                  Output mode: text (default), json, rpc, or gui
+  --mode <mode>                  Output mode: text (default), json, rpc, gui, or gateway
   --print, -p                    Non-interactive mode: process prompt and exit
   --rewind [id]                  Resume eternal conversation (default), or jump to a branch by id
   --session-dir <dir>            Directory for session storage and lookup

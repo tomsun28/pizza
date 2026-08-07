@@ -33,6 +33,7 @@ fn main() {
 			bridge::transcribe_audio,
 			bridge::list_dir,
 			bridge::read_file,
+			bridge::search_files,
 			bridge::open_in_editor,
 			bridge::reveal_path,
 			bridge::git_status,

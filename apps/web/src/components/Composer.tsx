@@ -14,7 +14,7 @@ import { MentionMenu, type MentionItem } from "@/components/MentionMenu";
 import { formatFileSize } from "@/lib/file-format";
 
 export type { LoadedFileAttachment } from "@/lib/file-attachment";
-import { sendCommandAwait, setSafeMode, newSession, getSkills, invoke, listDir, gitBranches, listScheduledTasks, type SkillInfo, type GitBranchEntry } from "@/lib/transport";
+import { sendCommandAwait, setSafeMode, newSession, getSkills, invoke, searchFiles, gitBranches, listScheduledTasks, type SkillInfo, type GitBranchEntry } from "@/lib/transport";
 import type { RpcSessionState, RpcContextUsage, RpcTokenUsage, ModelInfo } from "@/lib/types";
 import type { WorkspaceMeta, ScheduledTaskSummary } from "@/lib/types";
 import { resolveScheduleScope } from "@/lib/schedule-scope";
@@ -373,9 +373,11 @@ export function Composer({
 		if (mentionDataLoadedRef.current) return;
 		mentionDataLoadedRef.current = true;
 		const cwd = workspace ?? "";
-		// Fetch files, branches and schedules in parallel.
+		// Fetch files, branches and schedules in parallel. Files are searched
+		// recursively (all depths, shallowest first) so the @ menu can reference
+		// files in nested directories — not just the workspace root.
 		const [fileEntries, branches, schedules] = await Promise.all([
-			listDir(cwd).catch(() => []),
+			searchFiles(cwd, null, 1000).catch(() => []),
 			gitBranches(cwd).catch(() => []),
 			(async () => {
 				const { scope, workspaceId } = resolveScheduleScope(cwd);
@@ -392,14 +394,18 @@ export function Composer({
 		const items: MentionItem[] = [];
 		const cwd = (workspace ?? "").replace(/\/+$/, "");
 
-		// Files (root-level entries from listDir).
+		// Files (recursive, all depths — shallowest first). The label is the
+		// basename; the description is the workspace-relative path so nested
+		// files are distinguishable. The inserted text uses the relative path
+		// so `@src/components/Terminal.tsx` is unambiguous for nested files
+		// (root files keep `@Terminal.tsx` since path === name there).
 		for (const f of mentionFiles) {
 			const abs = cwd ? `${cwd}/${f.path}` : f.path;
 			items.push({
 				category: "file",
 				label: f.name,
 				description: f.path,
-				insertText: `@${f.name}`,
+				insertText: `@${f.path}`,
 				absolutePath: abs,
 			});
 		}

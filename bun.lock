@@ -5,8 +5,8 @@
     "": {
       "name": "@tomsun28/pizza",
       "dependencies": {
-        "@earendil-works/pi-ai": "^0.80.6",
-        "@earendil-works/pi-tui": "^0.80.6",
+        "@earendil-works/pi-ai": "0.80.6",
+        "@earendil-works/pi-tui": "0.80.6",
         "@mariozechner/jiti": "^2.6.2",
         "@pizza/protocol": "file:./packages/protocol",
         "@silvia-odwyer/photon-node": "^0.3.4",

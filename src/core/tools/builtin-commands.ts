@@ -92,6 +92,30 @@ export type ParsedBuiltinToolInput =
 				query?: string;
 				file?: string;
 			};
+	  }
+	  |
+		{
+			command: "cron";
+			input: {
+				action: "list" | "create" | "pause" | "resume" | "delete" | "run";
+				taskId?: string;
+				schedule?: string;
+				cronExpr?: string;
+				prompt?: string;
+				name?: string;
+				once?: boolean;
+				newSession?: boolean;
+			};
+	  }
+	  |
+		{
+			command: "tell";
+			input: {
+				action: "send" | "list";
+				to?: string;
+				message?: string;
+				timeout?: number;
+			};
 	  };
 
 /**
@@ -186,6 +210,10 @@ export function parseBuiltinToolInput(
 			return { command: "delegate_agent", input: parseDelegateAgentInput(args, heredoc) };
 		case "skill":
 			return { command: "skill", input: parseSkillInput(args) };
+		case "cron":
+			return { command: "cron", input: parseCronInput(args, heredoc) };
+		case "tell":
+			return { command: "tell", input: parseTellInput(args, heredoc) };
 		default:
 			return null;
 	}
@@ -448,6 +476,76 @@ function parseDelegateAgentInput(args: string[], heredoc?: string): {
 	return { action, cwd, name, task, timeout };
 }
 
+const TELL_ACTIONS = ["send", "list"] as const;
+type TellAction = (typeof TELL_ACTIONS)[number];
+
+/**
+ * Parse the `tell` command args:
+ *   tell send <to> <message>
+ *   tell send --to <cwd|name> --message "..." [--timeout N]
+ *   tell list
+ *
+ * For `send`, the first positional after the action is the destination (`to`)
+ * and the rest is joined into the message. `--to` / `--message` flags override
+ * the positionals. A heredoc (when present) supplies the message for `send`.
+ */
+function parseTellInput(args: string[], heredoc?: string): {
+	action: TellAction;
+	to?: string;
+	message?: string;
+	timeout?: number;
+} {
+	let action: TellAction | undefined;
+	let to: string | undefined;
+	let message: string | undefined;
+	let timeout: number | undefined;
+	const positional: string[] = [];
+
+	for (let i = 0; i < args.length; i++) {
+		const arg = args[i];
+		if (arg === "--to" || arg === "-t") {
+			to = args[++i];
+		} else if (arg === "--message" || arg === "-m") {
+			message = args[++i];
+		} else if (arg === "--timeout") {
+			timeout = parseOptionalInt(args[++i]);
+		} else {
+			positional.push(arg);
+		}
+	}
+
+	if (positional.length > 0 && action === undefined) {
+		const candidate = positional[0].toLowerCase();
+		if (!TELL_ACTIONS.includes(candidate as TellAction)) {
+			throw new Error(
+				`tell: unknown action "${positional[0]}". Valid actions: ${TELL_ACTIONS.join(", ")}`,
+			);
+		}
+		action = candidate as TellAction;
+	}
+
+	if (!action) {
+		throw new Error(`tell: action required. Valid actions: ${TELL_ACTIONS.join(", ")}`);
+	}
+
+	// For `send`, the remaining positionals are <to> <message...>.
+	if (action === "send") {
+		const rest = positional.slice(1);
+		if (to === undefined && rest.length > 0) {
+			to = rest[0];
+		}
+		if (message === undefined) {
+			if (rest.length > 1) {
+				message = rest.slice(1).join(" ");
+			} else if (heredoc !== undefined) {
+				message = heredoc;
+			}
+		}
+	}
+
+	return { action, to, message, timeout };
+}
+
 function parseSkillInput(args: string[]): {
 	action: "list" | "load" | "read";
 	name?: string;
@@ -504,6 +602,99 @@ function parseSkillInput(args: string[]): {
 	}
 
 	return { action, name, query, file };
+}
+
+const CRON_ACTIONS = ["list", "create", "pause", "resume", "delete", "run"] as const;
+type CronAction = (typeof CRON_ACTIONS)[number];
+
+/**
+ * Parse the `cron` command args:
+ *   cron list
+ *   cron create --schedule "30m" --prompt "..." [--name "..."] [--cron-expr "..."] [--once] [--new-session]
+ *   cron pause <taskId>
+ *   cron resume <taskId>
+ *   cron delete <taskId>
+ *   cron run <taskId>
+ *
+ * `--prompt` may be supplied positionally (the trailing words after the action
+ * for create), but a prompt with spaces/newlines is ambiguous in positional
+ * form. Callers should prefer --prompt or a <<EOF heredoc (which lands in the
+ * `heredoc` argument and is folded into prompt when present).
+ */
+function parseCronInput(args: string[], heredoc?: string): {
+	action: CronAction;
+	taskId?: string;
+	schedule?: string;
+	cronExpr?: string;
+	prompt?: string;
+	name?: string;
+	once?: boolean;
+	newSession?: boolean;
+} {
+	let action: CronAction | undefined;
+	let taskId: string | undefined;
+	let schedule: string | undefined;
+	let cronExpr: string | undefined;
+	let prompt: string | undefined;
+	let name: string | undefined;
+	let once: boolean | undefined;
+	let newSession: boolean | undefined;
+	const positionalPrompt: string[] = [];
+
+	for (let i = 0; i < args.length; i++) {
+		const arg = args[i];
+		if (arg === "--schedule" || arg === "-s") {
+			schedule = args[++i];
+		} else if (arg === "--cron-expr" || arg === "--cron") {
+			cronExpr = args[++i];
+		} else if (arg === "--prompt" || arg === "-p") {
+			prompt = args[++i];
+		} else if (arg === "--name" || arg === "-n") {
+			name = args[++i];
+		} else if (arg === "--task" || arg === "--task-id" || arg === "-t") {
+			taskId = args[++i];
+		} else if (arg === "--once") {
+			once = true;
+		} else if (arg === "--new-session") {
+			newSession = true;
+		} else {
+			positionalPrompt.push(arg);
+		}
+	}
+
+	if (positionalPrompt.length > 0 && action === undefined) {
+		const candidate = positionalPrompt[0]!.toLowerCase();
+		if ((CRON_ACTIONS as readonly string[]).includes(candidate)) {
+			action = candidate as CronAction;
+		} else {
+			throw new Error(`cron: unknown action "${positionalPrompt[0]}". Valid actions: ${CRON_ACTIONS.join(", ")}`);
+		}
+	}
+
+	// After the action word, the next positional is the taskId for the
+	// single-arg actions (pause/resume/delete/run). For create, trailing
+	// positionals become the prompt (joined) when --prompt was not given.
+	if (action !== undefined && action !== "create" && action !== "list") {
+		if (taskId === undefined && positionalPrompt.length > 1) {
+			taskId = positionalPrompt[1];
+		}
+	} else if (action === "create") {
+		if (prompt === undefined) {
+			if (positionalPrompt.length > 1) {
+				prompt = positionalPrompt.slice(1).join(" ");
+			} else if (heredoc !== undefined) {
+				prompt = heredoc;
+			}
+		} else if (heredoc !== undefined && prompt.trim() === "") {
+			prompt = heredoc;
+		}
+	}
+
+	if (!action) {
+		throw new Error(`cron: action required. Valid actions: ${CRON_ACTIONS.join(", ")}`);
+	}
+
+	return { action, taskId, schedule, cronExpr, prompt, name, once, newSession };
 }
 
 function parseEditInput(
@@ -851,6 +1042,38 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"  _skill read --name devin-cli --file docs/config.md",
 				"  _skill read devin-cli docs/config.md",
 			].join("\n");
+		case "tell":
+			return [
+				"_tell - Send a message to another agent's workspace and get its reply",
+				"",
+				"Description:",
+				"  Agent-to-agent messaging via the gateway. Unlike _delegate_agent (which spawns",
+				"  a fresh agent each time), the gateway keeps target agents alive — repeated tells",
+				"  to the same workspace are conversational: the agent remembers the context.",
+				"  Only available when an agent dir is configured.",
+				"",
+				"Actions:",
+				"  send <to> <message>  Send a message to workspace <to>; blocks until it replies.",
+				"  list                 Show known workspaces (same as _delegate_agent list).",
+				"",
+				"Parameters:",
+				"  to                 Destination workspace: a project path (cwd) or workspace name (last path component).",
+				"  message            The message text to deliver to the target agent.",
+				"  --to, -t           Destination workspace (alternative to positional).",
+				"  --message, -m      Message text (alternative to positional).",
+				"  --timeout          Timeout in milliseconds (default 120000).",
+				"  <<EOF              Heredoc form for the message (multi-line).",
+				"  -h, --help         Show this help.",
+				"",
+				"Examples:",
+				"  _tell list",
+				"  _tell send --to web --message \"what's in package.json?\"",
+				"  _tell send web \"fix the auth bug and summarize\"",
+				"  _tell send --to ../other-project --message \"check the tests\" --timeout 60000",
+				"  _tell send web <<EOF",
+				"  What files changed in the last commit?",
+				"  EOF",
+			].join("\n");
 		default:
 			return undefined;
 	}
@@ -1079,6 +1302,14 @@ export async function executeBuiltinCommand(
 			};
 		}
 
+		case "tell": {
+			return {
+				stdout: "",
+				stderr: "tell requires an agent dir and is executed through the cli tool.",
+				exitCode: 1,
+			};
+		}
+
 		default:
 			return {
 				stdout: "",
@@ -1088,7 +1319,7 @@ export async function executeBuiltinCommand(
 	}
 }
 
-export const BUILTIN_COMMANDS = ["_read", "_write", "_edit", "_session_split", "_history_tree", "_delegate_agent", "_skill"] as const;
+export const BUILTIN_COMMANDS = ["_read", "_write", "_edit", "_session_split", "_history_tree", "_delegate_agent", "_skill", "_tell"] as const;
 export type BuiltinCommand = (typeof BUILTIN_COMMANDS)[number];
 
 // ============================================================================

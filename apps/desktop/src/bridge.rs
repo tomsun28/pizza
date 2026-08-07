@@ -2474,6 +2474,96 @@ pub async fn read_file(cwd: String, file_path: String) -> Result<String, String>
 	std::fs::read_to_string(&full).map_err(|e| format!("read_to_string: {e}"))
 }
 
+// --- Recursive file search (for the composer @ mention menu) ---
+
+#[derive(serde::Serialize)]
+pub struct FileSearchEntry {
+	/// Basename of the file.
+	pub name: String,
+	/// Path relative to the workspace root (e.g. "src/components/Terminal.tsx").
+	pub path: String,
+	pub is_dir: bool,
+}
+
+/// Recursively walk the workspace (breadth-first so shallower files rank
+/// first), skipping `SKIP_DIRS`. Returns files whose relative path contains
+/// `query` (case-insensitive) when provided, capped at `limit` (default 1000).
+/// Directories are traversed but not returned — the `@` menu is for files;
+/// the file explorer (`list_dir`) already handles directory navigation.
+#[tauri::command]
+pub async fn search_files(
+	cwd: String,
+	query: Option<String>,
+	limit: Option<u32>,
+) -> Result<Vec<FileSearchEntry>, String> {
+	use std::collections::VecDeque;
+	let base = resolve_workspace_path(&cwd, None)?;
+	if !base.is_dir() {
+		return Err(format!("Not a directory: {}", base.display()));
+	}
+	let q = query
+		.map(|s| s.to_lowercase())
+		.filter(|s| !s.is_empty());
+	let cap = limit.unwrap_or(1000).max(1) as usize;
+
+	let mut out: Vec<FileSearchEntry> = Vec::with_capacity(cap.min(256));
+	let mut queue: VecDeque<PathBuf> = VecDeque::new();
+	queue.push_back(base.clone());
+
+	while let Some(dir) = queue.pop_front() {
+		if out.len() >= cap {
+			break;
+		}
+		let entries = match std::fs::read_dir(&dir) {
+			Ok(e) => e,
+			Err(_) => continue,
+		};
+		for entry in entries.flatten() {
+			if out.len() >= cap {
+				break;
+			}
+			let file_name = entry.file_name().to_string_lossy().to_string();
+			if SKIP_DIRS.contains(&file_name.as_str()) {
+				continue;
+			}
+			let ft = match entry.file_type() {
+				Ok(t) => t,
+				Err(_) => continue,
+			};
+			let full = entry.path();
+			let rel = full
+				.strip_prefix(&base)
+				.map(|p| p.to_string_lossy().to_string())
+				.unwrap_or_else(|_| file_name.clone());
+			if ft.is_dir() {
+				// Recurse into subdirectories (BFS); dirs are not surfaced as
+				// results to keep the menu focused on files.
+				queue.push_back(full);
+				continue;
+			}
+			if let Some(ref qstr) = q {
+				if !rel.to_lowercase().contains(qstr) {
+					continue;
+				}
+			}
+			out.push(FileSearchEntry {
+				name: file_name,
+				path: rel,
+				is_dir: false,
+			});
+		}
+	}
+
+	// Order by depth (shallowest first) then by path, so root-level files
+	// rank ahead of deeply nested ones — matching IDE Quick Open behaviour.
+	out.sort_by(|a, b| {
+		let da = a.path.matches('/').count();
+		let db = b.path.matches('/').count();
+		da.cmp(&db).then_with(|| a.path.cmp(&b.path))
+	});
+	Ok(out)
+}
+
 // --- Git status / diff (right dock "Git" tab) ---
 
 /// Run `git` inside `cwd`, returning stdout as a String. Errors out if git is

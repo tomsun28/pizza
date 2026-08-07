@@ -48,6 +48,7 @@ import { createHistoryTreeToolDefinition } from "./tools/history-tree.js";
 import { buildSessionBreadcrumb } from "./projection/history-tree.js";
 import { createSessionSplitToolDefinition } from "./tools/session-split.js";
 import { createDelegateAgentToolDefinition } from "./tools/delegate-agent.js";
+import { createTellToolDefinition } from "./tools/tell.js";
 import { wrapToolDefinitions } from "./tools/tool-definition-wrapper.js";
 
 export interface CreateSessionFacadeOptions {
@@ -334,6 +335,10 @@ export async function createSessionFacade(
 	// sub-agents / list workspaces).
 	if (agentDir) {
 		cliToolOptions.delegateAgent = { agentDir, mainDir };
+		// The `tell` built-in command (agent-to-agent messaging via the gateway)
+		// is wired into the cli tool alongside delegate_agent — it needs the
+		// agent dir to ensure/start the gateway and discover workspaces.
+		cliToolOptions.tell = { agentDir, mainDir };
 	}
 	// The `skill` built-in command is wired into the cli tool whenever skills
 	// are available — it lets the LLM discover and load skills on demand via
@@ -426,6 +431,7 @@ export async function createSessionFacade(
 			];
 			if (agentDir) {
 				builtinDefs.push(createDelegateAgentToolDefinition({ agentDir, mainDir }));
+				builtinDefs.push(createTellToolDefinition({ agentDir, mainDir }));
 			}
 			for (const builtinDef of builtinDefs) {
 				for (const guideline of builtinDef.promptGuidelines ?? []) {
