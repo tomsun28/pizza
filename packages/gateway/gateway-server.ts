@@ -33,7 +33,7 @@ import {
 	type GatewayWorkspaceInfo,
 	GATEWAY_DEFAULT_TELL_TIMEOUT,
 } from "./protocol.js";
-import type { RpcCommand } from "../rpc/rpc-types.js";
+import type { RpcCommand, RpcResponse } from "../rpc/rpc-types.js";
 
 /**
  * Resolve the gateway socket path. On Unix it is
@@ -51,6 +51,21 @@ export function gatewaySocketPath(socketBasename = "gateway"): string {
 }
 
 /** Options for {@link createGatewayServer}. */
+/**
+ * The slice of {@link RpcClient} the gateway actually uses to drive a workspace
+ * agent. The real RpcClient satisfies it; tests (and future non-spawn owners)
+ * can supply a fake via {@link GatewayServerOptions.createAgent}.
+ */
+export interface AgentConnection {
+	start(): Promise<void>;
+	stop(): Promise<void>;
+	onEvent(listener: (event: unknown) => void): () => void;
+	sendCommand(command: RpcCommand): Promise<RpcResponse>;
+	promptAndWait(message: string, images?: unknown[], timeout?: number): Promise<unknown[]>;
+	getLastAssistantText(): Promise<string | null>;
+	getStderr?(): string;
+}
+
 export interface GatewayServerOptions {
 	/** Socket path (default: {@link gatewaySocketPath}). */
 	socketPath?: string;
@@ -63,11 +78,17 @@ export interface GatewayServerOptions {
 	 * after this period. Default: 10 minutes. 0 disables idle eviction.
 	 */
 	agentIdleTimeout?: number;
+	/**
+	 * Factory for the workspace agent connection. Defaults to spawning a real
+	 * `pizza --mode rpc` process via {@link RpcClient}. Inject a fake for tests
+	 * (or a non-spawn owner) — it is memoized per cwd by the pool.
+	 */
+	createAgent?: (cwd: string) => AgentConnection;
 }
 
 /** One entry in the agent process pool, keyed by workspace cwd. */
 interface PoolEntry {
-	client: RpcClient;
+	client: AgentConnection;
 	cwd: string;
 	lastActivity: number;
 	/** Set when a prompt is in flight, so concurrent tells queue. */
@@ -200,7 +221,7 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 		const existing = pool.get(cwd);
 		if (existing) return existing;
 
-		const client = new RpcClient({ cwd, cliPath, binary, env: makeEnv() });
+		const client = options.createAgent ? options.createAgent(cwd) : new RpcClient({ cwd, cliPath, binary, env: makeEnv() });
 		await client.start();
 		const entry: PoolEntry = {
 			client,

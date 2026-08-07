@@ -14,6 +14,7 @@ export {
 	type GatewayServer,
 	type GatewayServerOptions,
 	type GatewayServerEvents,
+	type AgentConnection,
 } from "./gateway-server.js";
 
 export { GatewayClient, type GatewayClientOptions } from "./gateway-client.js";
