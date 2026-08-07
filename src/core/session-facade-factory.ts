@@ -47,7 +47,6 @@ import type { BashToolOptions } from "./tools/bash.js";
 import { createHistoryTreeToolDefinition } from "./tools/history-tree.js";
 import { buildSessionBreadcrumb } from "./projection/history-tree.js";
 import { createSessionSplitToolDefinition } from "./tools/session-split.js";
-import { createDelegateAgentToolDefinition } from "./tools/delegate-agent.js";
 import { createTellToolDefinition } from "./tools/tell.js";
 import { wrapToolDefinitions } from "./tools/tool-definition-wrapper.js";
 
@@ -330,14 +329,10 @@ export async function createSessionFacade(
 	const shellPath = settingsManager.getShellPath();
 	const autoResizeImages = settingsManager.getImageAutoResize();
 	const cliToolOptions: BashToolOptions = { commandPrefix: shellCommandPrefix, shellPath, read: { autoResizeImages } };
-	// The `delegate_agent` built-in command is wired into the cli tool for both
-	// the main agent and workspace agents (it needs the agent dir to spawn
-	// sub-agents / list workspaces).
+	// The `tell` built-in command (agent-to-agent messaging via the gateway) is
+	// wired into the cli tool for both the main agent and workspace agents — it
+	// needs the agent dir to ensure/start the gateway and discover workspaces.
 	if (agentDir) {
-		cliToolOptions.delegateAgent = { agentDir, mainDir };
-		// The `tell` built-in command (agent-to-agent messaging via the gateway)
-		// is wired into the cli tool alongside delegate_agent — it needs the
-		// agent dir to ensure/start the gateway and discover workspaces.
 		cliToolOptions.tell = { agentDir, mainDir };
 	}
 	// The `skill` built-in command is wired into the cli tool whenever skills
@@ -415,7 +410,7 @@ export async function createSessionFacade(
 			}
 		}
 
-		// read/write/edit/session_split/history_tree/(delegate_agent) are built-in
+		// read/write/edit/session_split/history_tree/tell are built-in
 		// cli commands routed internally by the cli tool, not separate tools; ensure
 		// their prompt guidelines are included whenever the cli tool is active, so the
 		// model sees how to use each built-in under the single cli tool.
@@ -430,7 +425,6 @@ export async function createSessionFacade(
 				createHistoryTreeToolDefinition(),
 			];
 			if (agentDir) {
-				builtinDefs.push(createDelegateAgentToolDefinition({ agentDir, mainDir }));
 				builtinDefs.push(createTellToolDefinition({ agentDir, mainDir }));
 			}
 			for (const builtinDef of builtinDefs) {

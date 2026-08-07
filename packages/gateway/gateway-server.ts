@@ -7,8 +7,7 @@
  *      rendezvous point for all clients.
  *   2. Maintain a pool of {@link RpcClient} connections, one per workspace cwd.
  *      A repeat `_tell` to the same workspace reuses the existing agent process
- *      instead of spawning a fresh one — the core fix for `delegate_agent`'s
- *      blind-spawn problem.
+ *      instead of spawning a fresh one each time.
  *   3. Route `tell` requests: resolve the destination to a cwd, find-or-spawn
  *      the agent, prompt it, and return the agent's final assistant text.
  *
@@ -249,7 +248,7 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 				type: "tell_result",
 				id: request.id,
 				ok: false,
-				error: `Unknown workspace "${request.to}". Use a project path (cwd) or a workspace name from _delegate_agent list.`,
+				error: `Unknown workspace "${request.to}". Use a project path (cwd) or a workspace name from _tell list.`,
 			};
 		}
 

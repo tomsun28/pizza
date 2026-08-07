@@ -75,16 +75,6 @@ export type ParsedBuiltinToolInput =
 			};
 	  }
 	| {
-			command: "delegate_agent";
-			input: {
-				action: "list" | "run";
-				cwd?: string;
-				name?: string;
-				task?: string;
-				timeout?: number;
-			};
-	  }
-	| {
 			command: "skill";
 			input: {
 				action: "list" | "load" | "read";
@@ -206,8 +196,6 @@ export function parseBuiltinToolInput(
 			return { command: "session_split", input: parseSessionSplitInput(args) };
 		case "history_tree":
 			return { command: "history_tree", input: parseHistoryTreeInput(args) };
-		case "delegate_agent":
-			return { command: "delegate_agent", input: parseDelegateAgentInput(args, heredoc) };
 		case "skill":
 			return { command: "skill", input: parseSkillInput(args) };
 		case "cron":
@@ -400,80 +388,6 @@ function parseHistoryTreeInput(args: string[]): {
 	}
 
 	return { action, session_id: sessionId, query, max_messages: maxMessages, reason };
-}
-const DELEGATE_AGENT_ACTIONS = ["list", "run"] as const;
-type DelegateAgentAction = (typeof DELEGATE_AGENT_ACTIONS)[number];
-
-/**
- * Parse the `delegate_agent` command's args:
- *   delegate_agent list
- *   delegate_agent run <cwd> <task>
- *   delegate_agent run --name <workspace-name> --task "..."
- *   delegate_agent run --cwd <path> --task "..." [--timeout N]
- *
- * For `run`, the first positional after the action is the cwd and the rest is
- * joined into the task; `--cwd` / `--name` / `--task` flags override the
- * positionals. A heredoc (when present) supplies the task for `run`.
- */
-function parseDelegateAgentInput(args: string[], heredoc?: string): {
-	action: DelegateAgentAction;
-	cwd?: string;
-	name?: string;
-	task?: string;
-	timeout?: number;
-} {
-	let action: DelegateAgentAction | undefined;
-	let cwd: string | undefined;
-	let name: string | undefined;
-	let task: string | undefined;
-	let timeout: number | undefined;
-	const positional: string[] = [];
-
-	for (let i = 0; i < args.length; i++) {
-		const arg = args[i];
-		if (arg === "--cwd" || arg === "-d") {
-			cwd = args[++i];
-		} else if (arg === "--name" || arg === "-n") {
-			name = args[++i];
-		} else if (arg === "--task" || arg === "-t") {
-			task = args[++i];
-		} else if (arg === "--timeout") {
-			timeout = parseOptionalInt(args[++i]);
-		} else {
-			positional.push(arg);
-		}
-	}
-
-	if (positional.length > 0 && action === undefined) {
-		const candidate = positional[0].toLowerCase();
-		if (!DELEGATE_AGENT_ACTIONS.includes(candidate as DelegateAgentAction)) {
-			throw new Error(
-				`delegate_agent: unknown action "${positional[0]}". Valid actions: ${DELEGATE_AGENT_ACTIONS.join(", ")}`,
-			);
-		}
-		action = candidate as DelegateAgentAction;
-	}
-
-	if (!action) {
-		throw new Error(`delegate_agent: action required. Valid actions: ${DELEGATE_AGENT_ACTIONS.join(", ")}`);
-	}
-
-	// For `run`, the remaining positionals are <cwd> <task...>.
-	if (action === "run") {
-		const rest = positional.slice(1);
-		if (cwd === undefined && name === undefined && rest.length > 0) {
-			cwd = rest[0];
-		}
-		if (task === undefined) {
-			if (rest.length > 1) {
-				task = rest.slice(1).join(" ");
-			} else if (heredoc !== undefined) {
-				task = heredoc;
-			}
-		}
-	}
-
-	return { action, cwd, name, task, timeout };
 }
 
 const TELL_ACTIONS = ["send", "list"] as const;
@@ -980,39 +894,6 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"  _history_tree jump sess_0042 --reason \"return to auth work\"",
 				"  _history_tree fork sess_0042",
 			].join("\n");
-		case "delegate_agent":
-			return [
-				"_delegate_agent - Delegate a task to a sub-agent in another workspace",
-				"",
-				"Description:",
-				"  Hand a bounded task to a sub-agent running in another project directory (workspace).",
-				"  The sub-agent runs in its own workspace (independent event store / compaction) and",
-				"  only its final reply is returned — intermediate output stays out of this context.",
-				"  Only available to the main (persistent) agent.",
-				"",
-				"Actions:",
-				"  list              Show known workspaces (name, cwd, workspace_id, last_accessed, has_event_db).",
-				"  run <cwd> <task>  Delegate a task to a sub-agent in <cwd>; blocks until it finishes.",
-				"",
-				"Parameters:",
-				"  cwd               Target project directory (required for run, unless --name is given).",
-				"  task              Task description to hand to the sub-agent (required for run).",
-				"  --cwd, -d         Target project directory (alternative to positional).",
-				"  --name, -n        Workspace name (last path component from `list`). Alternative to --cwd.",
-				"  --task, -t        Task description (alternative to positional).",
-				"  --timeout         Timeout in milliseconds (default 120000).",
-				"  <<EOF             Heredoc form for the task (multi-line).",
-				"  -h, --help        Show this help.",
-				"",
-				"Examples:",
-				"  _delegate_agent list",
-				"  _delegate_agent run --name web --task \"fix the auth bug\"",
-				"  _delegate_agent run ../other-project \"fix the auth bug and summarize the change\"",
-				"  _delegate_agent run --cwd ../other-project --task \"fix the auth bug\" --timeout 60000",
-				"  _delegate_agent run ../other-project <<EOF",
-				"  Refactor the auth module and write a short summary of what changed.",
-				"  EOF",
-			].join("\n");
 		case "skill":
 			return [
 				"_skill - Discover and load Agent Skills",
@@ -1047,14 +928,13 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"_tell - Send a message to another agent's workspace and get its reply",
 				"",
 				"Description:",
-				"  Agent-to-agent messaging via the gateway. Unlike _delegate_agent (which spawns",
-				"  a fresh agent each time), the gateway keeps target agents alive — repeated tells",
-				"  to the same workspace are conversational: the agent remembers the context.",
+				"  Agent-to-agent messaging via the gateway. The gateway keeps target agents alive —",
+				"  repeated tells to the same workspace are conversational: the agent remembers the context.",
 				"  Only available when an agent dir is configured.",
 				"",
 				"Actions:",
 				"  send <to> <message>  Send a message to workspace <to>; blocks until it replies.",
-				"  list                 Show known workspaces (same as _delegate_agent list).",
+				"  list                 Show known workspaces you can tell to (name, cwd, workspace_id, last_accessed).",
 				"",
 				"Parameters:",
 				"  to                 Destination workspace: a project path (cwd) or workspace name (last path component).",
@@ -1287,13 +1167,6 @@ export async function executeBuiltinCommand(
 				exitCode: 1,
 			};
 		}
-		case "delegate_agent": {
-			return {
-				stdout: "",
-				stderr: "delegate_agent requires an agent dir and is executed through the cli tool.",
-				exitCode: 1,
-			};
-		}
 		case "skill": {
 			return {
 				stdout: "",
@@ -1319,7 +1192,7 @@ export async function executeBuiltinCommand(
 	}
 }
 
-export const BUILTIN_COMMANDS = ["_read", "_write", "_edit", "_session_split", "_history_tree", "_delegate_agent", "_skill", "_tell"] as const;
+export const BUILTIN_COMMANDS = ["_read", "_write", "_edit", "_session_split", "_history_tree", "_skill", "_tell"] as const;
 export type BuiltinCommand = (typeof BUILTIN_COMMANDS)[number];
 
 // ============================================================================

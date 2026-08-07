@@ -27,7 +27,7 @@ const GATEWAY_POLL_INTERVAL = 100;
 
 /**
  * Resolve the CLI entry point for spawning the gateway daemon. Same logic as
- * delegate-agent.ts and gateway-server.ts.
+ * gateway-server.ts.
  */
 function resolveCliSpawn(): { cliPath: string; binary: boolean } {
 	const argv1 = process.argv[1] ?? "";

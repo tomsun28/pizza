@@ -2,7 +2,7 @@
  * `_cron` built-in CLI command — manage scheduled/cron jobs.
  *
  * Routed internally by the `cli` tool (alongside read/write/edit/session_split/
- * history_tree/delegate_agent/skill), wired up only in RPC/desktop/web mode
+ * history_tree/tell/skill), wired up only in RPC/desktop/web mode
  * where a SchedulerEngine is running. TUI mode has no scheduler, so the tool
  * is not registered there.
  *

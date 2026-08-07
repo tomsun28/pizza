@@ -435,7 +435,7 @@ describe("Coding Agent Tools", () => {
 		});
 
 		it("should show help for built-in commands", async () => {
-			for (const command of ["_read", "_write", "_edit", "_session_split", "_history_tree", "_delegate_agent"]) {
+			for (const command of ["_read", "_write", "_edit", "_session_split", "_history_tree", "_tell"]) {
 				const result = await bashTool.execute(`test-help-${command}`, { command: `${command} -h` });
 				const output = getTextOutput(result);
 
@@ -458,30 +458,13 @@ describe("Coding Agent Tools", () => {
 			expect(result.stdout).toContain("Examples:");
 		});
 
-		it("should report delegate_agent is unavailable when the cli tool has no delegate option", async () => {
-			// cli tool without delegate option: delegate_agent is recognized but not wired up.
-			const tool = createBashTool(process.cwd());
-			const result = await tool.execute("test-no-delegate", { command: "_delegate_agent run /tmp/x do it" });
-			const output = getTextOutput(result);
-			expect(output).toContain("not available in this session");
-		});
-
-		it("should route delegate_agent list through the cli tool when the delegate option is set", async () => {
-			// cli tool with delegate option: delegate_agent routes to the delegate_agent definition.
-			const tool = createBashTool(process.cwd(), { delegateAgent: { agentDir: "/tmp/no-such-agent-dir" } });
-			const result = await tool.execute("test-delegate-list", { command: "_delegate_agent list" });
+		it("should route tell list through the cli tool when the tell option is set", async () => {
+			// cli tool with tell option: tell routes to the tell definition.
+			const tool = createBashTool(process.cwd(), { tell: { agentDir: "/tmp/no-such-agent-dir" } });
+			const result = await tool.execute("test-tell-list", { command: "_tell list" });
 			const output = getTextOutput(result);
 			expect(output).toContain("No known workspace agents found");
-			expect(result.details?.builtin?.name).toBe("delegate_agent");
-		});
-
-		it("should route delegate_agent run --help to the help text through the cli tool", async () => {
-			const tool = createBashTool(process.cwd());
-			const result = await tool.execute("test-delegate-help", { command: "_delegate_agent -h" });
-			const output = getTextOutput(result);
-			expect(output).toContain("_delegate_agent -");
-			expect(output).toContain("Actions:");
-			expect(output).toContain("run <cwd> <task>");
+			expect(result.details?.builtin?.name).toBe("tell");
 		});
 
 		it("should reject shell operators on built-in commands instead of falling back to the shell", async () => {

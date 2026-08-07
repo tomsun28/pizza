@@ -2,15 +2,14 @@
  * `tell` built-in CLI command — agent-to-agent messaging via the gateway.
  *
  * Routed internally by the `cli` tool (alongside read/write/edit/session_split/
- * history_tree/delegate_agent/skill), wired up whenever the runtime has an
+ * history_tree/skill), wired up whenever the runtime has an
  * agent dir (see session-facade-factory.ts).
  *
  * `_tell` sends a message to another agent's workspace through the gateway
- * daemon and returns the target agent's reply. Unlike `_delegate_agent` (which
- * spawns a fresh agent per call), the gateway maintains a pool of long-lived
- * agent processes — repeated tells to the same workspace reuse the agent and
- * its accumulated context. This makes `_tell` conversational: you can have a
- * back-and-forth with another workspace's agent.
+ * daemon and returns the target agent's reply. The gateway maintains a pool of
+ * long-lived agent processes — repeated tells to the same workspace reuse the
+ * agent and its accumulated context. This makes `_tell` conversational: you
+ * can have a back-and-forth with another workspace's agent.
  *
  * The gateway is auto-started on demand (like ssh-agent) — the caller never
  * needs to manage it manually.
@@ -40,7 +39,7 @@ const tellSchema = Type.Object({
 	action: Type.Union([Type.Literal("send"), Type.Literal("list")], {
 		description:
 			"send: deliver a message to another agent's workspace and return its reply. " +
-			"list: show known workspaces you can tell to (same as _delegate_agent list).",
+			"list: show known workspaces you can tell to.",
 	}),
 	to: Type.Optional(
 		Type.String({
@@ -103,7 +102,7 @@ function formatWorkspaceList(
  * Two actions:
  *  - **send**: deliver a message to another workspace's agent via the gateway,
  *    wait for the reply, and return it.
- *  - **list**: return the known workspaces (same as `_delegate_agent list`).
+ *  - **list**: return the known workspaces.
  */
 export function createTellToolDefinition(
 	options: TellToolOptions,
@@ -115,15 +114,15 @@ export function createTellToolDefinition(
 		label: "tell",
 		description:
 			"Send a message to another agent's workspace and get its reply (agent-to-agent messaging via the gateway). " +
-			"Unlike _delegate_agent (which spawns a fresh agent each time), the gateway keeps target agents alive — " +
+			"The gateway keeps target agents alive — repeated tells to the same workspace are conversational and " +
 			"repeated tells to the same workspace are conversational and the agent remembers the context. " +
 			"Use `list` to discover target workspaces, then `send` with `--to` (a workspace name or path) and `--message`.",
 		promptSnippet: "_tell: send a message to another workspace's agent via the gateway and get its reply (conversational, reuses the agent)",
 		promptGuidelines: [
 			"Use _tell to send a message to another agent's workspace and get a reply. The target agent stays alive in the gateway pool, so repeated tells are conversational — it remembers prior messages.",
-			"Before telling an unfamiliar workspace, call `_tell list` (or `_delegate_agent list`) to see which workspaces are known. The `to` argument is either a workspace name (last path component) or a project path (cwd).",
-			"_tell blocks until the target agent replies. For a one-shot task with no follow-up, _delegate_agent works too; but _tell is better when you expect a conversation or multiple exchanges.",
-			"Prefer _tell over _delegate_agent when you want the target agent to accumulate context across messages — e.g. asking follow-up questions about another codebase.",
+			"Before telling an unfamiliar workspace, call `_tell list` to see which workspaces are known. The `to` argument is either a workspace name (last path component) or a project path (cwd).",
+			"_tell blocks until the target agent replies. It is better than reading another codebase inline because the target agent accumulates context across messages — use it for conversations or multiple exchanges across workspaces.",
+			"Prefer _tell over reading another project inline: the target agent runs in its own workspace and only its reply enters this context, keeping other projects' details out.",
 		],
 		parameters: tellSchema,
 		renderShell: "self",

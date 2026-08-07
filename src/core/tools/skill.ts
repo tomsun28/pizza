@@ -2,7 +2,7 @@
  * `skill` built-in CLI command — discover and load Agent Skills.
  *
  * Routed internally by the `cli` tool (alongside read/write/edit/session_split/
- * history_tree/delegate_agent), wired up whenever the runtime has skills
+ * history_tree/tell), wired up whenever the runtime has skills
  * available (see `session-facade-factory.ts`, which passes the loaded skills
  * into the cli tool's options).
  *

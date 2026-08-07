@@ -44,8 +44,8 @@ describe("detectChainedBuiltin", () => {
 		expect(detectChainedBuiltin("echo 'a && _read'")).toBeNull();
 	});
 
-	it("recognizes _delegate_agent", () => {
-		expect(detectChainedBuiltin("foo && _delegate_agent list")).toBe("_delegate_agent");
+	it("recognizes _tell", () => {
+		expect(detectChainedBuiltin("foo && _tell list")).toBe("_tell");
 	});
 
 	it("returns null for a normal shell command", () => {

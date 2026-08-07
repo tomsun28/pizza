@@ -33,7 +33,6 @@ import { createEditToolDefinition, type EditToolDetails, type EditToolInput, typ
 import { createReadToolDefinition, type ReadToolDetails, type ReadToolInput, type ReadToolOptions } from "./read.js";
 import { createHistoryTreeToolDefinition, type HistoryTreeToolInput } from "./history-tree.js";
 import { createSessionSplitToolDefinition, type SessionSplitToolInput } from "./session-split.js";
-import { createDelegateAgentToolDefinition, type DelegateAgentToolInput, type DelegateAgentToolOptions } from "./delegate-agent.js";
 import { createSkillToolDefinition, type SkillToolInput, type SkillToolOptions } from "./skill.js";
 import { createCronToolDefinition, type CronToolInput, type CronToolOptions } from "./cron.js";
 import { createTellToolDefinition, type TellToolInput, type TellToolOptions } from "./tell.js";
@@ -84,11 +83,6 @@ export type BashBuiltinDetails =
 	| {
 			name: "history_tree";
 			args: HistoryTreeToolInput;
-			details?: undefined;
-	  }
-	| {
-			name: "delegate_agent";
-			args: DelegateAgentToolInput;
 			details?: undefined;
 	  }
 	| {
@@ -224,8 +218,6 @@ export interface BashToolOptions {
 	write?: WriteToolOptions;
 	/** Options used when routing the built-in edit command through the edit tool. */
 	edit?: EditToolOptions;
-	/** Options for the built-in delegate_agent command. When set, the cli tool routes `delegate_agent` to the delegate_agent definition. */
-	delegateAgent?: DelegateAgentToolOptions;
 	/** Options for the built-in skill command. When set, the cli tool routes `skill` to the skill definition. */
 	skill?: SkillToolOptions;
 	/** Options for the built-in cron command. When set, the cli tool routes `cron` to the cron definition. */
@@ -511,18 +503,16 @@ export function createBashToolDefinition(
 	const editDefinition = createEditToolDefinition(cwd, options?.edit);
 	const sessionSplitDefinition = createSessionSplitToolDefinition();
 	const historyTreeDefinition = createHistoryTreeToolDefinition();
-	const delegateAgentDefinition = options?.delegateAgent ? createDelegateAgentToolDefinition(options.delegateAgent) : undefined;
 	const skillDefinition = options?.skill ? createSkillToolDefinition(options.skill) : undefined;
 	const cronDefinition = options?.cron ? createCronToolDefinition(options.cron) : undefined;
 	const tellDefinition = options?.tell ? createTellToolDefinition(options.tell) : undefined;
-	/** Map of built-in command name → definition. delegate_agent/skill are present when their options are configured. */
+	/** Map of built-in command name → definition. skill/cron/tell are present when their options are configured. */
 	const builtinDefinitions: Record<string, ToolDefinition<any, any, any> | undefined> = {
 		read: readDefinition,
 		write: writeDefinition,
 		edit: editDefinition,
 		session_split: sessionSplitDefinition,
 		history_tree: historyTreeDefinition,
-		delegate_agent: delegateAgentDefinition,
 		skill: skillDefinition,
 		cron: cronDefinition,
 		tell: tellDefinition,
@@ -530,8 +520,8 @@ export function createBashToolDefinition(
 	return {
 		name: "cli",
 		label: "cli",
-		description: `Execute a CLI command in the current working directory. Built-in commands are prefixed with an underscore and handled internally (they never fall back to the shell): _read, _write, _edit, _session_split, _history_tree, _delegate_agent, _skill, _tell, and _cron. The underscore prefix avoids collisions with real shell commands (e.g. bash's own read/write builtins). IMPORTANT: built-in commands do NOT support shell operators — no pipes (|), redirects (> <), chaining (; & &&), command substitution, or newlines; issue each as a single pure command. To use a pipeline or redirection, run a plain shell command instead (grep, find, ls, cat, sed, git, npm, etc.). For _edit/_write, a value containing quotes, multiple spaces, or newlines must go through a verbatim channel — _edit with --edits JSON (e.g. --edits '[{"op":"replace","range":"12#ab","new":"line1\nline2"}]'), _write with --content or a <<EOF heredoc, or wrap the whole value in quotes. Do NOT pass such a value as bare positional tokens — its inner quotes/spaces get silently mangled. Output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB.`,
-		promptSnippet: "Execute CLI commands: built-ins are prefixed with _ (_read/_write/_edit/_session_split/_history_tree/_delegate_agent/_skill/_tell/_cron) and are pure single commands with NO shell operators; use shell commands (grep, find, ls, cat, git, npm) for pipes/redirections",
+		description: `Execute a CLI command in the current working directory. Built-in commands are prefixed with an underscore and handled internally (they never fall back to the shell): _read, _write, _edit, _session_split, _history_tree, _skill, _tell, and _cron. The underscore prefix avoids collisions with real shell commands (e.g. bash's own read/write builtins). IMPORTANT: built-in commands do NOT support shell operators — no pipes (|), redirects (> <), chaining (; & &&), command substitution, or newlines; issue each as a single pure command. To use a pipeline or redirection, run a plain shell command instead (grep, find, ls, cat, sed, git, npm, etc.). For _edit/_write, a value containing quotes, multiple spaces, or newlines must go through a verbatim channel — _edit with --edits JSON (e.g. --edits '[{"op":"replace","range":"12#ab","new":"line1\nline2"}]'), _write with --content or a <<EOF heredoc, or wrap the whole value in quotes. Do NOT pass such a value as bare positional tokens — its inner quotes/spaces get silently mangled. Output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB.`,
+		promptSnippet: "Execute CLI commands: built-ins are prefixed with _ (_read/_write/_edit/_session_split/_history_tree/_skill/_tell/_cron) and are pure single commands with NO shell operators; use shell commands (grep, find, ls, cat, git, npm) for pipes/redirections",
 		parameters: bashSchema,
 		async execute(
 			toolCallId,
@@ -541,7 +531,7 @@ export function createBashToolDefinition(
 			ctx?,
 		) {
 			// Routing policy: a command whose first word is a built-in command name
-			// (read/write/edit/session_split/history_tree/delegate_agent) is ALWAYS handled
+			// (read/write/edit/session_split/history_tree/tell) is ALWAYS handled
 			// by the internal implementation — it never degrades to the shell. Built-ins are
 			// not a shell, so they cannot support shell operators (|, >, <, ;, &, &&,
 			// command substitution, newlines). If such an operator appears (outside quotes /
@@ -638,25 +628,6 @@ export function createBashToolDefinition(
 							return {
 								content: result.content,
 								details: { builtin: { name: "history_tree", args: builtin.input, details: result.details } },
-							};
-						}
-						case "delegate_agent": {
-							if (!delegateAgentDefinition) {
-								return {
-									content: [
-										{
-											type: "text",
-											text: "delegate_agent is not available in this session (no agent dir configured). " +
-												"It cannot be used here.",
-										},
-									],
-									details: undefined,
-								};
-							}
-							const result = await delegateAgentDefinition.execute(toolCallId, builtin.input, signal, undefined, ctx as never);
-							return {
-								content: result.content,
-								details: { builtin: { name: "delegate_agent", args: builtin.input, details: result.details } },
 							};
 						}
 						case "skill": {
@@ -864,7 +835,7 @@ export function createBashToolDefinition(
 						resetBuiltinRendererStateIfNeeded(state, key);
 						const definition = builtinDefinitions[builtin.command];
 						if (!definition) {
-							// Unknown or unavailable built-in (e.g. delegate_agent when no agent dir is configured).
+						// Unknown or unavailable built-in (e.g. tell when no agent dir is configured).
 							// Fall through to the default bash call renderer below.
 						} else {
 							const renderContext = makeBuiltinRenderContext(
