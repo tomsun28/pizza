@@ -1312,6 +1312,13 @@ async fn init_sidecar_via_gateway(
 	let existing_channel = state.channels.lock().unwrap().get(&cwd).cloned();
 	if let Some(ch) = existing_channel {
 		state.active.lock().unwrap().insert(window_label, cwd.clone());
+		// Re-attach: the gateway may have idle-evicted the agent and cleared
+		// subscribers[cwd] during teardown. Without re-attaching, event fan-out
+		// silently drops because our subscriber is gone. attach is idempotent
+		// (gateway re-adds our write fn to the subscriber set).
+		let cwd_for_attach = cwd.clone();
+		let ch_for_attach = ch.clone();
+		let _ = tauri::async_runtime::spawn_blocking(move || ch_for_attach.attach(&cwd_for_attach)).await;
 		let frame = serde_json::json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "get_state" });
 		let cwd_for_blocking = cwd.clone();
 		let resp_result = tauri::async_runtime::spawn_blocking(move || ch.rpc(&cwd_for_blocking, frame))

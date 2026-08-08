@@ -292,16 +292,15 @@ export async function createSessionFacade(
 	if (options.storagePath !== ":memory:") {
 		ensureWorkspaceMeta(workspaceId, cwd, options.agentDir);
 	}
-	// Single-writer lease: only one Pizza process may actively drive a workspace
-	// session at a time. Skipped for the main agent (it has its own main lock)
-	// and for in-memory/test sessions. A stale lock whose owner died is reclaimed
-	// automatically; a LIVE owner makes us refuse to start — mirroring the main
-	// agent's single-instance behavior and preventing concurrent-turn corruption.
+	// Best-effort workspace lock: if another Pizza process is already driving
+	// this workspace, we log a warning but still proceed — the lock is advisory,
+	// not a hard gate. This allows the CLI and the desktop gateway to coexist
+	// on the same workspace without blocking each other.
 	let workspaceLock = null;
 	if (!isMainAgent && options.storagePath !== ":memory:" && agentDir) {
 		workspaceLock = acquireWorkspaceLock(getWorkspaceDir(workspaceId, agentDir));
 		if (!workspaceLock) {
-			throw new Error(`Another Pizza process is already using workspace ${workspaceId} (cwd ${cwd}). Stop it first, or run in a different directory.`);
+			console.warn(`Warning: workspace ${workspaceId} (cwd ${cwd}) is already in use by another Pizza process. Proceeding anyway.`);
 		}
 	}
 	const store = new SqliteEventStore(
