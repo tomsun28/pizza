@@ -28,12 +28,24 @@ fn read_api_key(provider: &str) -> Option<String> {
 	}
 }
 
+const BRIDGE_LOG_PATH: &str = "/tmp/pizza-gui-bridge.log";
+/// Rotate the bridge log once it exceeds ~10MB so it can't grow unbounded
+/// (get_state polling + per-rpc_response logging writes a lot).
+const BRIDGE_LOG_MAX_BYTES: u64 = 10 * 1024 * 1024;
+
 pub(crate) fn log_file(msg: &str) {
 	use std::io::Write;
+	// Best-effort rotation: if the log is too big, move it aside and start fresh.
+	// Errors here are non-fatal — we still want the line written.
+	if let Ok(meta) = std::fs::metadata(BRIDGE_LOG_PATH) {
+		if meta.len() > BRIDGE_LOG_MAX_BYTES {
+			let _ = std::fs::rename(BRIDGE_LOG_PATH, format!("{BRIDGE_LOG_PATH}.old"));
+		}
+	}
 	if let Ok(mut f) = std::fs::OpenOptions::new()
 		.create(true)
 		.append(true)
-		.open("/tmp/pizza-gui-bridge.log")
+		.open(BRIDGE_LOG_PATH)
 	{
 		let _ = writeln!(f, "{}", msg);
 	}
@@ -343,6 +355,34 @@ fn broadcast_to_all_sidecars(state: &BridgeState, command_type: &str) {
 		"broadcast_to_all_sidecars: command={} sent_to={} failed={:?}",
 		command_type, sent, failed
 	));
+}
+
+/// Fire-and-forget a no-arg RPC command to every gateway channel (the
+/// gateway-mode equivalent of broadcast_to_all_sidecars). Each channel.rpc()
+/// blocks waiting for a per-command response, so runs on spawn_blocking and
+/// the result is ignored — this is best-effort fan-out (e.g. reload_providers
+/// after editing auth.json).
+async fn broadcast_to_all_channels(state: &BridgeState, command_type: &str) {
+	let entries: Vec<(String, gateway_channel::GatewayChannel)> = state
+		.channels
+		.lock()
+		.unwrap()
+		.iter()
+		.map(|(k, v)| (k.clone(), v.clone()))
+		.collect();
+	let mut sent = 0;
+	for (cwd, channel) in entries {
+		let cmd_type = command_type.to_string();
+		let id = uuid::Uuid::new_v4().to_string();
+		let result = tauri::async_runtime::spawn_blocking(move || {
+			channel.rpc(&cwd, serde_json::json!({ "id": id, "type": cmd_type }))
+		})
+		.await;
+		if result.map(|r| r.is_ok()).unwrap_or(false) {
+			sent += 1;
+		}
+	}
+	log_file(&format!("broadcast_to_all_channels: command={} sent_to={}", command_type, sent));
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -1329,6 +1369,22 @@ async fn init_sidecar_via_gateway(
 			}
 			if disconnected {
 				log_file(&format!("gateway channel disconnected cwd={}", drain_cwd));
+				// Drop the stale channel so a fresh attach can take its place.
+				{
+					let state = app_for_drain.state::<BridgeState>();
+					state.channels.lock().unwrap().remove(&drain_cwd);
+				}
+				// Notify the frontend exactly like a sidecar exit would, so its
+				// reconnect/restart logic kicks in (it listens on "sidecar_exit").
+				let active = app_for_drain.state::<BridgeState>().active.lock().unwrap().clone();
+				for (label, _ac_cwd) in active.iter() {
+					if let Some(win) = app_for_drain.get_webview_window(label) {
+						let _ = win.emit(
+							"sidecar_exit",
+							serde_json::json!({ "code": null, "cwd": drain_cwd }),
+						);
+					}
+				}
 				break;
 			}
 			std::thread::sleep(std::time::Duration::from_millis(50));
@@ -2052,6 +2108,7 @@ pub async fn set_provider_api_key(
 	// auth.json is shared across all workspaces: tell every running sidecar
 	// to reload its in-memory credentials so a model switch uses this new key.
 	broadcast_to_all_sidecars(&state, "reload_providers");
+	broadcast_to_all_channels(state.inner(), "reload_providers").await;
 	Ok(())
 }
 
@@ -2084,6 +2141,7 @@ pub async fn remove_provider_api_key(
 	// Notify every sidecar so they drop the now-removed credential from
 	// their in-memory cache (otherwise auth still resolves as configured).
 	broadcast_to_all_sidecars(&state, "reload_providers");
+	broadcast_to_all_channels(state.inner(), "reload_providers").await;
 	Ok(())
 }
 
@@ -2155,6 +2213,7 @@ pub async fn save_custom_provider(
 
 	log_file(&format!("save_custom_provider: saved {}", provider_id));
 	broadcast_to_all_sidecars(&state, "reload_providers");
+	broadcast_to_all_channels(state.inner(), "reload_providers").await;
 	Ok(())
 }
 
@@ -2303,6 +2362,7 @@ pub async fn remove_custom_provider(
 
 	log_file(&format!("remove_custom_provider: removed {}", provider_id));
 	broadcast_to_all_sidecars(&state, "reload_providers");
+	broadcast_to_all_channels(state.inner(), "reload_providers").await;
 	Ok(())
 }
 
