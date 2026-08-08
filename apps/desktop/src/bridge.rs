@@ -1211,13 +1211,18 @@ pub async fn rpc_command(
 	let channel_opt = state.channels.lock().unwrap().get(&cwd).cloned();
 	if let Some(channel) = channel_opt {
 		let cwd_for_blocking = cwd.clone();
+		let cmd_type_for_log = obj.get("type").and_then(|t| t.as_str()).unwrap_or("").to_string();
 		let frame = Value::Object(obj);
 		let resp = tauri::async_runtime::spawn_blocking(move || {
 			channel.rpc(&cwd_for_blocking, frame)
 		})
 		.await
 		.map_err(|e| format!("blocking task failed: {e}"))?
-		.map_err(|e| e.to_string())?;
+		.map_err(|e| {
+			log_file(&format!("rpc_command [{}] gateway rpc FAILED: type={} error={}", window_label, cmd_type_for_log, e));
+			e
+		})?;
+		log_file(&format!("rpc_command [{}] gateway rpc OK: type={}", window_label, cmd_type_for_log));
 		emit_frame_to_windows(window.app_handle(), &cwd, resp);
 		return Ok(id);
 	}
@@ -1274,9 +1279,6 @@ fn emit_frame_to_windows(app: &AppHandle, cwd: &str, mut parsed: Value) {
 					if let Some(obj) = tagged.as_object_mut() {
 						obj.insert("_cwd".to_string(), Value::String(cwd.to_string()));
 					}
-					let resp_id = tagged.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
-					let resp_cmd = tagged.get("command").and_then(|c| c.as_str()).unwrap_or("").to_string();
-					log_file(&format!("emit_frame_to_windows [{}] rpc_response id={} command={}", label, resp_id, resp_cmd));
 					let _ = win.emit("rpc_response", tagged);
 				}
 				"extension_ui_request" => {

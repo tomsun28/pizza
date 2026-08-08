@@ -93,7 +93,9 @@ impl GatewayChannel {
 						};
 						Self::dispatch(&parsed, &reader_pending, &reader_inbox);
 					}
-					Err(_) => break,
+					Err(_) => {
+						break;
+					}
 				}
 			}
 			// EOF: notify + release any waiters so they don't hang forever.
