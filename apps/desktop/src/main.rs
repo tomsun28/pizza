@@ -13,6 +13,8 @@ fn main() {
 		.manage(bridge::BridgeState::default())
 		.invoke_handler(tauri::generate_handler![
 			bridge::init_sidecar,
+			bridge::main_agent_status,
+			bridge::stop_main_agent,
 			bridge::stop_sidecar,
 			bridge::rpc_command,
 			bridge::new_workspace,

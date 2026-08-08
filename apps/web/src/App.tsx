@@ -6,12 +6,16 @@ import Layout from "@/components/Layout";
 import AgentView from "@/views/AgentView";
 import SettingsView from "@/views/SettingsView";
 import PluginsView from "@/views/PluginsView";
-import { subscribeSidecarExit, subscribeEvents, initSidecar, sendCommandAwait, listWorkspaces, restartSidecar } from "@/lib/transport";
+import { subscribeSidecarExit, subscribeEvents, initSidecar, sendCommandAwait, listWorkspaces, restartSidecar, stopMainAgent } from "@/lib/transport";
 import { BrandIcon } from "@/components/BrandIcon";
 import type { RpcSessionState, WorkspaceMeta } from "@/lib/types";
 
 function isTauri(): boolean {
 	return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+function isMainAgentConflictError(message: string): boolean {
+	return message.includes("Another main agent instance is already running");
 }
 
 function AppInner() {
@@ -25,6 +29,7 @@ function AppInner() {
 	const [waitingForWorkspace, setWaitingForWorkspace] = useState(false);
 	const [workspaces, setWorkspaces] = useState<WorkspaceMeta[]>([]);
 	const [streamingCwds, setStreamingCwds] = useState<Set<string>>(new Set());
+	const [recoveringMainAgent, setRecoveringMainAgent] = useState(false);
 	const sidecarStartedRef = useRef(false);
 	// Auto-restart bookkeeping: per-cwd restart count, reset to 0 when a
 	// sidecar becomes ready. Capped at 3 attempts with exponential backoff
@@ -128,6 +133,20 @@ function AppInner() {
 	const handleDeleteWorkspace = useCallback((workspaceId: string) => {
 		setWorkspaces((prev) => prev.filter((ws) => ws.workspace_id !== workspaceId));
 	}, []);
+
+	const handleRecoverMainAgent = useCallback(async () => {
+		setRecoveringMainAgent(true);
+		try {
+			await stopMainAgent();
+			setInitError(null);
+			await startWithWorkspace("~/.pizza/main");
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
+			setInitError(msg);
+		} finally {
+			setRecoveringMainAgent(false);
+		}
+	}, [startWithWorkspace]);
 
 	// Refresh the session state from the sidecar. Used after settings that
 	// don't emit a dedicated event (e.g. toggling safe mode) so the root
@@ -284,23 +303,61 @@ function AppInner() {
 	}, [state, navigate, location.pathname, location.search]);
 
 	if (initError) {
+		const mainAgentConflict = isMainAgentConflictError(initError);
 		return (
 			<PxlKitSurfaceProvider surface="pixel">
 				<div className="flex h-screen items-center justify-center bg-bg">
-					<div className="flex max-w-md flex-col items-center gap-4 px-6 text-center">
+					<div className="flex max-w-lg flex-col items-center gap-4 px-6 text-center">
 						<BrandIcon size={48} className="text-danger" />
-						<p className="font-mono text-sm text-fg">{t("agent.failedToStartWorkspace")}</p>
-						<p className="font-mono text-xs text-muted">{initError}</p>
-						<button
-							type="button"
-							onClick={() => {
-								setInitError(null);
-								startWithWorkspace("~/.pizza/main");
-							}}
-							className="mt-2 rounded-md border border-border bg-surface-2 px-4 py-2 text-sm text-fg transition-colors hover:bg-surface-2/80"
-						>
-							{t("common.backToAgent")}
-						</button>
+						<p className="font-mono text-sm text-fg">
+							{mainAgentConflict ? t("agent.mainConflictTitle") : t("agent.failedToStartWorkspace")}
+						</p>
+						{mainAgentConflict ? (
+							<>
+								<p className="max-w-md text-sm leading-6 text-muted">{t("agent.mainConflictBody")}</p>
+								<details className="w-full text-left">
+									<summary className="cursor-pointer font-mono text-xs text-muted">{t("agent.errorDetails")}</summary>
+									<pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-surface-2 p-3 text-xs text-muted">
+										{initError}
+									</pre>
+								</details>
+								<div className="mt-2 flex flex-wrap justify-center gap-3">
+									<button
+										type="button"
+										disabled={recoveringMainAgent}
+										onClick={handleRecoverMainAgent}
+										className="rounded-md border border-accent bg-accent/15 px-4 py-2 text-sm text-accent transition-colors hover:bg-accent/25 disabled:cursor-not-allowed disabled:opacity-60"
+									>
+										{recoveringMainAgent ? t("agent.restartingMainAgent") : t("agent.stopOldAndRestart")}
+									</button>
+									<button
+										type="button"
+										disabled={recoveringMainAgent}
+										onClick={() => {
+											setInitError(null);
+											startWithWorkspace("~/.pizza/main");
+										}}
+										className="rounded-md border border-border bg-surface-2 px-4 py-2 text-sm text-fg transition-colors hover:bg-surface-2/80 disabled:cursor-not-allowed disabled:opacity-60"
+									>
+										{t("agent.retryStart")}
+									</button>
+								</div>
+							</>
+						) : (
+							<>
+								<p className="font-mono text-xs text-muted">{initError}</p>
+								<button
+									type="button"
+									onClick={() => {
+										setInitError(null);
+										startWithWorkspace("~/.pizza/main");
+									}}
+									className="mt-2 rounded-md border border-border bg-surface-2 px-4 py-2 text-sm text-fg transition-colors hover:bg-surface-2/80"
+								>
+									{t("common.backToAgent")}
+								</button>
+							</>
+						)}
 					</div>
 				</div>
 			</PxlKitSurfaceProvider>
