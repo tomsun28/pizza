@@ -120,12 +120,12 @@ export function buildLineRecords(content: string): LineRecord[] {
 }
 
 export function annotateTextWithLineAnchors(text: string, startLine = 1): string {
+	if (text.length === 0) {
+		return "";
+	}
 	const lines = text.split("\n");
 	if (text.endsWith("\n")) {
 		lines.pop();
-	}
-	if (lines.length === 0) {
-		return "";
 	}
 	return lines.map((line, index) => `${formatLineAnchor(startLine + index, line)} | ${line}`).join("\n");
 }
