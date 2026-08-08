@@ -66,6 +66,7 @@ export class RpcClient {
 	private process: ChildProcess | null = null;
 	private stopReadingStdout: (() => void) | null = null;
 	private eventListeners: RpcEventListener[] = [];
+	private exitListeners: Array<() => void> = [];
 	private pendingRequests: Map<string, { resolve: (response: RpcResponse) => void; reject: (error: Error) => void }> =
 		new Map();
 	private requestId = 0;
@@ -129,6 +130,15 @@ export class RpcClient {
 			this.handleLine(line);
 		});
 
+		// Notify exit listeners when the agent process dies (so the gateway can
+		// evict the dead pool entry immediately instead of waiting for idle
+		// timeout or a 30s sendCommand timeout on the next request).
+		this.process.on("exit", () => {
+			for (const listener of this.exitListeners) {
+				listener();
+			}
+		});
+
 		// Wait a moment for process to initialize
 		await new Promise((resolve) => setTimeout(resolve, 100));
 
@@ -175,6 +185,20 @@ export class RpcClient {
 			const index = this.eventListeners.indexOf(listener);
 			if (index !== -1) {
 				this.eventListeners.splice(index, 1);
+			}
+		};
+	}
+
+	/**
+	 * Subscribe to the agent process exiting. Used by the gateway to evict a
+	 * dead pool entry immediately. Returns an unsubscribe fn.
+	 */
+	onExit(listener: () => void): () => void {
+		this.exitListeners.push(listener);
+		return () => {
+			const index = this.exitListeners.indexOf(listener);
+			if (index !== -1) {
+				this.exitListeners.splice(index, 1);
 			}
 		};
 	}

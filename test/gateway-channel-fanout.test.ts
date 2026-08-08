@@ -36,6 +36,9 @@ class FakeAgent implements AgentConnection {
 			this.listeners.delete(listener);
 		};
 	}
+	onExit(_listener: () => void): () => void {
+		return () => {};
+	}
 	async sendCommand(command: RpcCommand): Promise<RpcResponse> {
 		this.sent.push(command);
 		// Echo a success response carrying the same id so the channel correlates it.

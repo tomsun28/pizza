@@ -60,6 +60,7 @@ export interface AgentConnection {
 	start(): Promise<void>;
 	stop(): Promise<void>;
 	onEvent(listener: (event: unknown) => void): () => void;
+	onExit(listener: () => void): () => void;
 	sendCommand(command: RpcCommand): Promise<RpcResponse>;
 	promptAndWait(message: string, images?: unknown[], timeout?: number): Promise<unknown[]>;
 	getLastAssistantText(): Promise<string | null>;
@@ -242,6 +243,14 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 		pool.set(cwd, entry);
 		scheduleIdleEviction(entry);
 		ensureForwarder(cwd, entry);
+		// If the agent process dies on its own (crash, OOM, etc.), evict the dead
+		// entry immediately so the next request spawns a fresh agent instead of
+		// timing out against a corpse for 30s (or waiting for idle eviction).
+		entry.client.onExit(() => {
+			if (pool.get(cwd) === entry) {
+				void teardownAgent(cwd, "agent exited").catch(() => {});
+			}
+		});
 		emitter.emit("agentSpawned", cwd as never);
 		return entry;
 	}
