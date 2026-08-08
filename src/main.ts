@@ -455,7 +455,11 @@ export async function main(args: string[], options?: MainOptions) {
 		// The socket path is set by ensureGateway() via PIZZA_GATEWAY_SOCKET, or
 		// falls back to the standard location.
 		const socketPath = process.env.PIZZA_GATEWAY_SOCKET ?? gatewaySocketPath();
-		const mainDir = parsed.main ? getMainDir(parsed.mainDir) : undefined;
+		// The gateway needs to know the main directory so it can spawn
+		// sub-agents with --main for that cwd. The gateway itself does NOT
+		// run as the main agent (no --main flag → no main lock); it just
+		// passes --main through to the per-workspace agent it spawns.
+		const mainDir = (parsed.main || parsed.mainDir) ? getMainDir(parsed.mainDir) : undefined;
 		const server = createGatewayServer({ socketPath, agentDir, mainDir });
 		server.on("listening", (sock: string) => {
 			console.error(chalk.green(`🍕 Gateway listening on ${sock}`));

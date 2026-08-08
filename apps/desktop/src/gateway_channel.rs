@@ -268,16 +268,28 @@ pub fn ensure_gateway(socket_path: &PathBuf, pizza_cmd: (&str, &[String])) -> Re
 		return Ok(());
 	}
 	let env_pizza = std::env::var("PIZZA_BIN").ok();
+	// Resolve the main agent directory so the gateway can pass --main to
+	// sub-agents spawned for that cwd. The gateway itself does NOT run as
+	// the main agent (no --main flag); it just needs to know the path.
+	let main_dir = std::env::var("HOME")
+		.ok()
+		.map(|h| format!("{}/.pizza/main", h));
 	let (program, base_args): (String, Vec<String>) = if let Some(bin) = env_pizza {
 		let parts: Vec<&str> = bin.split_whitespace().collect();
 		let p = parts[0].to_string();
 		let mut a: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
 		a.extend(["--mode".to_string(), "gateway".to_string()]);
+		if let Some(ref md) = main_dir {
+			a.extend(["--main-dir".to_string(), md.clone()]);
+		}
 		(p, a)
 	} else {
 		(pizza_cmd.0.to_string(), {
 			let mut v = pizza_cmd.1.to_vec();
 			v.extend(["--mode".to_string(), "gateway".to_string()]);
+			if let Some(ref md) = main_dir {
+				v.extend(["--main-dir".to_string(), md.clone()]);
+			}
 			v
 		})
 	};

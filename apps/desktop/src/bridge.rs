@@ -1135,7 +1135,7 @@ pub fn stop_sidecar(
 }
 
 #[tauri::command]
-pub fn rpc_command(
+pub async fn rpc_command(
 	window: tauri::Window,
 	state: tauri::State<'_, BridgeState>,
 	command: Value,
@@ -1164,32 +1164,50 @@ pub fn rpc_command(
 	let cwd = cwd.ok_or("No active workspace for this window")?;
 
 	// Gateway-mode: forward via the channel instead of the sidecar stdin.
-	if let Some(channel) = state.channels.lock().unwrap().get(&cwd).cloned() {
-		channel.rpc(&cwd, Value::Object(obj)).map_err(|e| e.to_string())?;
+	// channel.rpc() blocks until the response arrives (up to 60s). Run it on
+	// a blocking thread so we don't freeze the Tauri main thread / webview
+	// event loop — the frontend needs the main thread free to receive the
+	// rpc_response event we emit after the call returns.
+	let channel_opt = state.channels.lock().unwrap().get(&cwd).cloned();
+	if let Some(channel) = channel_opt {
+		let cwd_for_blocking = cwd.clone();
+		let frame = Value::Object(obj);
+		let resp = tauri::async_runtime::spawn_blocking(move || {
+			channel.rpc(&cwd_for_blocking, frame)
+		})
+		.await
+		.map_err(|e| format!("blocking task failed: {e}"))?
+		.map_err(|e| e.to_string())?;
+		emit_frame_to_windows(window.app_handle(), &cwd, resp);
 		return Ok(id);
 	}
 
-	let mut sidecars = state.sidecars.lock().unwrap();
-	let sidecar = sidecars.get_mut(&cwd).ok_or("Sidecar is not running")?;
-	sidecar
-		.stdin
-		.write_all(line.as_bytes())
-		.map_err(|e| format!("write: {e}"))?;
-	sidecar
-		.stdin
-		.write_all(b"\n")
-		.map_err(|e| format!("write nl: {e}"))?;
-	sidecar.stdin.flush().map_err(|e| format!("flush: {e}"))?;
+	// Sidecar mode: write to stdin (non-blocking, no await needed).
+	{
+		let mut sidecars = state.sidecars.lock().unwrap();
+		let sidecar = sidecars.get_mut(&cwd).ok_or("Sidecar is not running")?;
+		sidecar
+			.stdin
+			.write_all(line.as_bytes())
+			.map_err(|e| format!("write: {e}"))?;
+		sidecar
+			.stdin
+			.write_all(b"\n")
+			.map_err(|e| format!("write nl: {e}"))?;
+		sidecar.stdin.flush().map_err(|e| format!("flush: {e}"))?;
+	}
 	Ok(id)
 }
 
 /// True when the desktop should route workspaces through the gateway broker
-/// instead of spawning per-cwd sidecars. Gated by env so the default behavior
-/// (spawn) is unchanged until a GUI smoke test flips it.
+/// instead of spawning per-cwd sidecars. Gateway mode is the default — it
+/// keeps agent processes alive across desktop restarts and lets multiple
+/// clients (desktop, CLI, other agents) share one agent per workspace.
+/// Set PIZZA_DESKTOP_GATEWAY=0 to fall back to the legacy per-cwd sidecar.
 fn gateway_mode_enabled() -> bool {
 	std::env::var("PIZZA_DESKTOP_GATEWAY")
-		.map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-		.unwrap_or(false)
+		.map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
+		.unwrap_or(true)
 }
 
 /// Emit one parsed Layer-0 frame to every window, tagged with `_cwd`, mirroring
@@ -1216,6 +1234,9 @@ fn emit_frame_to_windows(app: &AppHandle, cwd: &str, mut parsed: Value) {
 					if let Some(obj) = tagged.as_object_mut() {
 						obj.insert("_cwd".to_string(), Value::String(cwd.to_string()));
 					}
+					let resp_id = tagged.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
+					let resp_cmd = tagged.get("command").and_then(|c| c.as_str()).unwrap_or("").to_string();
+					log_file(&format!("emit_frame_to_windows [{}] rpc_response id={} command={}", label, resp_id, resp_cmd));
 					let _ = win.emit("rpc_response", tagged);
 				}
 				"extension_ui_request" => {
@@ -1245,13 +1266,17 @@ async fn init_sidecar_via_gateway(
 ) -> Result<String, String> {
 	log_file(&format!("init_sidecar_via_gateway: cwd={}", cwd));
 	// Already attached? Just switch the active pointer and re-fetch state.
-	if state.channels.lock().unwrap().contains_key(&cwd) {
+	// Extract the channel first, then drop all locks before awaiting.
+	let existing_channel = state.channels.lock().unwrap().get(&cwd).cloned();
+	if let Some(ch) = existing_channel {
 		state.active.lock().unwrap().insert(window_label, cwd.clone());
-		if let Some(ch) = state.channels.lock().unwrap().get(&cwd).cloned() {
-			let frame = serde_json::json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "get_state" });
-			if let Ok(resp) = ch.rpc(&cwd, frame) {
-				emit_frame_to_windows(&app, &cwd, resp);
-			}
+		let frame = serde_json::json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "get_state" });
+		let cwd_for_blocking = cwd.clone();
+		let resp_result = tauri::async_runtime::spawn_blocking(move || ch.rpc(&cwd_for_blocking, frame))
+			.await
+			.map_err(|e| format!("blocking task failed: {e}"))?;
+		if let Ok(resp) = resp_result {
+			emit_frame_to_windows(&app, &cwd, resp);
 		}
 		return Ok(serde_json::json!({}).to_string());
 	}
@@ -1259,7 +1284,14 @@ async fn init_sidecar_via_gateway(
 	let socket = gateway_channel::gateway_socket_path()
 		.ok_or_else(|| "HOME not set; cannot resolve gateway socket".to_string())?;
 	let (program, args) = resolve_pizza_command(&app);
-	gateway_channel::ensure_gateway(&socket, (&program, &args))?;
+	let socket_for_blocking = socket.clone();
+	let program_for_blocking = program.clone();
+	let args_for_blocking = args.clone();
+	tauri::async_runtime::spawn_blocking(move || {
+		gateway_channel::ensure_gateway(&socket_for_blocking, (&program_for_blocking, &args_for_blocking))
+	})
+	.await
+	.map_err(|e| format!("blocking task failed: {e}"))??;
 
 	let channel = gateway_channel::GatewayChannel::connect(&socket)?;
 	let resolved_cwd = channel.attach(&cwd)?;
@@ -1267,9 +1299,15 @@ async fn init_sidecar_via_gateway(
 
 	// Initial state via the channel, emitted as rpc_response for the frontend.
 	let id = uuid::Uuid::new_v4().to_string();
-	let state_resp = channel
-		.rpc(&cwd, serde_json::json!({ "id": id, "type": "get_state" }))
-		.map_err(|e| e.to_string())?;
+	let state_frame = serde_json::json!({ "id": id, "type": "get_state" });
+	let cwd_for_state = cwd.clone();
+	let channel_for_state = channel.clone();
+	let state_resp = tauri::async_runtime::spawn_blocking(move || {
+		channel_for_state.rpc(&cwd_for_state, state_frame)
+	})
+	.await
+	.map_err(|e| format!("blocking task failed: {e}"))?
+	.map_err(|e| e.to_string())?;
 	emit_frame_to_windows(&app, &resolved_cwd, state_resp);
 
 	state.channels.lock().unwrap().insert(cwd.clone(), channel.clone());

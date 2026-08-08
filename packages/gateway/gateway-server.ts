@@ -221,7 +221,16 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 		const existing = pool.get(cwd);
 		if (existing) return existing;
 
-		const client = options.createAgent ? options.createAgent(cwd) : new RpcClient({ cwd, cliPath, binary, env: makeEnv() });
+		// If this cwd is the main agent directory, spawn the sub-agent with
+		// --main so it loads SOUL.md, long-term memory, and the main agent
+		// system prompt (and acquires the main lock instead of the workspace
+		// lock). The gateway itself does NOT hold the main lock — only the
+		// per-workspace agent does.
+		const isMainAgent = mainDir !== undefined && cwd === mainDir;
+		const extraArgs = isMainAgent ? ["--main"] : undefined;
+		const client = options.createAgent
+			? options.createAgent(cwd)
+			: new RpcClient({ cwd, cliPath, binary, env: makeEnv(), args: extraArgs });
 		await client.start();
 		const entry: PoolEntry = {
 			client,
