@@ -236,9 +236,19 @@ impl GatewayChannel {
 		self.write_line(&json!({ "type": "detach", "workspace": workspace }))
 	}
 
-	/// Drain the inbox of fanned-out events (and any other non-response messages).
+	/// Drain only fanned-out **events** and the disconnect sentinel from the
+	/// inbox. Control messages (AttachOk / ListResult / Error) are left in
+	/// place so a concurrent `attach()`/`list()` via `wait_inbox` doesn't lose
+	/// its reply to the drainer. Disconnect is also returned so the caller can
+	/// detect a dead connection.
 	pub fn drain_events(&self) -> Vec<ChannelMessage> {
-		self.inbox.lock().unwrap().drain(..).collect()
+		let mut inbox = self.inbox.lock().unwrap();
+		let (events, rest): (Vec<ChannelMessage>, Vec<ChannelMessage>) = inbox
+			.drain(..)
+			.partition(|m| matches!(m, ChannelMessage::Event { .. } | ChannelMessage::Disconnected));
+		// Put control messages back so wait_inbox can still see them.
+		inbox.extend(rest);
+		events
 	}
 
 	/// Block until an inbox message matches `pred`, then return it.
