@@ -28,6 +28,9 @@ jobs:
       - name: Run tests
         run: npm test
       - name: Publish to npm
-        run: npm publish --access public
+        # publish:all first publishes @tomsun28/pizza-protocol, then the
+        # main package. prepublishOnly re-runs clean+build+vendor-tools
+        # to ensure the tarball includes vendor binaries.
+        run: npm run publish:all
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

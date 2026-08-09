@@ -49,8 +49,8 @@
 		"test:online": "vitest --run",
 		"install:local": "npm run build && npm link",
 		"prepublishOnly": "npm run clean && npm run build && npm run vendor-tools",
-		"publish:protocol": "npm run build:protocol && npm publish -w @tomsun28/pizza-protocol",
-		"publish:all": "npm run publish:protocol && npm run build && npm publish"
+		"publish:protocol": "npm run build:protocol && npm publish -w @tomsun28/pizza-protocol --access public",
+		"publish:all": "npm run publish:protocol && npm publish --access public"
 	},
 	"dependencies": {
 		"@mariozechner/jiti": "^2.6.2",
