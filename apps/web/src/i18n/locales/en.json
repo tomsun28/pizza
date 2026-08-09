@@ -10,6 +10,7 @@
     "settings": "Settings",
     "error": "Error",
     "starting": "Starting...",
+    "loadingHistory": "Loading conversation...",
     "backToAgent": "Back to Agent",
     "back": "Back",
     "forward": "Forward"

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { Markdown } from "./Markdown";
@@ -499,6 +499,16 @@ function AssistantMessage({ item }: { item: TimelineItem }) {
 	);
 }
 
+/**
+ * Progressive rendering: when a large history is loaded (e.g. switching to a
+ * workspace with 1000+ messages), rendering all items at once blocks the main
+ * thread for seconds. Instead, render the last BATCH_SIZE items first (so the
+ * user sees the most recent conversation immediately), then progressively add
+ * older items one batch per animation frame until everything is visible.
+ */
+const PROGRESSIVE_BATCH_SIZE = 50;
+const PROGRESSIVE_INITIAL = 50;
+
 export function Conversation({
 	items,
 	onResolveApproval,
@@ -508,13 +518,117 @@ export function Conversation({
 	sidecarExitCode: number | null;
 	onResolveApproval?: (intentEventId: string, toolCallId: string, approved: boolean) => void;
 }) {
+	// Number of items to render, counted from the END of the array.
+	// Starts small and grows until it covers all items.
+	const [renderCount, setRenderCount] = useState(Math.min(PROGRESSIVE_INITIAL, items.length));
+	// Track the items array we're currently rendering for. When items change
+	// (e.g. new streaming message appended), reset renderCount only if the
+	// array identity changed due to a full reload, not a streaming append.
+	const prevItemsRef = useRef(items);
+	const fullRenderRef = useRef(items.length <= PROGRESSIVE_INITIAL);
+
+	useEffect(() => {
+		const prev = prevItemsRef.current;
+		// If the new items array is a completely different set (e.g. workspace
+		// switch or session reload), reset to progressive rendering.
+		// Heuristic: if the first item's id changed, it's a new conversation.
+		const isFullReload = prev.length === 0 || items.length === 0 || prev[0]?.id !== items[0]?.id;
+		if (isFullReload) {
+			fullRenderRef.current = items.length <= PROGRESSIVE_INITIAL;
+			setRenderCount(Math.min(PROGRESSIVE_INITIAL, items.length));
+		} else if (items.length > prev.length) {
+			// Items were appended (streaming). If we've already rendered
+			// everything, keep renderCount in sync so the new item shows.
+			if (fullRenderRef.current) {
+				setRenderCount(items.length);
+			}
+		}
+		prevItemsRef.current = items;
+	}, [items]);
+
+	const bottomAnchorRef = useRef<HTMLDivElement>(null);
+	const getScrollContainer = (): HTMLElement | null => {
+		const anchor = bottomAnchorRef.current;
+		if (!anchor) return null;
+		// Walk up to find the overflow-y-auto container.
+		let el: HTMLElement | null = anchor.parentElement;
+		while (el) {
+			const style = getComputedStyle(el);
+			if (style.overflowY === "auto" || style.overflowY === "scroll") return el;
+			el = el.parentElement;
+		}
+		return null;
+	};
+
+	// Scroll height measured right before a progressive batch is applied.
+	// Used to compensate scrollTop after older items are prepended, so the
+	// user's viewport shows exactly the same content before and after.
+	const preBatchScrollHeightRef = useRef<number | null>(null);
+
+	// Progressive rendering: grow renderCount by one batch per frame until
+	// all items are visible. Before each batch, snapshot the current
+	// scrollHeight so the layout effect below can keep the viewport steady.
+	useEffect(() => {
+		if (renderCount >= items.length) {
+			fullRenderRef.current = true;
+			return;
+		}
+		const raf = requestAnimationFrame(() => {
+			const container = getScrollContainer();
+			preBatchScrollHeightRef.current = container ? container.scrollHeight : null;
+			setRenderCount((prev) => Math.min(prev + PROGRESSIVE_BATCH_SIZE, items.length));
+		});
+		return () => cancelAnimationFrame(raf);
+	}, [renderCount, items.length]);
+
+	// Keep the viewport visually stable across renders.
+	//
+	// Two distinct cases:
+	//  1. First render of a conversation → jump to the bottom so the user
+	//     starts at the newest message.
+	//  2. Progressive batch prepended older items → scrollHeight grew above
+	//     the viewport. Add the growth delta to scrollTop so the content the
+	//     user is looking at stays exactly where it was. Without this the
+	//     page appears to scroll on its own.
+	const isFirstRenderRef = useRef(true);
+	useLayoutEffect(() => {
+		const container = getScrollContainer();
+		if (!container) return;
+
+		if (isFirstRenderRef.current) {
+			isFirstRenderRef.current = false;
+			preBatchScrollHeightRef.current = null;
+			container.scrollTop = container.scrollHeight;
+			return;
+		}
+
+		const before = preBatchScrollHeightRef.current;
+		preBatchScrollHeightRef.current = null;
+		if (before === null) return;
+		const delta = container.scrollHeight - before;
+		if (delta > 0) {
+			container.scrollTop += delta;
+		}
+	}, [renderCount, items.length]);
+
+	// Reset first-render flag when a full reload happens (workspace/session
+	// switch) so the new conversation gets an initial scroll-to-bottom.
+	const firstItemId = items.length > 0 ? items[0].id : "";
+	useEffect(() => {
+		isFirstRenderRef.current = true;
+	}, [firstItemId]);
+
 	if (items.length === 0) {
 		return <div className="flex min-h-[calc(100vh-200px)] flex-col items-center justify-center gap-4 text-center text-muted" />;
 	}
 
+	// Render only the last `renderCount` items. Older items are progressively
+	// added as renderCount grows, so the user sees recent messages instantly.
+	const visibleItems = renderCount >= items.length ? items : items.slice(items.length - renderCount);
+
 	return (
 		<div className="mx-auto max-w-3xl px-6 pb-32 pt-4">
-			{items.map((item) => {
+			{visibleItems.map((item) => {
 				if (item.role === "user") return <UserBubble key={item.id} item={item} />;
 				if (item.role === "system") return <SystemNotice key={item.id} item={item} />;
 				if (item.role === "tool") return <ToolCard key={item.id} item={item} onResolveApproval={onResolveApproval} />;
@@ -524,6 +638,7 @@ export function Conversation({
 				}
 				return <AssistantMessage key={item.id} item={item} />;
 			})}
+			<div ref={bottomAnchorRef} />
 		</div>
 	);
 }

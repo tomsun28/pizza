@@ -10,6 +10,7 @@
     "settings": "设置",
     "error": "错误",
     "starting": "启动中...",
+    "loadingHistory": "加载对话中...",
     "backToAgent": "返回助理",
     "back": "后退",
     "forward": "前进"
