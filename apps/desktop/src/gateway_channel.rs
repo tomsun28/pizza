@@ -75,12 +75,18 @@ impl GatewayChannel {
 	#[cfg(unix)]
 	pub fn connect(socket_path: &PathBuf) -> Result<Self, String> {
 		let stream = UnixStream::connect(socket_path).map_err(|e| {
-			format!("Failed to connect to gateway at {}: {}", socket_path.display(), e)
+			format!(
+				"Failed to connect to gateway at {}: {}",
+				socket_path.display(),
+				e
+			)
 		})?;
 		stream
 			.set_nonblocking(false)
 			.map_err(|e| format!("set_nonblocking failed: {e}"))?;
-		let write_stream = stream.try_clone().map_err(|e| format!("clone stream: {e}"))?;
+		let write_stream = stream
+			.try_clone()
+			.map_err(|e| format!("clone stream: {e}"))?;
 
 		let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
 		let inbox: Arc<Mutex<Vec<ChannelMessage>>> = Arc::new(Mutex::new(Vec::new()));
@@ -108,7 +114,10 @@ impl GatewayChannel {
 				}
 			}
 			// EOF: notify + release any waiters so they don't hang forever.
-			reader_inbox.lock().unwrap().push(ChannelMessage::Disconnected);
+			reader_inbox
+				.lock()
+				.unwrap()
+				.push(ChannelMessage::Disconnected);
 			for (_, slot) in reader_pending.lock().unwrap().drain() {
 				if let Ok(mut guard) = slot.lock() {
 					if guard.is_none() {
@@ -136,7 +145,10 @@ impl GatewayChannel {
 					.unwrap_or("")
 					.to_string();
 				let frame = parsed.get("frame").cloned().unwrap_or(Value::Null);
-				let id = frame.get("id").and_then(|i| i.as_str()).map(|s| s.to_string());
+				let id = frame
+					.get("id")
+					.and_then(|i| i.as_str())
+					.map(|s| s.to_string());
 				if let Some(id) = id {
 					if let Some(slot) = pending.lock().unwrap().get(&id).cloned() {
 						if let Ok(mut guard) = slot.lock() {
@@ -157,11 +169,20 @@ impl GatewayChannel {
 					.and_then(|w| w.as_str())
 					.unwrap_or("")
 					.to_string();
-				inbox.lock().unwrap().push(ChannelMessage::AttachOk { workspace });
+				inbox
+					.lock()
+					.unwrap()
+					.push(ChannelMessage::AttachOk { workspace });
 			}
 			"list_result" => {
-				let workspaces = parsed.get("workspaces").cloned().unwrap_or(Value::Array(vec![]));
-				inbox.lock().unwrap().push(ChannelMessage::ListResult { workspaces });
+				let workspaces = parsed
+					.get("workspaces")
+					.cloned()
+					.unwrap_or(Value::Array(vec![]));
+				inbox
+					.lock()
+					.unwrap()
+					.push(ChannelMessage::ListResult { workspaces });
 			}
 			"error" => {
 				let message = parsed
@@ -181,7 +202,9 @@ impl GatewayChannel {
 		stream
 			.write_all(line.as_bytes())
 			.map_err(|e| format!("write: {e}"))?;
-		stream.write_all(b"\n").map_err(|e| format!("write nl: {e}"))?;
+		stream
+			.write_all(b"\n")
+			.map_err(|e| format!("write nl: {e}"))?;
 		stream.flush().map_err(|e| format!("flush: {e}"))?;
 		Ok(())
 	}
@@ -190,7 +213,10 @@ impl GatewayChannel {
 	pub fn attach(&self, workspace: &str) -> Result<String, String> {
 		self.write_line(&json!({ "type": "attach", "workspace": workspace }))?;
 		self.wait_inbox(|msg| {
-			matches!(msg, ChannelMessage::AttachOk { .. } | ChannelMessage::Error(_))
+			matches!(
+				msg,
+				ChannelMessage::AttachOk { .. } | ChannelMessage::Error(_)
+			)
 		})
 		.and_then(|msg| match msg {
 			ChannelMessage::AttachOk { workspace } => Ok(workspace),
@@ -208,7 +234,10 @@ impl GatewayChannel {
 			.ok_or_else(|| "rpc frame requires a string id".to_string())?
 			.to_string();
 		let slot: Arc<Mutex<Option<Value>>> = Arc::new(Mutex::new(None));
-		self.pending.lock().unwrap().insert(id.clone(), Arc::clone(&slot));
+		self.pending
+			.lock()
+			.unwrap()
+			.insert(id.clone(), Arc::clone(&slot));
 		self.write_line(&json!({ "type": "rpc", "workspace": workspace, "frame": frame }))?;
 		// Spin-wait on the slot. The reader thread fills it (or a disconnect
 		// sentinel). Matches the blocking nature of the sidecar reader path.
@@ -233,12 +262,17 @@ impl GatewayChannel {
 	#[allow(dead_code)]
 	pub fn list(&self) -> Result<Value, String> {
 		self.write_line(&json!({ "type": "list" }))?;
-		self.wait_inbox(|msg| matches!(msg, ChannelMessage::ListResult { .. } | ChannelMessage::Error(_)))
-			.and_then(|msg| match msg {
-				ChannelMessage::ListResult { workspaces } => Ok(workspaces),
-				ChannelMessage::Error(e) => Err(e),
-				_ => Err("unexpected message".into()),
-			})
+		self.wait_inbox(|msg| {
+			matches!(
+				msg,
+				ChannelMessage::ListResult { .. } | ChannelMessage::Error(_)
+			)
+		})
+		.and_then(|msg| match msg {
+			ChannelMessage::ListResult { workspaces } => Ok(workspaces),
+			ChannelMessage::Error(e) => Err(e),
+			_ => Err("unexpected message".into()),
+		})
 	}
 
 	/// Stop receiving events for a workspace on this connection.
@@ -254,9 +288,13 @@ impl GatewayChannel {
 	/// detect a dead connection.
 	pub fn drain_events(&self) -> Vec<ChannelMessage> {
 		let mut inbox = self.inbox.lock().unwrap();
-		let (events, rest): (Vec<ChannelMessage>, Vec<ChannelMessage>) = inbox
-			.drain(..)
-			.partition(|m| matches!(m, ChannelMessage::Event { .. } | ChannelMessage::Disconnected));
+		let (events, rest): (Vec<ChannelMessage>, Vec<ChannelMessage>) =
+			inbox.drain(..).partition(|m| {
+				matches!(
+					m,
+					ChannelMessage::Event { .. } | ChannelMessage::Disconnected
+				)
+			});
 		// Put control messages back so wait_inbox can still see them.
 		inbox.extend(rest);
 		events
@@ -319,7 +357,10 @@ pub fn ensure_gateway(socket_path: &PathBuf, pizza_cmd: (&str, &[String])) -> Re
 	let mut cmd = Command::new(&program);
 	cmd.args(&base_args);
 	cmd.envs(std::env::vars().filter(|(k, _)| k != "PIZZA_BIN"));
-	cmd.env("PIZZA_GATEWAY_SOCKET", socket_path.to_string_lossy().to_string());
+	cmd.env(
+		"PIZZA_GATEWAY_SOCKET",
+		socket_path.to_string_lossy().to_string(),
+	);
 	cmd.stdin(Stdio::null());
 	cmd.stdout(Stdio::null());
 	cmd.stderr(Stdio::null());
@@ -372,7 +413,10 @@ mod _non_unix_stub {
 		}
 	}
 	#[cfg(unix)]
-	pub fn ensure_gateway(_socket_path: &PathBuf, _pizza_cmd: (&str, &[String])) -> Result<(), String> {
+	pub fn ensure_gateway(
+		_socket_path: &PathBuf,
+		_pizza_cmd: (&str, &[String]),
+	) -> Result<(), String> {
 		Err("gateway channel is not implemented on this platform".into())
 	}
 }
@@ -417,9 +461,21 @@ mod tests {
 			&pending,
 			&inbox,
 		);
-		GatewayChannel::dispatch(&json!({ "type": "error", "message": "boom" }), &pending, &inbox);
-		assert!(inbox.lock().unwrap().iter().any(|m| matches!(m, ChannelMessage::AttachOk { .. })));
-		assert!(inbox.lock().unwrap().iter().any(|m| matches!(m, ChannelMessage::Error(_))));
+		GatewayChannel::dispatch(
+			&json!({ "type": "error", "message": "boom" }),
+			&pending,
+			&inbox,
+		);
+		assert!(inbox
+			.lock()
+			.unwrap()
+			.iter()
+			.any(|m| matches!(m, ChannelMessage::AttachOk { .. })));
+		assert!(inbox
+			.lock()
+			.unwrap()
+			.iter()
+			.any(|m| matches!(m, ChannelMessage::Error(_))));
 	}
 
 	#[cfg(test)]

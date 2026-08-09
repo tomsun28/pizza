@@ -1,5 +1,5 @@
-use base64::Engine;
 use crate::gateway_channel;
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -391,7 +391,10 @@ async fn broadcast_to_all_channels(state: &BridgeState, command_type: &str) {
 			sent += 1;
 		}
 	}
-	log_file(&format!("broadcast_to_all_channels: command={} sent_to={}", command_type, sent));
+	log_file(&format!(
+		"broadcast_to_all_channels: command={} sent_to={}",
+		command_type, sent
+	));
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -948,7 +951,8 @@ pub async fn init_sidecar(
 	// Gateway-mode opt-in: route through the broker instead of spawning a sidecar.
 	// Default OFF — current spawn behavior is unchanged until a GUI smoke test flips it.
 	if gateway_mode_enabled() {
-		return init_sidecar_via_gateway(window.app_handle().clone(), state, window_label, cwd).await;
+		return init_sidecar_via_gateway(window.app_handle().clone(), state, window_label, cwd)
+			.await;
 	}
 
 	// Check if sidecar for this cwd already exists.
@@ -1362,18 +1366,27 @@ pub async fn rpc_command(
 	let channel_opt = state.channels.lock().unwrap().get(&cwd).cloned();
 	if let Some(channel) = channel_opt {
 		let cwd_for_blocking = cwd.clone();
-		let cmd_type_for_log = obj.get("type").and_then(|t| t.as_str()).unwrap_or("").to_string();
+		let cmd_type_for_log = obj
+			.get("type")
+			.and_then(|t| t.as_str())
+			.unwrap_or("")
+			.to_string();
 		let frame = Value::Object(obj);
-		let resp = tauri::async_runtime::spawn_blocking(move || {
-			channel.rpc(&cwd_for_blocking, frame)
-		})
-		.await
-		.map_err(|e| format!("blocking task failed: {e}"))?
-		.map_err(|e| {
-			log_file(&format!("rpc_command [{}] gateway rpc FAILED: type={} error={}", window_label, cmd_type_for_log, e));
-			e
-		})?;
-		log_file(&format!("rpc_command [{}] gateway rpc OK: type={}", window_label, cmd_type_for_log));
+		let resp =
+			tauri::async_runtime::spawn_blocking(move || channel.rpc(&cwd_for_blocking, frame))
+				.await
+				.map_err(|e| format!("blocking task failed: {e}"))?
+				.map_err(|e| {
+					log_file(&format!(
+						"rpc_command [{}] gateway rpc FAILED: type={} error={}",
+						window_label, cmd_type_for_log, e
+					));
+					e
+				})?;
+		log_file(&format!(
+			"rpc_command [{}] gateway rpc OK: type={}",
+			window_label, cmd_type_for_log
+		));
 		emit_frame_to_windows(window.app_handle(), &cwd, resp);
 		return Ok(id);
 	}
@@ -1462,19 +1475,26 @@ async fn init_sidecar_via_gateway(
 	// Extract the channel first, then drop all locks before awaiting.
 	let existing_channel = state.channels.lock().unwrap().get(&cwd).cloned();
 	if let Some(ch) = existing_channel {
-		state.active.lock().unwrap().insert(window_label, cwd.clone());
+		state
+			.active
+			.lock()
+			.unwrap()
+			.insert(window_label, cwd.clone());
 		// Re-attach: the gateway may have idle-evicted the agent and cleared
 		// subscribers[cwd] during teardown. Without re-attaching, event fan-out
 		// silently drops because our subscriber is gone. attach is idempotent
 		// (gateway re-adds our write fn to the subscriber set).
 		let cwd_for_attach = cwd.clone();
 		let ch_for_attach = ch.clone();
-		let _ = tauri::async_runtime::spawn_blocking(move || ch_for_attach.attach(&cwd_for_attach)).await;
-		let frame = serde_json::json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "get_state" });
+		let _ = tauri::async_runtime::spawn_blocking(move || ch_for_attach.attach(&cwd_for_attach))
+			.await;
+		let frame =
+			serde_json::json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "get_state" });
 		let cwd_for_blocking = cwd.clone();
-		let resp_result = tauri::async_runtime::spawn_blocking(move || ch.rpc(&cwd_for_blocking, frame))
-			.await
-			.map_err(|e| format!("blocking task failed: {e}"))?;
+		let resp_result =
+			tauri::async_runtime::spawn_blocking(move || ch.rpc(&cwd_for_blocking, frame))
+				.await
+				.map_err(|e| format!("blocking task failed: {e}"))?;
 		if let Ok(resp) = resp_result {
 			emit_frame_to_windows(&app, &cwd, resp);
 		}
@@ -1488,14 +1508,20 @@ async fn init_sidecar_via_gateway(
 	let program_for_blocking = program.clone();
 	let args_for_blocking = args.clone();
 	tauri::async_runtime::spawn_blocking(move || {
-		gateway_channel::ensure_gateway(&socket_for_blocking, (&program_for_blocking, &args_for_blocking))
+		gateway_channel::ensure_gateway(
+			&socket_for_blocking,
+			(&program_for_blocking, &args_for_blocking),
+		)
 	})
 	.await
 	.map_err(|e| format!("blocking task failed: {e}"))??;
 
 	let channel = gateway_channel::GatewayChannel::connect(&socket)?;
 	let resolved_cwd = channel.attach(&cwd)?;
-	log_file(&format!("init_sidecar_via_gateway: attached resolved={}", resolved_cwd));
+	log_file(&format!(
+		"init_sidecar_via_gateway: attached resolved={}",
+		resolved_cwd
+	));
 
 	// Initial state via the channel, emitted as rpc_response for the frontend.
 	let id = uuid::Uuid::new_v4().to_string();
@@ -1510,8 +1536,16 @@ async fn init_sidecar_via_gateway(
 	.map_err(|e| e.to_string())?;
 	emit_frame_to_windows(&app, &resolved_cwd, state_resp);
 
-	state.channels.lock().unwrap().insert(cwd.clone(), channel.clone());
-	state.active.lock().unwrap().insert(window_label, cwd.clone());
+	state
+		.channels
+		.lock()
+		.unwrap()
+		.insert(cwd.clone(), channel.clone());
+	state
+		.active
+		.lock()
+		.unwrap()
+		.insert(window_label, cwd.clone());
 
 	// Drain fanned-out events → windows. Exits when the channel disconnects.
 	let app_for_drain = app.clone();
@@ -1536,7 +1570,12 @@ async fn init_sidecar_via_gateway(
 				}
 				// Notify the frontend exactly like a sidecar exit would, so its
 				// reconnect/restart logic kicks in (it listens on "sidecar_exit").
-				let active = app_for_drain.state::<BridgeState>().active.lock().unwrap().clone();
+				let active = app_for_drain
+					.state::<BridgeState>()
+					.active
+					.lock()
+					.unwrap()
+					.clone();
 				for (label, _ac_cwd) in active.iter() {
 					if let Some(win) = app_for_drain.get_webview_window(label) {
 						let _ = win.emit(
@@ -2892,9 +2931,7 @@ pub async fn search_files(
 	if !base.is_dir() {
 		return Err(format!("Not a directory: {}", base.display()));
 	}
-	let q = query
-		.map(|s| s.to_lowercase())
-		.filter(|s| !s.is_empty());
+	let q = query.map(|s| s.to_lowercase()).filter(|s| !s.is_empty());
 	let cap = limit.unwrap_or(1000).max(1) as usize;
 
 	let mut out: Vec<FileSearchEntry> = Vec::with_capacity(cap.min(256));
