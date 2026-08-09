@@ -156,6 +156,9 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 	let shuttingDown = false;
 	const startTime = Date.now();
 	const { cliPath, binary } = resolveCliSpawn();
+	/** Active client sockets — destroyed on shutdown so connected clients
+	 * get EOF immediately instead of waiting for the process to exit. */
+	const activeSockets = new Set<Socket>();
 
 	// ── channel subscriptions ─────────────────────────────────────────────
 	// Each workspace can have many channel connections watching it. The gateway
@@ -293,13 +296,16 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 			waiter.reject(new Error(`agent for ${cwd} was torn down before the message was delivered`));
 		}
 		entry.queue.length = 0;
-		// Stop fanning this workspace's events out and drop its subscriber set.
+		// Stop fanning this workspace's events out. The forwarder is
+		// per-agent (it unsubscribes from the old agent's event stream),
+		// but subscribers are per-connection — keep them so a freshly
+		// spawned agent (getOrCreateAgent) re-broadcasts to the same
+		// channels without requiring each one to re-attach.
 		const forwarder = eventForwarders.get(cwd);
 		if (forwarder) {
 			forwarder();
 			eventForwarders.delete(cwd);
 		}
-		subscribers.delete(cwd);
 		await entry.client.stop().catch(() => {});
 		emitter.emit("agentClosed", cwd as never);
 	}
@@ -483,6 +489,7 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 	function handleConnection(socket: Socket): void {
 		const remote = `${socket.remoteAddress ?? "?"}:${socket.remotePort ?? "?"}`;
 		emitter.emit("connection", remote as never);
+		activeSockets.add(socket);
 
 		const write: ConnWriter = (obj: GatewayResponse): void => {
 			if (!socket.destroyed) {
@@ -570,8 +577,8 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 			}
 			subscribedCwds.clear();
 		};
-		socket.on("close", cleanup);
-		socket.on("error", cleanup);
+		socket.on("close", () => { activeSockets.delete(socket); cleanup(); });
+		socket.on("error", () => { activeSockets.delete(socket); cleanup(); });
 	}
 
 	// ── lifecycle ─────────────────────────────────────────────────────────
@@ -648,6 +655,14 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 		// Tear down all pooled agents.
 		const cwds = Array.from(pool.keys());
 		await Promise.all(cwds.map((cwd) => teardownAgent(cwd, "shutdown").catch(() => {})));
+		// Destroy all active client sockets so connected clients (desktop,
+		// CLI, etc.) get EOF immediately and can trigger their reconnect
+		// logic. Without this, server.close() only stops accepting NEW
+		// connections — existing ones hang until the process fully exits.
+		for (const sock of activeSockets) {
+			sock.destroy();
+		}
+		activeSockets.clear();
 		// Close the server.
 		await new Promise<void>((resolve) => {
 			if (!server) return resolve();
