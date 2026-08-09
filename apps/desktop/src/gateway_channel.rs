@@ -33,11 +33,20 @@ pub fn gateway_socket_path() -> Option<PathBuf> {
 #[derive(Debug, Clone)]
 pub enum ChannelMessage {
 	/// A response to a command we sent (correlated by id).
+	#[allow(dead_code)]
 	Response { id: String, frame: Value },
 	/// A fanned-out event from a workspace's agent.
-	Event { workspace: String, frame: Value },
+	#[allow(dead_code)]
+	Event {
+		#[allow(dead_code)]
+		workspace: String,
+		frame: Value,
+	},
 	/// A list_result (response to list()).
-	ListResult { workspaces: Value },
+	ListResult {
+		#[allow(dead_code)]
+		workspaces: Value,
+	},
 	/// An attach confirmation (carries the resolved cwd).
 	AttachOk { workspace: String },
 	/// A gateway-level error.
@@ -221,6 +230,7 @@ impl GatewayChannel {
 	}
 
 	/// Enumerate known workspaces.
+	#[allow(dead_code)]
 	pub fn list(&self) -> Result<Value, String> {
 		self.write_line(&json!({ "type": "list" }))?;
 		self.wait_inbox(|msg| matches!(msg, ChannelMessage::ListResult { .. } | ChannelMessage::Error(_)))
@@ -232,6 +242,7 @@ impl GatewayChannel {
 	}
 
 	/// Stop receiving events for a workspace on this connection.
+	#[allow(dead_code)]
 	pub fn detach(&self, workspace: &str) -> Result<(), String> {
 		self.write_line(&json!({ "type": "detach", "workspace": workspace }))
 	}
