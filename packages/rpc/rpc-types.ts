@@ -1,6 +1,6 @@
 /**
  * Agent-side RPC types — re-exports the dependency-free protocol types
- * from @pizza/protocol and provides typed overrides for fields that
+ * from @tomsun28/pizza-protocol and provides typed overrides for fields that
  * reference agent internals (AgentMessage, CompactionResult, etc.).
  */
 
@@ -21,7 +21,7 @@ export {
 	type RpcExtensionInfo,
 	classifyLine,
 	PROTOCOL_VERSION,
-} from "@pizza/protocol";
+} from "@tomsun28/pizza-protocol";
 
 import type {
 	RpcSessionState as ProtocolSessionState,
@@ -33,7 +33,7 @@ import type {
 	SessionTarget,
 	ConcurrencyPolicy,
 	SchedulerPolicy,
-} from "@pizza/protocol";
+} from "@tomsun28/pizza-protocol";
 
 import type { AgentMessage, ThinkingLevel } from "../../src/core/agent/types.js";
 import type { Model } from "@earendil-works/pi-ai/compat";

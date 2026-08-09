@@ -23,7 +23,7 @@
 		"rootDir": ".",
 		"baseUrl": ".",
 		"paths": {
-			"@pizza/protocol": ["./packages/protocol/index.ts"],
+			"@tomsun28/pizza-protocol": ["./packages/protocol/index.ts"],
 			"@pizza/http-bridge": ["./packages/http-bridge/server.ts"],
 			"@pizza/rpc": ["./packages/rpc/rpc-mode.ts"],
 			"@pizza/tui": ["./packages/tui/interactive-mode.ts"],

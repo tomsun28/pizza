@@ -26,7 +26,7 @@
  */
 
 import { EventEmitter } from "node:events";
-import type { ConcurrencyPolicy, ScheduledTask, ScheduledTaskSummary, ScheduledTaskRun, SessionTarget } from "@pizza/protocol";
+import type { ConcurrencyPolicy, ScheduledTask, ScheduledTaskSummary, ScheduledTaskRun, SessionTarget } from "@tomsun28/pizza-protocol";
 import { SessionLockManager, type AcquireResult } from "./locks.js";
 import { cronNextRun } from "./cron.js";
 import { defaultTaskName, generateTaskId, validateScheduleSpec } from "./types.js";

@@ -26,7 +26,7 @@
  * surface area stays small and predictable.
  */
 
-import type { ScheduleMode, ScheduleSpec, TimeOfDay, Weekday } from "@pizza/protocol";
+import type { ScheduleMode, ScheduleSpec, TimeOfDay, Weekday } from "@tomsun28/pizza-protocol";
 
 // --- Field parsing ----------------------------------------------------------
 

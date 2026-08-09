@@ -1,5 +1,5 @@
 {
-	"name": "@pizza/protocol",
+	"name": "@tomsun28/pizza-protocol",
 	"version": "0.2.1",
 	"description": "RPC protocol types shared between Pizza agent and UI consumers",
 	"type": "module",

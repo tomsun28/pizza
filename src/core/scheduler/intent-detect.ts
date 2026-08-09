@@ -25,7 +25,7 @@
  * gateway) and falls back to a normal prompt when no schedule is detected.
  */
 
-import type { ScheduleSpec, TimeOfDay, Weekday } from "@pizza/protocol";
+import type { ScheduleSpec, TimeOfDay, Weekday } from "@tomsun28/pizza-protocol";
 
 export interface DetectedScheduleIntent {
 	schedule: ScheduleSpec;

@@ -37,7 +37,7 @@ import { killTrackedDetachedChildren } from "../../src/utils/shell.js";
 import { startPtyServer, type PtyServer } from "../pty/pty-server.js";
 import { type Theme, theme } from "../../packages/tui/theme/theme.js";
 import { SchedulerEngine, type Dispatcher as SchedulerDispatcher } from "../../src/core/scheduler/index.js";
-import { SCHEDULED_TASK_FIRED, SCHEDULED_TASK_COMPLETED, type ScheduledTaskPatch, type SessionTarget } from "@pizza/protocol";
+import { SCHEDULED_TASK_FIRED, SCHEDULED_TASK_COMPLETED, type ScheduledTaskPatch, type SessionTarget } from "@tomsun28/pizza-protocol";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
 import type {
 	RpcCommand,
@@ -1032,7 +1032,7 @@ export async function runRpcModeWithFacade(
 				return success(id, "get_scheduler_policy", { policy: facade.settingsManager.getSchedulerPolicy() });
 			}
 			case "set_scheduler_policy": {
-				const policy = (command as unknown as { policy: import("@pizza/protocol").SchedulerPolicy }).policy;
+				const policy = (command as unknown as { policy: import("@tomsun28/pizza-protocol").SchedulerPolicy }).policy;
 				facade.settingsManager.setSchedulerPolicy(policy);
 				return success(id, "set_scheduler_policy", { policy: facade.settingsManager.getSchedulerPolicy() });
 			}

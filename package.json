@@ -29,11 +29,11 @@
 		"packages/protocol"
 	],
 	"scripts": {
-		"clean": "shx rm -rf dist && npm run clean -w @pizza/protocol",
+		"clean": "shx rm -rf dist && npm run clean -w @tomsun28/pizza-protocol",
 		"generate-providers": "node scripts/generate-providers.mjs",
 		"dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
 		"start": "node dist/src/cli.js",
-		"build:protocol": "npm run build -w @pizza/protocol",
+		"build:protocol": "npm run build -w @tomsun28/pizza-protocol",
 		"build": "npm run build:protocol && tsc -p tsconfig.build.json && shx chmod +x dist/src/cli.js && shx cp package.json README.md dist/ && npm run generate-providers && npm run copy-assets",
 		"build:release": "npm run build && npm run vendor-tools",
 		"build:binary": "npm run build && npm run vendor-tools && bun build --compile ./dist/src/bun/cli.js --outfile dist/pizza && npm run copy-binary-assets",
@@ -49,7 +49,7 @@
 		"test:online": "vitest --run",
 		"install:local": "npm run build && npm link",
 		"prepublishOnly": "npm run clean && npm run build && npm run vendor-tools",
-		"publish:protocol": "npm run build:protocol && npm publish -w @pizza/protocol",
+		"publish:protocol": "npm run build:protocol && npm publish -w @tomsun28/pizza-protocol",
 		"publish:all": "npm run publish:protocol && npm run build && npm publish"
 	},
 	"dependencies": {
@@ -76,7 +76,7 @@
 		"node-pty": "^1.0.0",
 		"yaml": "^2.8.2",
 		"ws": "^8.18.0",
-		"@pizza/protocol": "^0.2.1"
+		"@tomsun28/pizza-protocol": "^0.2.1"
 	},
 	"overrides": {
 		"rimraf": "6.1.2",

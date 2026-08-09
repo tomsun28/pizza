@@ -4,7 +4,7 @@ import { homedir } from "os";
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.js";
-import type { SchedulerPolicy } from "@pizza/protocol";
+import type { SchedulerPolicy } from "@tomsun28/pizza-protocol";
 
 export interface CompactionSettings {
 	enabled?: boolean; // default: true

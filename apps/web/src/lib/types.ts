@@ -1,5 +1,5 @@
 /**
- * Web app types — re-exports shared protocol types from @pizza/protocol
+ * Web app types — re-exports shared protocol types from @tomsun28/pizza-protocol
  * and adds web-specific types (WorkspaceMeta, AgentMessage subset).
  */
 
@@ -39,7 +39,7 @@ export {
 	SCHEDULED_TASK_FIRED,
 	SCHEDULED_TASK_COMPLETED,
 	SCHEDULE_INTENT_RESOLVED,
-} from "@pizza/protocol";
+} from "@tomsun28/pizza-protocol";
 // ---- AgentMessage (subset, for get_messages) ----
 export interface AgentMessage {
 	role: string;

@@ -22,7 +22,7 @@
  */
 
 import { Type, type Static } from "@sinclair/typebox";
-import type { ScheduledTaskSummary } from "@pizza/protocol";
+import type { ScheduledTaskSummary } from "@tomsun28/pizza-protocol";
 import type { SchedulerEngine } from "../scheduler/engine.js";
 import { parseScheduleShorthand } from "../scheduler/shorthand.js";
 import { defineTool, type ToolDefinition } from "../extensions/types.js";
