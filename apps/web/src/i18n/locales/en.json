@@ -48,7 +48,13 @@
     "readyPrompt": "Ready. Ask anything about this project.",
     "sidecarExited": "Sidecar exited (code {{code}})",
     "agentError": "Agent error ({{reason}})",
-    "failedToStartWorkspace": "Failed to start workspace"
+    "failedToStartWorkspace": "Failed to start workspace",
+    "mainConflictTitle": "Another main agent is running",
+    "mainConflictBody": "An older Pizza main agent is still using ~/.pizza/main. This usually means another window, an older app bundle, or a recently closed process is still alive. Stop the old agent, then restart this window.",
+    "stopOldAndRestart": "Stop old agent and restart",
+    "restartingMainAgent": "Restarting...",
+    "retryStart": "Retry start",
+    "errorDetails": "Error details"
   },
   "composer": {
     "placeholder": "Type anything",

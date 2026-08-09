@@ -174,6 +174,25 @@ export async function initSidecar(cwd?: string): Promise<Record<string, unknown>
 	}
 }
 
+export interface MainAgentStatus {
+	running: boolean;
+	pid?: number | null;
+	command?: string | null;
+	lockPath: string;
+}
+
+export async function mainAgentStatus(): Promise<MainAgentStatus | null> {
+	if (!isTauri()) return null;
+	const core = await import("@tauri-apps/api/core");
+	return await core.invoke<MainAgentStatus>("main_agent_status");
+}
+
+export async function stopMainAgent(): Promise<MainAgentStatus | null> {
+	if (!isTauri()) return null;
+	const core = await import("@tauri-apps/api/core");
+	return await core.invoke<MainAgentStatus>("stop_main_agent");
+}
+
 export async function getSessionState(timeoutMs = 5000): Promise<RpcSessionState | null> {
 	const r = await sendCommandAwait<RpcSessionState>({ type: "get_state" }, timeoutMs);
 	return r.data ?? null;

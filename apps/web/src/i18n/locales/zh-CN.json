@@ -48,7 +48,13 @@
     "readyPrompt": "就绪。可以问关于此项目的任何问题。",
     "sidecarExited": "Sidecar 已退出 (代码 {{code}})",
     "agentError": "Agent 错误 ({{reason}})",
-    "failedToStartWorkspace": "启动工作区失败"
+    "failedToStartWorkspace": "启动工作区失败",
+    "mainConflictTitle": "另一个主助手正在运行",
+    "mainConflictBody": "检测到旧的 Pizza 主助手还占用着 ~/.pizza/main。通常是另一个窗口、旧安装包，或刚退出但进程还没结束。可以先停止旧主助手，再重新启动当前窗口。",
+    "stopOldAndRestart": "停止旧助手并重启",
+    "restartingMainAgent": "正在重启...",
+    "retryStart": "重试启动",
+    "errorDetails": "错误详情"
   },
   "composer": {
     "placeholder": "随心输入",

@@ -272,6 +272,15 @@ impl Default for BridgeState {
 	}
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MainAgentStatus {
+	running: bool,
+	pid: Option<u32>,
+	command: Option<String>,
+	lock_path: String,
+}
+
 /// Kill and remove the sidecar for a specific cwd.
 pub fn kill_sidecar_for_cwd(state: &BridgeState, cwd: &str) {
 	log_file(&format!("kill_sidecar_for_cwd: cwd={}", cwd));
@@ -409,6 +418,148 @@ fn is_persistent_chat_cwd(cwd: &str) -> bool {
 	persistent_chat_cwd()
 		.map(|main| normalize_path_for_compare(cwd) == normalize_path_for_compare(&main))
 		.unwrap_or(false)
+}
+
+fn main_agent_lock_path() -> Option<PathBuf> {
+	persistent_chat_cwd().map(|cwd| PathBuf::from(cwd).join(".lock"))
+}
+
+fn read_main_agent_lock_pid() -> Option<(PathBuf, u32)> {
+	let lock_path = main_agent_lock_path()?;
+	let raw = std::fs::read_to_string(&lock_path).ok()?;
+	let pid = raw.trim().parse::<u32>().ok()?;
+	Some((lock_path, pid))
+}
+
+#[cfg(unix)]
+fn is_process_alive(pid: u32) -> bool {
+	Command::new("kill")
+		.args(["-0", &pid.to_string()])
+		.status()
+		.map(|status| status.success())
+		.unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_process_alive(pid: u32) -> bool {
+	let pid_arg = pid.to_string();
+	Command::new("ps")
+		.args(["-p", &pid_arg])
+		.status()
+		.map(|status| status.success())
+		.unwrap_or(false)
+}
+
+fn process_command(pid: u32) -> Option<String> {
+	let pid_arg = pid.to_string();
+	let output = Command::new("ps")
+		.args(["-p", &pid_arg, "-o", "command="])
+		.output()
+		.ok()?;
+	if !output.status.success() {
+		return None;
+	}
+	let command = String::from_utf8_lossy(&output.stdout).trim().to_string();
+	if command.is_empty() {
+		None
+	} else {
+		Some(command)
+	}
+}
+
+fn is_probably_pizza_main_agent(command: &str) -> bool {
+	let lower = command.to_ascii_lowercase();
+	command.contains("--main")
+		&& (lower.contains("pizza")
+			|| lower.contains("src/cli")
+			|| lower.contains("src/main")
+			|| lower.contains("dist/cli")
+			|| lower.contains("dist/main"))
+}
+
+fn current_main_agent_status() -> MainAgentStatus {
+	let lock_path = main_agent_lock_path().unwrap_or_else(|| PathBuf::from("~/.pizza/main/.lock"));
+	let lock_path_str = lock_path.to_string_lossy().to_string();
+	let Some((_, pid)) = read_main_agent_lock_pid() else {
+		return MainAgentStatus {
+			running: false,
+			pid: None,
+			command: None,
+			lock_path: lock_path_str,
+		};
+	};
+	let running = is_process_alive(pid);
+	let command = if running { process_command(pid) } else { None };
+	MainAgentStatus {
+		running,
+		pid: Some(pid),
+		command,
+		lock_path: lock_path_str,
+	}
+}
+
+#[tauri::command]
+pub fn main_agent_status() -> Result<MainAgentStatus, String> {
+	Ok(current_main_agent_status())
+}
+
+#[tauri::command]
+pub async fn stop_main_agent() -> Result<MainAgentStatus, String> {
+	let Some((lock_path, pid)) = read_main_agent_lock_pid() else {
+		return Ok(current_main_agent_status());
+	};
+	if !is_process_alive(pid) {
+		let _ = std::fs::remove_file(&lock_path);
+		return Ok(current_main_agent_status());
+	}
+	let command = process_command(pid).unwrap_or_default();
+	if !is_probably_pizza_main_agent(&command) {
+		return Err(format!(
+			"锁文件指向的进程不像 Pizza 主助手，已停止自动处理。PID: {}，命令: {}",
+			pid,
+			if command.is_empty() {
+				"<unknown>"
+			} else {
+				&command
+			}
+		));
+	}
+
+	#[cfg(unix)]
+	let stop_result = Command::new("kill")
+		.args(["-TERM", &pid.to_string()])
+		.status()
+		.map(|status| status.success())
+		.unwrap_or(false);
+
+	#[cfg(not(unix))]
+	let stop_result = Command::new("taskkill")
+		.args(["/PID", &pid.to_string(), "/T"])
+		.status()
+		.map(|status| status.success())
+		.unwrap_or(false);
+
+	if !stop_result {
+		return Err(format!("无法停止旧主助手进程 PID {}", pid));
+	}
+
+	for _ in 0..30 {
+		if !is_process_alive(pid) {
+			if std::fs::read_to_string(&lock_path)
+				.map(|raw| raw.trim() == pid.to_string())
+				.unwrap_or(false)
+			{
+				let _ = std::fs::remove_file(&lock_path);
+			}
+			return Ok(current_main_agent_status());
+		}
+		tokio::time::sleep(Duration::from_millis(100)).await;
+	}
+
+	Err(format!(
+		"已请求旧主助手退出，但进程 PID {} 仍在运行。请先手动关闭旧 Pizza 窗口后重试。",
+		pid
+	))
 }
 
 fn workspace_meta_root() -> Option<PathBuf> {
