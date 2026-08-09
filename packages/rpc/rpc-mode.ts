@@ -689,6 +689,19 @@ export async function runRpcModeWithFacade(
 			process.exit(exitCode);
 		}
 		shuttingDown = true;
+		// If a turn is in flight, abort it so the reactor emits
+		// AGENT_TURN_COMPLETED(reason="aborted") before we tear down.
+		// Without this, the frontend never sees the turn end and stays
+		// in the "streaming" state forever after the process exits.
+		if (facade.isRunning) {
+			facade.abort();
+			// Wait briefly for the reactor to settle and write the
+			// completion event to the store before we exit.
+			await Promise.race([
+				facade.waitForIdle(),
+				new Promise<void>((resolve) => setTimeout(resolve, 3000)),
+			]).catch(() => {});
+		}
 		for (const cleanup of signalCleanupHandlers) {
 			cleanup();
 		}

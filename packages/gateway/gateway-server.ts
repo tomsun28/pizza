@@ -582,16 +582,21 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 		if (healthCheckInterval <= 0) return;
 		if (healthTimer) return;
 		healthTimer = setInterval(async () => {
-			const entries = Array.from(pool.values()).filter((e) => !e.busy);
-			for (const entry of entries) {
+			const now = Date.now();
+			for (const entry of Array.from(pool.values())) {
+				// Only check idle agents — busy ones are processing a user
+				// request and should not be health-checked (that would queue
+				// behind the turn and falsely "timeout").
+				if (entry.busy) continue;
+				// Stale check: if last activity was recent, skip — the agent
+				// is clearly alive (it just handled a request).
+				if (now - entry.lastActivity < healthCheckInterval) continue;
 				try {
-					const controller = new AbortController();
-					const timer = setTimeout(() => controller.abort(), healthCheckTimeout);
 					await entry.client.sendCommand({ type: "get_state", id: `_health_${Date.now()}` });
-					clearTimeout(timer);
 				} catch {
-					// Agent didn't respond in time — it's stuck. Tear it down
-					// so the next request spawns a fresh agent.
+					// Re-check: if the agent became busy while we were waiting,
+					// it's healthy — don't tear it down.
+					if (entry.busy) continue;
 					emitter.emit("agentClosed", entry.cwd as never);
 					void teardownAgent(entry.cwd, "health-check failed").catch(() => {});
 				}

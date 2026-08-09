@@ -173,6 +173,11 @@ export class RpcClient {
 		});
 
 		this.process = null;
+		// Reject all in-flight requests so callers don't hang for 30s
+		// waiting for a response from a dead agent.
+		for (const [, pending] of this.pendingRequests) {
+			pending.reject(new Error("Agent process stopped"));
+		}
 		this.pendingRequests.clear();
 	}
 
