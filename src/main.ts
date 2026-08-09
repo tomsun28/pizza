@@ -45,6 +45,7 @@ import { InteractiveMode, runGuiModeWithFacade, runPrintModeWithFacade, runRpcMo
 import { initTheme, stopThemeWatcher } from "../packages/tui/theme/theme.js";
 import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.js";
 import { handleBuiltinCommand } from "./builtin-cli.js";
+import { handleGatewayCommand } from "./gateway-cli.js";
 import { isLocalPath } from "./utils/paths.js";
 
 /**
@@ -431,6 +432,10 @@ export async function main(args: string[], options?: MainOptions) {
 		return;
 	}
 
+	if (await handleGatewayCommand(args)) {
+		return;
+	}
+
 	const parsed = parseArgs(args);
 	if (parsed.diagnostics.length > 0) {
 		for (const d of parsed.diagnostics) {
@@ -645,7 +650,7 @@ export async function main(args: string[], options?: MainOptions) {
 		}
 
 		printTimings();
-		await runRpcModeWithFacade(created.facade);
+		await runRpcModeWithFacade(created.facade, { setSchedulerEngine: created.setSchedulerEngine });
 		return;
 	}
 

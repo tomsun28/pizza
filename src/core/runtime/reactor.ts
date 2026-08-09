@@ -485,7 +485,23 @@ export class Reactor {
 	// ─── AGENT_TURN_REQUESTED ───────────────────────────────────────────────
 
 	private async _onAgentTurnRequested(event: EventBase): Promise<void> {
-		if (this._shouldInterrupt()) return;
+		if (this._shouldInterrupt()) {
+			// Abort fired between turns — emit completion so the runtime
+			// settles and the UI exits the "streaming" state.
+			this._emit({
+				actor_id: "coder_agent",
+				type: "AGENT_TURN_END",
+				payload: { tool_calls_count: 0 },
+				caused_by: event.event_id,
+			});
+			this._emit({
+				actor_id: "coder_agent",
+				type: "AGENT_TURN_COMPLETED",
+				payload: { reason: "aborted" },
+				caused_by: event.event_id,
+			});
+			return;
+		}
 
 		const payload = event.payload as { reason: string; retry_attempt?: number };
 
@@ -1074,6 +1090,24 @@ export class Reactor {
 
 	private async _onLlmCallFailed(event: EventBase): Promise<void> {
 		const payload = event.payload as { error: string; retryable: boolean };
+
+		// If the call failed because the user aborted, don't retry — emit
+		// turn completion so the runtime settles and the UI exits streaming.
+		if (this._shouldInterrupt()) {
+			this._emit({
+				actor_id: "coder_agent",
+				type: "AGENT_TURN_END",
+				payload: { tool_calls_count: 0 },
+				caused_by: event.event_id,
+			});
+			this._emit({
+				actor_id: "coder_agent",
+				type: "AGENT_TURN_COMPLETED",
+				payload: { reason: "aborted" },
+				caused_by: event.event_id,
+			});
+			return;
+		}
 
 		const retryResult = this._scheduleRetry(event, payload.error, payload.retryable);
 		if (retryResult === "scheduled") return;

@@ -58,7 +58,22 @@ export interface GatewayPingRequest extends GatewayMessageBase {
 	type: "ping";
 }
 
-export type GatewayRequest = GatewayTellRequest | GatewayPingRequest | GatewayChannelRequest;
+/** `status` — ask the gateway for pool info (workspaces, busy state, uptime). */
+export interface GatewayStatusRequest extends GatewayMessageBase {
+	type: "status";
+}
+
+/** `shutdown` — ask the gateway to gracefully stop all agents and exit. */
+export interface GatewayShutdownRequest extends GatewayMessageBase {
+	type: "shutdown";
+}
+
+export type GatewayRequest =
+	| GatewayTellRequest
+	| GatewayPingRequest
+	| GatewayStatusRequest
+	| GatewayShutdownRequest
+	| GatewayChannelRequest;
 
 // ── Gateway → Client ─────────────────────────────────────────────────────
 
@@ -84,13 +99,40 @@ export interface GatewayPong extends GatewayMessageBase {
 	type: "pong";
 }
 
+/** Reply to {@link GatewayStatusRequest}: pool info. */
+export interface GatewayStatusResult extends GatewayMessageBase {
+	type: "status_result";
+	/** Gateway process uptime in ms. */
+	uptime: number;
+	/** Number of subscribed channels. */
+	channels: number;
+	/** One entry per agent in the pool. */
+	agents: Array<{
+		cwd: string;
+		busy: boolean;
+		queueLength: number;
+		lastActivityMs: number;
+	}>;
+}
+
+/** Reply to {@link GatewayShutdownRequest}: confirms shutdown initiated. */
+export interface GatewayShutdownResult extends GatewayMessageBase {
+	type: "shutdown_ok";
+}
+
 /** A generic, connection-level error (e.g. malformed message). */
 export interface GatewayError extends GatewayMessageBase {
 	type: "error";
 	message: string;
 }
 
-export type GatewayResponse = GatewayTellResult | GatewayPong | GatewayError | GatewayChannelResponse;
+export type GatewayResponse =
+	| GatewayTellResult
+	| GatewayPong
+	| GatewayStatusResult
+	| GatewayShutdownResult
+	| GatewayError
+	| GatewayChannelResponse;
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -98,14 +140,14 @@ export type GatewayResponse = GatewayTellResult | GatewayPong | GatewayError | G
 export function isGatewayRequest(value: unknown): value is GatewayRequest {
 	if (typeof value !== "object" || value === null) return false;
 	const type = (value as { type?: unknown }).type;
-	return type === "tell" || type === "ping" || type === "attach" || type === "detach" || type === "rpc" || type === "list";
+	return type === "tell" || type === "ping" || type === "status" || type === "shutdown" || type === "attach" || type === "detach" || type === "rpc" || type === "list";
 }
 
 /** Is the value a valid {@link GatewayResponse}? Structural check. */
 export function isGatewayResponse(value: unknown): value is GatewayResponse {
 	if (typeof value !== "object" || value === null) return false;
 	const type = (value as { type?: unknown }).type;
-	return type === "tell_result" || type === "pong" || type === "error" || type === "attach_ok" || type === "rpc" || type === "list_result";
+	return type === "tell_result" || type === "pong" || type === "status_result" || type === "shutdown_ok" || type === "error" || type === "attach_ok" || type === "rpc" || type === "list_result";
 }
 
 /** Default tell timeout (ms) when the client omits one. */

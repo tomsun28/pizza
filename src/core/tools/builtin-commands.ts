@@ -954,6 +954,42 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"  What files changed in the last commit?",
 				"  EOF",
 			].join("\n");
+		case "cron":
+			return [
+				"_cron - Manage scheduled/cron jobs",
+				"",
+				"Description:",
+				"  Schedule recurring prompts that fire on a timer. Only available when a scheduler",
+				"  is running (RPC / desktop / web mode). list shows tasks; create schedules one;",
+				"  pause/resume toggle; delete removes; run fires it immediately.",
+				"",
+				"Actions:",
+				"  list                 Show all scheduled tasks.",
+				"  create               Schedule a recurring prompt (needs --schedule and --prompt).",
+				"  pause <taskId>       Disable a task.",
+				"  resume <taskId>      Re-enable a task.",
+				"  delete <taskId>      Remove a task.",
+				"  run <taskId>         Fire a task immediately.",
+				"",
+				"Parameters:",
+				"  --schedule, -s     Shorthand interval, e.g. \"30m\", \"every 2h\", or cron \"0 9 * * 1-5\".",
+				"  --cron-expr        Explicit 5-field cron expression (alternative to --schedule).",
+				"  --prompt, -p       Task instruction dispatched on each fire (required for create).",
+				"  --name, -n         Optional task name.",
+				"  --task, -t         Task id (for pause/resume/delete/run).",
+				"  --once             Run exactly once, then auto-disable.",
+				"  --new-session      Dispatch each fire into a fresh session (default: pinned).",
+				"  <<EOF              Heredoc form for --prompt (multi-line).",
+				"  -h, --help         Show this help.",
+				"",
+				"Examples:",
+				"  _cron list",
+				"  _cron create --schedule 30m --name \"self-review\" --prompt \"summarize recent changes\"",
+				"  _cron create --cron-expr \"0 9 * * 1-5\" --prompt \"standup\" --new-session",
+				"  _cron pause st_abc123",
+				"  _cron run st_abc123",
+				"",
+			].join("\n");
 		default:
 			return undefined;
 	}
@@ -1183,6 +1219,14 @@ export async function executeBuiltinCommand(
 			};
 		}
 
+		case "cron": {
+			return {
+				stdout: "",
+				stderr: "cron requires a running scheduler and is executed through the cli tool.",
+				exitCode: 1,
+			};
+		}
+
 		default:
 			return {
 				stdout: "",
@@ -1192,7 +1236,7 @@ export async function executeBuiltinCommand(
 	}
 }
 
-export const BUILTIN_COMMANDS = ["_read", "_write", "_edit", "_session_split", "_history_tree", "_skill", "_tell"] as const;
+export const BUILTIN_COMMANDS = ["_read", "_write", "_edit", "_session_split", "_history_tree", "_skill", "_cron", "_tell"] as const;
 export type BuiltinCommand = (typeof BUILTIN_COMMANDS)[number];
 
 // ============================================================================

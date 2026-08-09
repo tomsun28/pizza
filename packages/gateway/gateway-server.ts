@@ -80,6 +80,15 @@ export interface GatewayServerOptions {
 	 */
 	agentIdleTimeout?: number;
 	/**
+	 * Health-check interval (ms): every interval, each idle agent in the pool
+	 * receives a lightweight `get_state` RPC. If it doesn't respond within
+	 * `agentHealthTimeout` ms, the agent is considered stuck and is torn down
+	 * so the next request spawns a fresh one. Default: 60_000. 0 disables.
+	 */
+	agentHealthCheckInterval?: number;
+	/** Per-agent health-check timeout (ms). Default: 10_000. */
+	agentHealthTimeout?: number;
+	/**
 	 * Factory for the workspace agent connection. Defaults to spawning a real
 	 * `pizza --mode rpc` process via {@link RpcClient}. Inject a fake for tests
 	 * (or a non-spawn owner) — it is memoized per cwd by the pool.
@@ -138,11 +147,14 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 	const agentDir = options.agentDir;
 	const mainDir = options.mainDir;
 	const agentIdleTimeout = options.agentIdleTimeout ?? 10 * 60_000;
+	const healthCheckInterval = options.agentHealthCheckInterval ?? 60_000;
+	const healthCheckTimeout = options.agentHealthTimeout ?? 10_000;
 	const emitter = new EventEmitter();
 
 	const pool = new Map<string, PoolEntry>();
 	let server: Server | undefined;
 	let shuttingDown = false;
+	const startTime = Date.now();
 	const { cliPath, binary } = resolveCliSpawn();
 
 	// ── channel subscriptions ─────────────────────────────────────────────
@@ -513,6 +525,28 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 				return;
 			}
 
+			if (type === "status") {
+				const now = Date.now();
+				write({
+					type: "status_result",
+					uptime: now - startTime,
+					channels: subscribers.size,
+					agents: Array.from(pool.values()).map((e) => ({
+						cwd: e.cwd,
+						busy: e.busy,
+						queueLength: e.queue.length,
+						lastActivityMs: now - e.lastActivity,
+					})),
+				});
+				return;
+			}
+
+			if (type === "shutdown") {
+				write({ type: "shutdown_ok" });
+				void stop().catch(() => {});
+				return;
+			}
+
 			// Channel protocol: attach / detach / rpc / list.
 			if (type === "attach" || type === "detach" || type === "rpc" || type === "list") {
 				void handleChannelRequest(parsed as GatewayChannelRequest, write, subscribedCwds).catch((error: unknown) => {
@@ -541,6 +575,33 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 	}
 
 	// ── lifecycle ─────────────────────────────────────────────────────────
+
+	/** Periodic health check: ping each idle agent; tear down non-responders. */
+	let healthTimer: NodeJS.Timeout | undefined;
+	function startHealthCheck(): void {
+		if (healthCheckInterval <= 0) return;
+		if (healthTimer) return;
+		healthTimer = setInterval(async () => {
+			const entries = Array.from(pool.values()).filter((e) => !e.busy);
+			for (const entry of entries) {
+				try {
+					const controller = new AbortController();
+					const timer = setTimeout(() => controller.abort(), healthCheckTimeout);
+					await entry.client.sendCommand({ type: "get_state", id: `_health_${Date.now()}` });
+					clearTimeout(timer);
+				} catch {
+					// Agent didn't respond in time — it's stuck. Tear it down
+					// so the next request spawns a fresh agent.
+					emitter.emit("agentClosed", entry.cwd as never);
+					void teardownAgent(entry.cwd, "health-check failed").catch(() => {});
+				}
+			}
+		}, healthCheckInterval);
+		healthTimer.unref?.();
+	}
+	function stopHealthCheck(): void {
+		if (healthTimer) { clearInterval(healthTimer); healthTimer = undefined; }
+	}
 
 	async function start(): Promise<void> {
 		if (server) return;
@@ -572,11 +633,13 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 				resolve();
 			});
 		});
+		startHealthCheck();
 	}
 
 	async function stop(): Promise<void> {
 		if (shuttingDown) return;
 		shuttingDown = true;
+		stopHealthCheck();
 		// Tear down all pooled agents.
 		const cwds = Array.from(pool.keys());
 		await Promise.all(cwds.map((cwd) => teardownAgent(cwd, "shutdown").catch(() => {})));

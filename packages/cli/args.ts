@@ -223,6 +223,10 @@ If grep/find/ls are missing from PATH, Pizza injects temporary shims only for th
 
 ${chalk.bold("Commands:")}
   ${APP_NAME} gui                      Open the local GUI workbench
+  ${APP_NAME} gateway status           Show gateway daemon status and agent pool
+  ${APP_NAME} gateway start            Start the gateway daemon
+  ${APP_NAME} gateway stop             Stop the gateway daemon
+  ${APP_NAME} gateway restart          Restart the gateway daemon
   ${APP_NAME} plugin install <src> [-l]  Install extension source and add to settings
   ${APP_NAME} plugin remove <src> [-l]   Remove extension source from settings
   ${APP_NAME} plugin uninstall <src> [-l] Alias for remove

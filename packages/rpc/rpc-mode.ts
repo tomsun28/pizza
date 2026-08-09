@@ -464,7 +464,19 @@ function estimateMessageTokens(msg: AgentMessage): number {
  * Run RPC mode against the event-sourced facade.
  * Events are emitted as raw EventStore TypedEvent JSON lines.
  */
-export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never> {
+export interface RunRpcModeOptions {
+	/**
+	 * Inject the SchedulerEngine into the facade's cli tool so the agent's
+	 * `_cron` built-in command can manage schedules. Created in this mode
+	 * after the facade exists; handed back via the facade-factory escape hatch.
+	 */
+	setSchedulerEngine?: (engine: SchedulerEngine | undefined) => void;
+}
+
+export async function runRpcModeWithFacade(
+	facade: SessionFacade,
+	options?: RunRpcModeOptions,
+): Promise<never> {
 	takeOverStdout();
 	let unsubscribe: (() => void) | undefined;
 	let shuttingDown = false;
@@ -614,6 +626,10 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 		},
 	});
 	scheduler.load();
+	// Hand the live engine to the facade's cli tool so the agent-facing
+	// `_cron` built-in command can list/create/pause/resume/delete/run the
+	// same tasks the UI manages via the schedule_* RPCs.
+	options?.setSchedulerEngine?.(scheduler);
 
 	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
 		writeRawStdout(serializeJsonLine(obj));

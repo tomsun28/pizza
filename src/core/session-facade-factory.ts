@@ -44,6 +44,7 @@ import { createSyntheticSourceInfo } from "./source-info.js";
 import { buildSystemPrompt } from "./system-prompt.js";
 import { allToolNames, createToolDefinition, DEFAULT_LLM_TOOLS, type ToolName } from "./tools/index.js";
 import type { BashToolOptions } from "./tools/bash.js";
+import type { SchedulerEngine } from "./scheduler/engine.js";
 import { createHistoryTreeToolDefinition } from "./tools/history-tree.js";
 import { buildSessionBreadcrumb } from "./projection/history-tree.js";
 import { createSessionSplitToolDefinition } from "./tools/session-split.js";
@@ -118,6 +119,12 @@ export interface CreateSessionFacadeResult {
 	extensionsResult: LoadExtensionsResult;
 	/** Warning if no model could be resolved. */
 	modelFallbackMessage?: string;
+	/**
+	 * Inject the SchedulerEngine after creation (rpc mode builds the engine
+	 * once the facade exists, since dispatching needs facade.prompt()). This
+	 * is what powers the agent-facing `_cron` built-in cli command.
+	 */
+	setSchedulerEngine?: (engine: SchedulerEngine | undefined) => void;
 }
 
 function isBuiltInToolName(name: string): name is ToolName {
@@ -354,6 +361,19 @@ export async function createSessionFacade(
 	if (loadedSkills.length > 0) {
 		cliToolOptions.skill = { skills: loadedSkills };
 	}
+	// The `cron` built-in command (scheduled prompts) is wired into the cli
+	// tool with a LAZY engine getter. The SchedulerEngine is created later
+	// (in rpc mode, after this facade exists — it needs facade.prompt() to
+	// dispatch turns), so we hand out a mutable slot that rpc mode fills via
+	// the `setSchedulerEngine` escape hatch on the result. Until then
+	// getEngine() returns undefined and `_cron` degrades gracefully.
+	let schedulerEngineSlot: SchedulerEngine | undefined;
+	const cronScope: "main" | "workspace" = isMainAgent ? "main" : "workspace";
+	cliToolOptions.cron = {
+		getEngine: () => schedulerEngineSlot,
+		scope: cronScope,
+		getActiveSessionId: () => sessionManager.getActiveSessionId(),
+	};
 	const toolOptions = {
 		read: { autoResizeImages },
 		cli: cliToolOptions,
@@ -764,5 +784,16 @@ export async function createSessionFacade(
 		disposers: workspaceLock ? [extensionEventUnsubscribe, workspaceLock.release] : [extensionEventUnsubscribe],
 	});
 
-	return { facade, runtime, model, thinkingLevel, extensionsResult, modelFallbackMessage };
+	return {
+		facade,
+		runtime,
+		model,
+		thinkingLevel,
+		extensionsResult,
+		modelFallbackMessage,
+		/** Let rpc mode inject the SchedulerEngine once it is created. */
+		setSchedulerEngine: (engine: SchedulerEngine | undefined) => {
+			schedulerEngineSlot = engine;
+		},
+	};
 }
