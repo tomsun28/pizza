@@ -37,7 +37,7 @@ import { killTrackedDetachedChildren } from "../../src/utils/shell.js";
 import { startPtyServer, type PtyServer } from "../pty/pty-server.js";
 import { type Theme, theme } from "../../packages/tui/theme/theme.js";
 import { SchedulerEngine, type Dispatcher as SchedulerDispatcher } from "../../src/core/scheduler/index.js";
-import { SCHEDULED_TASK_FIRED, SCHEDULED_TASK_COMPLETED, type ScheduledTaskPatch, type SessionTarget } from "@pizza/protocol";
+import { SCHEDULED_TASK_FIRED, SCHEDULED_TASK_COMPLETED, type ScheduledTaskPatch, type SessionTarget } from "@tomsun28/pizza-protocol";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
 import type {
 	RpcCommand,
@@ -464,7 +464,19 @@ function estimateMessageTokens(msg: AgentMessage): number {
  * Run RPC mode against the event-sourced facade.
  * Events are emitted as raw EventStore TypedEvent JSON lines.
  */
-export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never> {
+export interface RunRpcModeOptions {
+	/**
+	 * Inject the SchedulerEngine into the facade's cli tool so the agent's
+	 * `_cron` built-in command can manage schedules. Created in this mode
+	 * after the facade exists; handed back via the facade-factory escape hatch.
+	 */
+	setSchedulerEngine?: (engine: SchedulerEngine | undefined) => void;
+}
+
+export async function runRpcModeWithFacade(
+	facade: SessionFacade,
+	options?: RunRpcModeOptions,
+): Promise<never> {
 	takeOverStdout();
 	let unsubscribe: (() => void) | undefined;
 	let shuttingDown = false;
@@ -614,6 +626,10 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 		},
 	});
 	scheduler.load();
+	// Hand the live engine to the facade's cli tool so the agent-facing
+	// `_cron` built-in command can list/create/pause/resume/delete/run the
+	// same tasks the UI manages via the schedule_* RPCs.
+	options?.setSchedulerEngine?.(scheduler);
 
 	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
 		writeRawStdout(serializeJsonLine(obj));
@@ -673,6 +689,19 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 			process.exit(exitCode);
 		}
 		shuttingDown = true;
+		// If a turn is in flight, abort it so the reactor emits
+		// AGENT_TURN_COMPLETED(reason="aborted") before we tear down.
+		// Without this, the frontend never sees the turn end and stays
+		// in the "streaming" state forever after the process exits.
+		if (facade.isRunning) {
+			facade.abort();
+			// Wait briefly for the reactor to settle and write the
+			// completion event to the store before we exit.
+			await Promise.race([
+				facade.waitForIdle(),
+				new Promise<void>((resolve) => setTimeout(resolve, 3000)),
+			]).catch(() => {});
+		}
 		for (const cleanup of signalCleanupHandlers) {
 			cleanup();
 		}
@@ -1003,7 +1032,7 @@ export async function runRpcModeWithFacade(facade: SessionFacade): Promise<never
 				return success(id, "get_scheduler_policy", { policy: facade.settingsManager.getSchedulerPolicy() });
 			}
 			case "set_scheduler_policy": {
-				const policy = (command as unknown as { policy: import("@pizza/protocol").SchedulerPolicy }).policy;
+				const policy = (command as unknown as { policy: import("@tomsun28/pizza-protocol").SchedulerPolicy }).policy;
 				facade.settingsManager.setSchedulerPolicy(policy);
 				return success(id, "set_scheduler_policy", { policy: facade.settingsManager.getSchedulerPolicy() });
 			}

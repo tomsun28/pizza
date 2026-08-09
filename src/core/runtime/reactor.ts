@@ -163,6 +163,14 @@ export class Reactor {
 	private _abortedByUser = false;
 	/** Signatures (tool name + argument hash) for each consecutive tool-use round within the current prompt cycle. */
 	private _toolRoundSignatures: string[][] = [];
+	/**
+	 * Stream-idle watchdog: if no AGENT_MESSAGE_CHUNK arrives within this
+	 * many ms, the LLM call is aborted so the reactor emits LLM_CALL_FAILED
+	 * instead of hanging forever (provider accepted the connection but
+	 * stopped sending data mid-stream). Default: 10 minutes.
+	 */
+	private _streamIdleTimeoutMs = 10 * 60_000;
+	private _streamIdleTimer: ReturnType<typeof setTimeout> | undefined;
 	constructor(config: ReactorConfig) {
 		this.config = config;
 		this.retryPolicy = config.retryPolicy ?? new DefaultRetryPolicy();
@@ -301,6 +309,7 @@ export class Reactor {
 
 	/** Interrupt the reactor. */
 	interrupt(): void {
+		this._stopStreamIdleWatchdog();
 		this.abortController?.abort();
 	}
 
@@ -485,7 +494,23 @@ export class Reactor {
 	// ─── AGENT_TURN_REQUESTED ───────────────────────────────────────────────
 
 	private async _onAgentTurnRequested(event: EventBase): Promise<void> {
-		if (this._shouldInterrupt()) return;
+		if (this._shouldInterrupt()) {
+			// Abort fired between turns — emit completion so the runtime
+			// settles and the UI exits the "streaming" state.
+			this._emit({
+				actor_id: "coder_agent",
+				type: "AGENT_TURN_END",
+				payload: { tool_calls_count: 0 },
+				caused_by: event.event_id,
+			});
+			this._emit({
+				actor_id: "coder_agent",
+				type: "AGENT_TURN_COMPLETED",
+				payload: { reason: "aborted" },
+				caused_by: event.event_id,
+			});
+			return;
+		}
 
 		const payload = event.payload as { reason: string; retry_attempt?: number };
 
@@ -533,6 +558,10 @@ export class Reactor {
 		});
 
 		try {
+			// Start the stream-idle watchdog. It fires if no chunk arrives
+			// within the timeout window, aborting the hung LLM call so the
+			// reactor emits LLM_CALL_FAILED instead of hanging forever.
+			this._startStreamIdleWatchdog();
 			const response = await this.config.llmClient.complete({
 				messages: context.messages,
 				systemPrompt: this.config.systemPrompt,
@@ -540,6 +569,8 @@ export class Reactor {
 				tools: this.config.tools,
 				signal: this.abortController?.signal,
 				onChunk: (chunk: LLMChunk) => {
+					// Reset the idle timer on each chunk — the stream is alive.
+					this._resetStreamIdleWatchdog();
 					// Translate LLMChunk into an AGENT_MESSAGE_CHUNK event so projections / UI
 					// can render the streaming response in real time.
 					this._emit({
@@ -551,8 +582,10 @@ export class Reactor {
 				},
 			});
 
+			this._stopStreamIdleWatchdog();
 			this._handleLlmResponse(response, event.event_id, msgStart.event_id);
 		} catch (err) {
+			this._stopStreamIdleWatchdog();
 			const msg = err instanceof Error ? err.message : String(err);
 			const isRetryable = this.retryPolicy.isRetryable({ message: msg });
 
@@ -562,6 +595,31 @@ export class Reactor {
 				payload: { error: msg, retryable: isRetryable },
 				caused_by: event.event_id,
 			});
+		}
+	}
+
+	/** Start (or restart) the stream-idle watchdog timer. */
+	private _startStreamIdleWatchdog(): void {
+		this._resetStreamIdleWatchdog();
+	}
+
+	/** Reset the watchdog — called on each chunk to prove the stream is alive. */
+	private _resetStreamIdleWatchdog(): void {
+		if (this._streamIdleTimer) clearTimeout(this._streamIdleTimer);
+		this._streamIdleTimer = setTimeout(() => {
+			this._streamIdleTimer = undefined;
+			// Abort the in-flight LLM call. This causes the `await` in
+			// _onLlmCallRequested to reject with an AbortError, which flows
+			// into the catch block and emits LLM_CALL_FAILED.
+			this.abortController?.abort();
+		}, this._streamIdleTimeoutMs);
+	}
+
+	/** Clear the watchdog timer (call when the LLM response completes/fails). */
+	private _stopStreamIdleWatchdog(): void {
+		if (this._streamIdleTimer) {
+			clearTimeout(this._streamIdleTimer);
+			this._streamIdleTimer = undefined;
 		}
 	}
 
@@ -1074,6 +1132,24 @@ export class Reactor {
 
 	private async _onLlmCallFailed(event: EventBase): Promise<void> {
 		const payload = event.payload as { error: string; retryable: boolean };
+
+		// If the call failed because the user aborted, don't retry — emit
+		// turn completion so the runtime settles and the UI exits streaming.
+		if (this._shouldInterrupt()) {
+			this._emit({
+				actor_id: "coder_agent",
+				type: "AGENT_TURN_END",
+				payload: { tool_calls_count: 0 },
+				caused_by: event.event_id,
+			});
+			this._emit({
+				actor_id: "coder_agent",
+				type: "AGENT_TURN_COMPLETED",
+				payload: { reason: "aborted" },
+				caused_by: event.event_id,
+			});
+			return;
+		}
 
 		const retryResult = this._scheduleRetry(event, payload.error, payload.retryable);
 		if (retryResult === "scheduled") return;

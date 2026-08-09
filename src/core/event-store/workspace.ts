@@ -59,7 +59,7 @@ export interface WorkspaceMeta {
  *
  * Returned by {@link listKnownWorkspaces} so the main agent can enumerate the
  * project directories it has previously worked in (e.g. for the built-in
- * `delegate_agent list` cli command).
+ * `_tell list` cli command).
  */
 export interface KnownWorkspace {
 	workspace_id: string;

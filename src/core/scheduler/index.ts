@@ -59,4 +59,4 @@ export type {
 	TimeOfDay,
 	Weekday,
 	DayOfMonth,
-} from "@pizza/protocol";
+} from "@tomsun28/pizza-protocol";

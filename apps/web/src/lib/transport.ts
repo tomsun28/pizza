@@ -464,6 +464,34 @@ export async function listDir(cwd: string, subPath?: string): Promise<DirEntry[]
 	return core.invoke<DirEntry[]>("list_dir", { cwd, subPath: subPath ?? null });
 }
 
+export interface FileSearchEntry {
+	/** Basename of the file. */
+	name: string;
+	/** Path relative to the workspace root (e.g. "src/components/Terminal.tsx"). */
+	path: string;
+	is_dir: boolean;
+}
+
+/**
+ * Recursively search files under the workspace (Tauri only). Returns files at
+ * all depths (skipping node_modules / target / dist / …), ordered shallowest
+ * first. When `query` is given, only files whose relative path contains it
+ * (case-insensitive) are returned. Capped at `limit` (default 1000).
+ */
+export async function searchFiles(
+	cwd: string,
+	query?: string | null,
+	limit?: number,
+): Promise<FileSearchEntry[]> {
+	if (!isTauri()) return [];
+	const core = await import("@tauri-apps/api/core");
+	return core.invoke<FileSearchEntry[]>("search_files", {
+		cwd,
+		query: query ?? null,
+		limit: limit ?? null,
+	});
+}
+
 export async function readFileContent(cwd: string, filePath: string): Promise<string> {
 	if (!isTauri()) return "";
 	const core = await import("@tauri-apps/api/core");

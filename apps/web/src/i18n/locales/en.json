@@ -10,6 +10,7 @@
     "settings": "Settings",
     "error": "Error",
     "starting": "Starting...",
+    "loadingHistory": "Loading conversation...",
     "backToAgent": "Back to Agent",
     "back": "Back",
     "forward": "Forward"
@@ -310,6 +311,10 @@
     "title": "Terminal",
     "toggle": "Toggle terminal",
     "collapse": "Collapse terminal",
+    "newTab": "New terminal tab",
+    "closeTab": "Close tab",
+    "split": "Split terminal vertically",
+    "closePane": "Close terminal",
     "comingSoonDescription": "Terminal will appear here.",
     "hint": "Run a shell command in this workspace.",
     "prompt": "Type a command…",

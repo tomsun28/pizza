@@ -283,7 +283,7 @@ export function ScheduleForm(props: ScheduleFormProps) {
 				const selected = spec.weekdays ?? [];
 				const toggle = (d: Weekday) => {
 					const next = selected.includes(d)
-						? selected.filter((x) => x !== d)
+						? selected.filter((x: Weekday) => x !== d)
 						: [...selected, d].sort();
 					setSpec({ ...spec, weekdays: next });
 				};
@@ -330,7 +330,7 @@ export function ScheduleForm(props: ScheduleFormProps) {
 					setSpec({ ...spec, daysOfMonth: next });
 				};
 				const removeDay = (n: number) => {
-					setSpec({ ...spec, daysOfMonth: days.filter((x) => x !== n) });
+					setSpec({ ...spec, daysOfMonth: days.filter((x: number) => x !== n) });
 				};
 				const draft = daysOfMonthDraft;
 				const setDraft = setDaysOfMonthDraft;
@@ -339,7 +339,7 @@ export function ScheduleForm(props: ScheduleFormProps) {
 						<Field label={t("schedule.daysOfMonth")}>
 							<div className="space-y-1.5">
 								<div className="flex flex-wrap gap-1.5">
-									{days.map((d) => (
+									{days.map((d: number) => (
 										<span
 											key={d}
 											className="inline-flex items-center gap-1 rounded-full border border-border bg-surface-2 px-2.5 py-1 text-xs text-fg"
@@ -650,5 +650,7 @@ export function describeSchedule(schedule: ScheduleSpec): string {
 			return `每月 ${formatDaysOfMonth(schedule.daysOfMonth)} ${formatTimes(schedule.times)}`;
 		case "cron":
 			return schedule.cron?.expression ?? "";
+		default:
+			return "";
 	}
 }

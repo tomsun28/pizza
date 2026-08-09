@@ -11,7 +11,7 @@
 import { join } from "node:path";
 import { type Model, streamSimple } from "@earendil-works/pi-ai/compat";
 import { APP_NAME, getAgentDir, getDocsPath, getMainMemoryDir, getMainSoulPath } from "../config.js";
-import { getMainAgentGuidelines, isSoulUninitialized } from "./main-agent.js";
+import { acquireWorkspaceLock, getMainAgentGuidelines, isSoulUninitialized } from "./main-agent.js";
 import type { AgentMessage, AgentTool, ThinkingLevel } from "./agent/index.js";
 import { AuthStorage } from "./auth-storage.js";
 import { estimateContextTokens } from "./compaction/index.js";
@@ -28,7 +28,7 @@ import {
 import type { EventBase, ImageContent } from "./event-store/types.js";
 import type { EventAppendInput } from "./event-store/store.js";
 import { SqliteEventStore } from "./event-store/sqlite-store.js";
-import { deriveWorkspaceId, ensureWorkspaceMeta, getEventDatabasePath } from "./event-store/workspace.js";
+import { deriveWorkspaceId, ensureWorkspaceMeta, getEventDatabasePath, getWorkspaceDir } from "./event-store/workspace.js";
 import { createToolRegistry } from "./intent/tool-adapter.js";
 import { ModelRegistry } from "./model-registry.js";
 import { findInitialModel } from "./model-resolver.js";
@@ -44,10 +44,11 @@ import { createSyntheticSourceInfo } from "./source-info.js";
 import { buildSystemPrompt } from "./system-prompt.js";
 import { allToolNames, createToolDefinition, DEFAULT_LLM_TOOLS, type ToolName } from "./tools/index.js";
 import type { BashToolOptions } from "./tools/bash.js";
+import type { SchedulerEngine } from "./scheduler/engine.js";
 import { createHistoryTreeToolDefinition } from "./tools/history-tree.js";
 import { buildSessionBreadcrumb } from "./projection/history-tree.js";
 import { createSessionSplitToolDefinition } from "./tools/session-split.js";
-import { createDelegateAgentToolDefinition } from "./tools/delegate-agent.js";
+import { createTellToolDefinition } from "./tools/tell.js";
 import { wrapToolDefinitions } from "./tools/tool-definition-wrapper.js";
 
 export interface CreateSessionFacadeOptions {
@@ -118,6 +119,12 @@ export interface CreateSessionFacadeResult {
 	extensionsResult: LoadExtensionsResult;
 	/** Warning if no model could be resolved. */
 	modelFallbackMessage?: string;
+	/**
+	 * Inject the SchedulerEngine after creation (rpc mode builds the engine
+	 * once the facade exists, since dispatching needs facade.prompt()). This
+	 * is what powers the agent-facing `_cron` built-in cli command.
+	 */
+	setSchedulerEngine?: (engine: SchedulerEngine | undefined) => void;
 }
 
 function isBuiltInToolName(name: string): name is ToolName {
@@ -292,6 +299,17 @@ export async function createSessionFacade(
 	if (options.storagePath !== ":memory:") {
 		ensureWorkspaceMeta(workspaceId, cwd, options.agentDir);
 	}
+	// Best-effort workspace lock: if another Pizza process is already driving
+	// this workspace, we log a warning but still proceed — the lock is advisory,
+	// not a hard gate. This allows the CLI and the desktop gateway to coexist
+	// on the same workspace without blocking each other.
+	let workspaceLock = null;
+	if (!isMainAgent && options.storagePath !== ":memory:" && agentDir) {
+		workspaceLock = acquireWorkspaceLock(getWorkspaceDir(workspaceId, agentDir));
+		if (!workspaceLock) {
+			console.warn(`Warning: workspace ${workspaceId} (cwd ${cwd}) is already in use by another Pizza process. Proceeding anyway.`);
+		}
+	}
 	const store = new SqliteEventStore(
 		workspaceId,
 		options.storagePath ?? getEventDatabasePath(workspaceId, options.agentDir),
@@ -329,11 +347,11 @@ export async function createSessionFacade(
 	const shellPath = settingsManager.getShellPath();
 	const autoResizeImages = settingsManager.getImageAutoResize();
 	const cliToolOptions: BashToolOptions = { commandPrefix: shellCommandPrefix, shellPath, read: { autoResizeImages } };
-	// The `delegate_agent` built-in command is wired into the cli tool for both
-	// the main agent and workspace agents (it needs the agent dir to spawn
-	// sub-agents / list workspaces).
+	// The `tell` built-in command (agent-to-agent messaging via the gateway) is
+	// wired into the cli tool for both the main agent and workspace agents — it
+	// needs the agent dir to ensure/start the gateway and discover workspaces.
 	if (agentDir) {
-		cliToolOptions.delegateAgent = { agentDir, mainDir };
+		cliToolOptions.tell = { agentDir, mainDir };
 	}
 	// The `skill` built-in command is wired into the cli tool whenever skills
 	// are available — it lets the LLM discover and load skills on demand via
@@ -343,6 +361,19 @@ export async function createSessionFacade(
 	if (loadedSkills.length > 0) {
 		cliToolOptions.skill = { skills: loadedSkills };
 	}
+	// The `cron` built-in command (scheduled prompts) is wired into the cli
+	// tool with a LAZY engine getter. The SchedulerEngine is created later
+	// (in rpc mode, after this facade exists — it needs facade.prompt() to
+	// dispatch turns), so we hand out a mutable slot that rpc mode fills via
+	// the `setSchedulerEngine` escape hatch on the result. Until then
+	// getEngine() returns undefined and `_cron` degrades gracefully.
+	let schedulerEngineSlot: SchedulerEngine | undefined;
+	const cronScope: "main" | "workspace" = isMainAgent ? "main" : "workspace";
+	cliToolOptions.cron = {
+		getEngine: () => schedulerEngineSlot,
+		scope: cronScope,
+		getActiveSessionId: () => sessionManager.getActiveSessionId(),
+	};
 	const toolOptions = {
 		read: { autoResizeImages },
 		cli: cliToolOptions,
@@ -410,7 +441,7 @@ export async function createSessionFacade(
 			}
 		}
 
-		// read/write/edit/session_split/history_tree/(delegate_agent) are built-in
+		// read/write/edit/session_split/history_tree/tell are built-in
 		// cli commands routed internally by the cli tool, not separate tools; ensure
 		// their prompt guidelines are included whenever the cli tool is active, so the
 		// model sees how to use each built-in under the single cli tool.
@@ -425,7 +456,7 @@ export async function createSessionFacade(
 				createHistoryTreeToolDefinition(),
 			];
 			if (agentDir) {
-				builtinDefs.push(createDelegateAgentToolDefinition({ agentDir, mainDir }));
+				builtinDefs.push(createTellToolDefinition({ agentDir, mainDir }));
 			}
 			for (const builtinDef of builtinDefs) {
 				for (const guideline of builtinDef.promptGuidelines ?? []) {
@@ -750,8 +781,19 @@ export async function createSessionFacade(
 		modelRegistry,
 		extensionRunner,
 		resourceLoader,
-		disposers: [extensionEventUnsubscribe],
+		disposers: workspaceLock ? [extensionEventUnsubscribe, workspaceLock.release] : [extensionEventUnsubscribe],
 	});
 
-	return { facade, runtime, model, thinkingLevel, extensionsResult, modelFallbackMessage };
+	return {
+		facade,
+		runtime,
+		model,
+		thinkingLevel,
+		extensionsResult,
+		modelFallbackMessage,
+		/** Let rpc mode inject the SchedulerEngine once it is created. */
+		setSchedulerEngine: (engine: SchedulerEngine | undefined) => {
+			schedulerEngineSlot = engine;
+		},
+	};
 }

@@ -23,7 +23,7 @@ import {
 } from "node:fs";
 
 import { join } from "node:path";
-import type { ScheduledTask, ScheduledTaskRun } from "@pizza/protocol";
+import type { ScheduledTask, ScheduledTaskRun } from "@tomsun28/pizza-protocol";
 
 const SCHEMA_VERSION = 1;
 

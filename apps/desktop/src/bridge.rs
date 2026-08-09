@@ -1,3 +1,4 @@
+use crate::gateway_channel;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -27,12 +28,24 @@ fn read_api_key(provider: &str) -> Option<String> {
 	}
 }
 
+const BRIDGE_LOG_PATH: &str = "/tmp/pizza-gui-bridge.log";
+/// Rotate the bridge log once it exceeds ~10MB so it can't grow unbounded
+/// (get_state polling + per-rpc_response logging writes a lot).
+const BRIDGE_LOG_MAX_BYTES: u64 = 10 * 1024 * 1024;
+
 pub(crate) fn log_file(msg: &str) {
 	use std::io::Write;
+	// Best-effort rotation: if the log is too big, move it aside and start fresh.
+	// Errors here are non-fatal — we still want the line written.
+	if let Ok(meta) = std::fs::metadata(BRIDGE_LOG_PATH) {
+		if meta.len() > BRIDGE_LOG_MAX_BYTES {
+			let _ = std::fs::rename(BRIDGE_LOG_PATH, format!("{BRIDGE_LOG_PATH}.old"));
+		}
+	}
 	if let Ok(mut f) = std::fs::OpenOptions::new()
 		.create(true)
 		.append(true)
-		.open("/tmp/pizza-gui-bridge.log")
+		.open(BRIDGE_LOG_PATH)
 	{
 		let _ = writeln!(f, "{}", msg);
 	}
@@ -235,6 +248,8 @@ pub struct FileAttachmentInfo {
 }
 
 pub struct BridgeState {
+	/// Gateway channels keyed by cwd (gateway-mode only; PIZZA_DESKTOP_GATEWAY).
+	channels: Mutex<HashMap<String, gateway_channel::GatewayChannel>>,
 	/// Sidecars keyed by cwd.
 	sidecars: Mutex<HashMap<String, SidecarEntry>>,
 	/// Active cwd per window label.
@@ -249,6 +264,7 @@ pub struct BridgeState {
 impl Default for BridgeState {
 	fn default() -> Self {
 		Self {
+			channels: Mutex::new(HashMap::new()),
 			sidecars: Mutex::new(HashMap::new()),
 			active: Mutex::new(HashMap::new()),
 			restarting: Mutex::new(HashSet::new()),
@@ -347,6 +363,37 @@ fn broadcast_to_all_sidecars(state: &BridgeState, command_type: &str) {
 	log_file(&format!(
 		"broadcast_to_all_sidecars: command={} sent_to={} failed={:?}",
 		command_type, sent, failed
+	));
+}
+
+/// Fire-and-forget a no-arg RPC command to every gateway channel (the
+/// gateway-mode equivalent of broadcast_to_all_sidecars). Each channel.rpc()
+/// blocks waiting for a per-command response, so runs on spawn_blocking and
+/// the result is ignored — this is best-effort fan-out (e.g. reload_providers
+/// after editing auth.json).
+async fn broadcast_to_all_channels(state: &BridgeState, command_type: &str) {
+	let entries: Vec<(String, gateway_channel::GatewayChannel)> = state
+		.channels
+		.lock()
+		.unwrap()
+		.iter()
+		.map(|(k, v)| (k.clone(), v.clone()))
+		.collect();
+	let mut sent = 0;
+	for (cwd, channel) in entries {
+		let cmd_type = command_type.to_string();
+		let id = uuid::Uuid::new_v4().to_string();
+		let result = tauri::async_runtime::spawn_blocking(move || {
+			channel.rpc(&cwd, serde_json::json!({ "id": id, "type": cmd_type }))
+		})
+		.await;
+		if result.map(|r| r.is_ok()).unwrap_or(false) {
+			sent += 1;
+		}
+	}
+	log_file(&format!(
+		"broadcast_to_all_channels: command={} sent_to={}",
+		command_type, sent
 	));
 }
 
@@ -901,6 +948,13 @@ pub async fn init_sidecar(
 		return Err(format!("Directory does not exist: {}", cwd));
 	}
 
+	// Gateway-mode opt-in: route through the broker instead of spawning a sidecar.
+	// Default OFF — current spawn behavior is unchanged until a GUI smoke test flips it.
+	if gateway_mode_enabled() {
+		return init_sidecar_via_gateway(window.app_handle().clone(), state, window_label, cwd)
+			.await;
+	}
+
 	// Check if sidecar for this cwd already exists.
 	let already_running = {
 		let sidecars = state.sidecars.lock().unwrap();
@@ -1276,7 +1330,7 @@ pub fn stop_sidecar(
 }
 
 #[tauri::command]
-pub fn rpc_command(
+pub async fn rpc_command(
 	window: tauri::Window,
 	state: tauri::State<'_, BridgeState>,
 	command: Value,
@@ -1294,7 +1348,7 @@ pub fn rpc_command(
 		obj.insert("id".to_string(), Value::String(id.clone()));
 		id
 	};
-	let line = serde_json::to_string(&Value::Object(obj)).map_err(|e| e.to_string())?;
+	let line = serde_json::to_string(&Value::Object(obj.clone())).map_err(|e| e.to_string())?;
 	log_file(&format!("rpc_command [{}] sending: {}", window_label, line));
 
 	// Route to the active sidecar for this window.
@@ -1304,18 +1358,239 @@ pub fn rpc_command(
 	};
 	let cwd = cwd.ok_or("No active workspace for this window")?;
 
-	let mut sidecars = state.sidecars.lock().unwrap();
-	let sidecar = sidecars.get_mut(&cwd).ok_or("Sidecar is not running")?;
-	sidecar
-		.stdin
-		.write_all(line.as_bytes())
-		.map_err(|e| format!("write: {e}"))?;
-	sidecar
-		.stdin
-		.write_all(b"\n")
-		.map_err(|e| format!("write nl: {e}"))?;
-	sidecar.stdin.flush().map_err(|e| format!("flush: {e}"))?;
+	// Gateway-mode: forward via the channel instead of the sidecar stdin.
+	// channel.rpc() blocks until the response arrives (up to 60s). Run it on
+	// a blocking thread so we don't freeze the Tauri main thread / webview
+	// event loop — the frontend needs the main thread free to receive the
+	// rpc_response event we emit after the call returns.
+	let channel_opt = state.channels.lock().unwrap().get(&cwd).cloned();
+	if let Some(channel) = channel_opt {
+		let cwd_for_blocking = cwd.clone();
+		let cmd_type_for_log = obj
+			.get("type")
+			.and_then(|t| t.as_str())
+			.unwrap_or("")
+			.to_string();
+		let frame = Value::Object(obj);
+		let resp =
+			tauri::async_runtime::spawn_blocking(move || channel.rpc(&cwd_for_blocking, frame))
+				.await
+				.map_err(|e| format!("blocking task failed: {e}"))?
+				.map_err(|e| {
+					log_file(&format!(
+						"rpc_command [{}] gateway rpc FAILED: type={} error={}",
+						window_label, cmd_type_for_log, e
+					));
+					e
+				})?;
+		log_file(&format!(
+			"rpc_command [{}] gateway rpc OK: type={}",
+			window_label, cmd_type_for_log
+		));
+		emit_frame_to_windows(window.app_handle(), &cwd, resp);
+		return Ok(id);
+	}
+
+	// Sidecar mode: write to stdin (non-blocking, no await needed).
+	{
+		let mut sidecars = state.sidecars.lock().unwrap();
+		let sidecar = sidecars.get_mut(&cwd).ok_or("Sidecar is not running")?;
+		sidecar
+			.stdin
+			.write_all(line.as_bytes())
+			.map_err(|e| format!("write: {e}"))?;
+		sidecar
+			.stdin
+			.write_all(b"\n")
+			.map_err(|e| format!("write nl: {e}"))?;
+		sidecar.stdin.flush().map_err(|e| format!("flush: {e}"))?;
+	}
 	Ok(id)
+}
+
+/// True when the desktop should route workspaces through the gateway broker
+/// instead of spawning per-cwd sidecars. Gateway mode is the default — it
+/// keeps agent processes alive across desktop restarts and lets multiple
+/// clients (desktop, CLI, other agents) share one agent per workspace.
+/// Set PIZZA_DESKTOP_GATEWAY=0 to fall back to the legacy per-cwd sidecar.
+fn gateway_mode_enabled() -> bool {
+	std::env::var("PIZZA_DESKTOP_GATEWAY")
+		.map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
+		.unwrap_or(true)
+}
+
+/// Emit one parsed Layer-0 frame to every window, tagged with `_cwd`, mirroring
+/// the sidecar reader's contract: response→rpc_response, extension_ui_request
+/// as-is, everything else→rpc_event.
+fn emit_frame_to_windows(app: &AppHandle, cwd: &str, mut parsed: Value) {
+	let etype = parsed
+		.get("type")
+		.and_then(|t| t.as_str())
+		.unwrap_or("")
+		.to_string();
+	if etype == "response" {
+		if let Some(obj) = parsed.as_object_mut() {
+			obj.insert("_cwd".to_string(), Value::String(cwd.to_string()));
+		}
+	}
+	let state = app.state::<BridgeState>();
+	let active_map = state.active.lock().unwrap();
+	for (label, _ac_cwd) in active_map.iter() {
+		if let Some(win) = app.get_webview_window(label) {
+			match etype.as_str() {
+				"response" => {
+					let mut tagged = parsed.clone();
+					if let Some(obj) = tagged.as_object_mut() {
+						obj.insert("_cwd".to_string(), Value::String(cwd.to_string()));
+					}
+					let _ = win.emit("rpc_response", tagged);
+				}
+				"extension_ui_request" => {
+					let _ = win.emit("extension_ui_request", parsed.clone());
+				}
+				_ => {
+					let mut tagged = parsed.clone();
+					if let Some(obj) = tagged.as_object_mut() {
+						obj.insert("_cwd".to_string(), Value::String(cwd.to_string()));
+					}
+					let _ = win.emit("rpc_event", tagged);
+				}
+			}
+		}
+	}
+}
+
+/// Gateway-mode init: ensure the gateway is up, open one channel per workspace,
+/// attach, fetch initial state, store the channel, and spawn a drainer that fans
+/// the agent's events out to windows. Returns get_state JSON (same shape as
+/// init_sidecar's first-line response).
+async fn init_sidecar_via_gateway(
+	app: AppHandle,
+	state: tauri::State<'_, BridgeState>,
+	window_label: String,
+	cwd: String,
+) -> Result<String, String> {
+	log_file(&format!("init_sidecar_via_gateway: cwd={}", cwd));
+	// Already attached? Just switch the active pointer and re-fetch state.
+	// Extract the channel first, then drop all locks before awaiting.
+	let existing_channel = state.channels.lock().unwrap().get(&cwd).cloned();
+	if let Some(ch) = existing_channel {
+		state
+			.active
+			.lock()
+			.unwrap()
+			.insert(window_label, cwd.clone());
+		// Re-attach: the gateway may have idle-evicted the agent and cleared
+		// subscribers[cwd] during teardown. Without re-attaching, event fan-out
+		// silently drops because our subscriber is gone. attach is idempotent
+		// (gateway re-adds our write fn to the subscriber set).
+		let cwd_for_attach = cwd.clone();
+		let ch_for_attach = ch.clone();
+		let _ = tauri::async_runtime::spawn_blocking(move || ch_for_attach.attach(&cwd_for_attach))
+			.await;
+		let frame =
+			serde_json::json!({ "id": uuid::Uuid::new_v4().to_string(), "type": "get_state" });
+		let cwd_for_blocking = cwd.clone();
+		let resp_result =
+			tauri::async_runtime::spawn_blocking(move || ch.rpc(&cwd_for_blocking, frame))
+				.await
+				.map_err(|e| format!("blocking task failed: {e}"))?;
+		if let Ok(resp) = resp_result {
+			emit_frame_to_windows(&app, &cwd, resp);
+		}
+		return Ok(serde_json::json!({}).to_string());
+	}
+
+	let socket = gateway_channel::gateway_socket_path()
+		.ok_or_else(|| "HOME not set; cannot resolve gateway socket".to_string())?;
+	let (program, args) = resolve_pizza_command(&app);
+	let socket_for_blocking = socket.clone();
+	let program_for_blocking = program.clone();
+	let args_for_blocking = args.clone();
+	tauri::async_runtime::spawn_blocking(move || {
+		gateway_channel::ensure_gateway(
+			&socket_for_blocking,
+			(&program_for_blocking, &args_for_blocking),
+		)
+	})
+	.await
+	.map_err(|e| format!("blocking task failed: {e}"))??;
+
+	let channel = gateway_channel::GatewayChannel::connect(&socket)?;
+	let resolved_cwd = channel.attach(&cwd)?;
+	log_file(&format!(
+		"init_sidecar_via_gateway: attached resolved={}",
+		resolved_cwd
+	));
+
+	// Initial state via the channel, emitted as rpc_response for the frontend.
+	let id = uuid::Uuid::new_v4().to_string();
+	let state_frame = serde_json::json!({ "id": id, "type": "get_state" });
+	let cwd_for_state = cwd.clone();
+	let channel_for_state = channel.clone();
+	let state_resp = tauri::async_runtime::spawn_blocking(move || {
+		channel_for_state.rpc(&cwd_for_state, state_frame)
+	})
+	.await
+	.map_err(|e| format!("blocking task failed: {e}"))?
+	.map_err(|e| e.to_string())?;
+	emit_frame_to_windows(&app, &resolved_cwd, state_resp);
+
+	state
+		.channels
+		.lock()
+		.unwrap()
+		.insert(cwd.clone(), channel.clone());
+	state
+		.active
+		.lock()
+		.unwrap()
+		.insert(window_label, cwd.clone());
+
+	// Drain fanned-out events → windows. Exits when the channel disconnects.
+	let app_for_drain = app.clone();
+	let drain_cwd = resolved_cwd.clone();
+	std::thread::spawn(move || {
+		loop {
+			let messages = channel.drain_events();
+			let disconnected = messages
+				.iter()
+				.any(|m| matches!(m, gateway_channel::ChannelMessage::Disconnected));
+			for msg in messages {
+				if let gateway_channel::ChannelMessage::Event { frame, .. } = msg {
+					emit_frame_to_windows(&app_for_drain, &drain_cwd, frame);
+				}
+			}
+			if disconnected {
+				log_file(&format!("gateway channel disconnected cwd={}", drain_cwd));
+				// Drop the stale channel so a fresh attach can take its place.
+				{
+					let state = app_for_drain.state::<BridgeState>();
+					state.channels.lock().unwrap().remove(&drain_cwd);
+				}
+				// Notify the frontend exactly like a sidecar exit would, so its
+				// reconnect/restart logic kicks in (it listens on "sidecar_exit").
+				let active = app_for_drain
+					.state::<BridgeState>()
+					.active
+					.lock()
+					.unwrap()
+					.clone();
+				for (label, _ac_cwd) in active.iter() {
+					if let Some(win) = app_for_drain.get_webview_window(label) {
+						let _ = win.emit(
+							"sidecar_exit",
+							serde_json::json!({ "code": null, "cwd": drain_cwd }),
+						);
+					}
+				}
+				break;
+			}
+			std::thread::sleep(std::time::Duration::from_millis(50));
+		}
+	});
+
+	Ok(serde_json::json!({}).to_string())
 }
 
 /// Create a new workspace window with its own independent sidecar.
@@ -2032,6 +2307,7 @@ pub async fn set_provider_api_key(
 	// auth.json is shared across all workspaces: tell every running sidecar
 	// to reload its in-memory credentials so a model switch uses this new key.
 	broadcast_to_all_sidecars(&state, "reload_providers");
+	broadcast_to_all_channels(state.inner(), "reload_providers").await;
 	Ok(())
 }
 
@@ -2064,6 +2340,7 @@ pub async fn remove_provider_api_key(
 	// Notify every sidecar so they drop the now-removed credential from
 	// their in-memory cache (otherwise auth still resolves as configured).
 	broadcast_to_all_sidecars(&state, "reload_providers");
+	broadcast_to_all_channels(state.inner(), "reload_providers").await;
 	Ok(())
 }
 
@@ -2135,6 +2412,7 @@ pub async fn save_custom_provider(
 
 	log_file(&format!("save_custom_provider: saved {}", provider_id));
 	broadcast_to_all_sidecars(&state, "reload_providers");
+	broadcast_to_all_channels(state.inner(), "reload_providers").await;
 	Ok(())
 }
 
@@ -2283,6 +2561,7 @@ pub async fn remove_custom_provider(
 
 	log_file(&format!("remove_custom_provider: removed {}", provider_id));
 	broadcast_to_all_sidecars(&state, "reload_providers");
+	broadcast_to_all_channels(state.inner(), "reload_providers").await;
 	Ok(())
 }
 
@@ -2623,6 +2902,94 @@ pub async fn read_file(cwd: String, file_path: String) -> Result<String, String>
 		));
 	}
 	std::fs::read_to_string(&full).map_err(|e| format!("read_to_string: {e}"))
+}
+
+// --- Recursive file search (for the composer @ mention menu) ---
+
+#[derive(serde::Serialize)]
+pub struct FileSearchEntry {
+	/// Basename of the file.
+	pub name: String,
+	/// Path relative to the workspace root (e.g. "src/components/Terminal.tsx").
+	pub path: String,
+	pub is_dir: bool,
+}
+
+/// Recursively walk the workspace (breadth-first so shallower files rank
+/// first), skipping `SKIP_DIRS`. Returns files whose relative path contains
+/// `query` (case-insensitive) when provided, capped at `limit` (default 1000).
+/// Directories are traversed but not returned — the `@` menu is for files;
+/// the file explorer (`list_dir`) already handles directory navigation.
+#[tauri::command]
+pub async fn search_files(
+	cwd: String,
+	query: Option<String>,
+	limit: Option<u32>,
+) -> Result<Vec<FileSearchEntry>, String> {
+	use std::collections::VecDeque;
+	let base = resolve_workspace_path(&cwd, None)?;
+	if !base.is_dir() {
+		return Err(format!("Not a directory: {}", base.display()));
+	}
+	let q = query.map(|s| s.to_lowercase()).filter(|s| !s.is_empty());
+	let cap = limit.unwrap_or(1000).max(1) as usize;
+
+	let mut out: Vec<FileSearchEntry> = Vec::with_capacity(cap.min(256));
+	let mut queue: VecDeque<PathBuf> = VecDeque::new();
+	queue.push_back(base.clone());
+
+	while let Some(dir) = queue.pop_front() {
+		if out.len() >= cap {
+			break;
+		}
+		let entries = match std::fs::read_dir(&dir) {
+			Ok(e) => e,
+			Err(_) => continue,
+		};
+		for entry in entries.flatten() {
+			if out.len() >= cap {
+				break;
+			}
+			let file_name = entry.file_name().to_string_lossy().to_string();
+			if SKIP_DIRS.contains(&file_name.as_str()) {
+				continue;
+			}
+			let ft = match entry.file_type() {
+				Ok(t) => t,
+				Err(_) => continue,
+			};
+			let full = entry.path();
+			let rel = full
+				.strip_prefix(&base)
+				.map(|p| p.to_string_lossy().to_string())
+				.unwrap_or_else(|_| file_name.clone());
+			if ft.is_dir() {
+				// Recurse into subdirectories (BFS); dirs are not surfaced as
+				// results to keep the menu focused on files.
+				queue.push_back(full);
+				continue;
+			}
+			if let Some(ref qstr) = q {
+				if !rel.to_lowercase().contains(qstr) {
+					continue;
+				}
+			}
+			out.push(FileSearchEntry {
+				name: file_name,
+				path: rel,
+				is_dir: false,
+			});
+		}
+	}
+
+	// Order by depth (shallowest first) then by path, so root-level files
+	// rank ahead of deeply nested ones — matching IDE Quick Open behaviour.
+	out.sort_by(|a, b| {
+		let da = a.path.matches('/').count();
+		let db = b.path.matches('/').count();
+		da.cmp(&db).then_with(|| a.path.cmp(&b.path))
+	});
+	Ok(out)
 }
 
 // --- Git status / diff (right dock "Git" tab) ---

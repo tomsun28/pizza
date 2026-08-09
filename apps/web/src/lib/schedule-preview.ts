@@ -7,7 +7,7 @@
  * diverge the preview will look right but the actual fire time won't.
  */
 
-import type { ScheduleSpec } from "@/lib/types";
+import type { ScheduleSpec, TimeOfDay } from "@/lib/types";
 
 // ----- Cron expression generation (visual -> cron) -----
 
@@ -46,23 +46,23 @@ export function specToCronText(spec: ScheduleSpec): string {
 		case "daily": {
 			const times = (spec.times ?? []).slice();
 			if (times.length === 0) return "";
-			const minutes = uniqueSorted(times.map((t) => t.minute));
-			const hours = uniqueSorted(times.map((t) => t.hour));
+			const minutes = uniqueSorted(times.map((t: TimeOfDay) => t.minute));
+			const hours = uniqueSorted(times.map((t: TimeOfDay) => t.hour));
 			return `${fmtRange(minutes)} ${fmtRange(hours)} * * *`;
 		}
 		case "weekdays": {
 			const times = (spec.times ?? []).slice();
 			if (times.length === 0) return "";
-			const minutes = uniqueSorted(times.map((t) => t.minute));
-			const hours = uniqueSorted(times.map((t) => t.hour));
+			const minutes = uniqueSorted(times.map((t: TimeOfDay) => t.minute));
+			const hours = uniqueSorted(times.map((t: TimeOfDay) => t.hour));
 			return `${fmtRange(minutes)} ${fmtRange(hours)} * * 1-5`;
 		}
 		case "weekly": {
 			const times = (spec.times ?? []).slice();
 			const weekdays = (spec.weekdays ?? []).slice();
 			if (times.length === 0 || weekdays.length === 0) return "";
-			const minutes = uniqueSorted(times.map((t) => t.minute));
-			const hours = uniqueSorted(times.map((t) => t.hour));
+			const minutes = uniqueSorted(times.map((t: TimeOfDay) => t.minute));
+			const hours = uniqueSorted(times.map((t: TimeOfDay) => t.hour));
 			const wd = uniqueSorted(weekdays).map((d) => (d === 0 ? 7 : d));
 			return `${fmtRange(minutes)} ${fmtRange(hours)} * * ${fmtRange(wd)}`;
 		}
@@ -70,8 +70,8 @@ export function specToCronText(spec: ScheduleSpec): string {
 			const times = (spec.times ?? []).slice();
 			const days = (spec.daysOfMonth ?? []).slice();
 			if (times.length === 0 || days.length === 0) return "";
-			const minutes = uniqueSorted(times.map((t) => t.minute));
-			const hours = uniqueSorted(times.map((t) => t.hour));
+			const minutes = uniqueSorted(times.map((t: TimeOfDay) => t.minute));
+			const hours = uniqueSorted(times.map((t: TimeOfDay) => t.hour));
 			return `${fmtRange(minutes)} ${fmtRange(hours)} ${fmtRange(uniqueSorted(days))} * *`;
 		}
 		case "cron": {

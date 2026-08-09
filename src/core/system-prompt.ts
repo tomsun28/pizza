@@ -25,7 +25,9 @@ function formatSkillsHint(skills: Skill[]): string {
 		`Use \`_skill list\` to see details (name, description, source, location), ` +
 		`\`_skill load --name <name>\` to read a skill's full instructions, ` +
 		`and \`_skill read --name <name> --file <path>\` to read supplementary files ` +
-		`referenced by a skill (resolved relative to the skill's directory).`
+		`referenced by a skill (resolved relative to the skill's directory).\n\n` +
+		`If an installed skill fits the current task, prefer using it over ` +
+		`hand-rolled code or raw API calls.`
 	);
 }
 
@@ -222,7 +224,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 
 	// File exploration guidelines
 	if (hasCli) {
-		addGuideline("The cli tool has exactly these built-in commands (underscore-prefixed, handled internally, never sent to the shell): _read, _write, _edit, _session_split, _history_tree, _delegate_agent, and _skill. Everything else — including grep, find, ls, cat, sed, git, npm — is a native shell command run through the same cli tool.");
+		addGuideline("The cli tool has exactly these built-in commands (underscore-prefixed, handled internally, never sent to the shell): _read, _write, _edit, _session_split, _history_tree, _tell, and _skill. Everything else — including grep, find, ls, cat, sed, git, npm — is a native shell command run through the same cli tool.");
 		addGuideline("Built-in commands are NOT a shell: never use pipes (|), redirects (> <), chaining (; & &&), command substitution, or newlines with them. A built-in only works as the FIRST word of its own single cli() call — buried after &&/||/;/| it is passed to the shell, which has no such command. Issue each built-in as its own separate call; do not prefix it with cd && since the working directory is already set. For pipelines, redirections, or globs, use a plain shell command instead (grep, find, ls, cat, sed, git, npm, etc.).");
 	}
 
@@ -252,8 +254,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		"  _edit <path> <op> <range> [new]               Edit anchored whole line(s)",
 		"  _session_split [reason] [name]                Split promptly when the user starts a new task or topic",
 		"  _history_tree <action> [session_id]           Browse past sessions: list, view, jump, fork",
-		"  _delegate_agent <action> [cwd] [task]         Main agent only: list known workspaces, run a sub-agent",
-		"  _delegate_agent run --name <name> --task \"..\"  Use workspace name (last path component) instead of cwd",
+		"  _tell <action> [to] [message]                 Send a message to another workspace's agent and get its reply",
 		"  _skill <action> [--name <name>] [--file <f>]   Discover and load Agent Skills: list, load, read",
 		"",
 		"IMPORTANT: built-in commands are pure single commands. They do NOT support shell operators",

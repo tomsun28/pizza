@@ -10,6 +10,7 @@
     "settings": "设置",
     "error": "错误",
     "starting": "启动中...",
+    "loadingHistory": "加载对话中...",
     "backToAgent": "返回助理",
     "back": "后退",
     "forward": "前进"
@@ -310,6 +311,10 @@
     "title": "终端",
     "toggle": "切换终端",
     "collapse": "收起终端",
+    "newTab": "新建终端标签页",
+    "closeTab": "关闭标签页",
+    "split": "纵向拆分终端",
+    "closePane": "关闭终端",
     "comingSoonDescription": "终端将显示在这里。",
     "hint": "在当前工作区运行 shell 命令。",
     "prompt": "输入命令…",

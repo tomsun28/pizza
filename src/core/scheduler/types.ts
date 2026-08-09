@@ -1,5 +1,5 @@
 /**
- * Local scheduler types — re-exports from @pizza/protocol for convenience and
+ * Local scheduler types — re-exports from @tomsun28/pizza-protocol for convenience and
  * adds internal helpers (e.g. fire snapshots) that the protocol doesn't need
  * to know about.
  */
@@ -12,7 +12,7 @@ import type {
 	ScheduledTaskSummary,
 	TimeOfDay,
 	Weekday,
-} from "@pizza/protocol";
+} from "@tomsun28/pizza-protocol";
 
 export type {
 	ScheduleMode,

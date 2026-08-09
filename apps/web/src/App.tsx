@@ -56,6 +56,11 @@ function AppInner() {
 	const startWithWorkspace = useCallback(async (cwd?: string) => {
 		setWaitingForWorkspace(true);
 		setInitError(null);
+		// Clear stale state from the previous workspace so the UI doesn't
+		// briefly render the old workspace's session/streaming/model info
+		// while the new sidecar's get_state response is in-flight (gateway
+		// mode returns empty state for already-running workspaces).
+		setState(null);
 		try {
 			const initialState = await initSidecar(cwd);
 			// Expand ~ to home directory so workspace state matches Rust side.
@@ -364,7 +369,7 @@ function AppInner() {
 		);
 	}
 
-	if (waitingForWorkspace && !sidecarReady) {
+	if (waitingForWorkspace) {
 		return (
 			<PxlKitSurfaceProvider surface="pixel">
 				<div className="flex h-screen items-center justify-center bg-bg">
@@ -404,6 +409,7 @@ function AppInner() {
 									sidecarExitCode={sidecarExitCode}
 				workspace={workspace}
 				workspaces={workspaces}
+				waitingForWorkspace={waitingForWorkspace}
 				onRefreshState={refreshState}
 								/>
 							}

@@ -66,6 +66,7 @@ export class RpcClient {
 	private process: ChildProcess | null = null;
 	private stopReadingStdout: (() => void) | null = null;
 	private eventListeners: RpcEventListener[] = [];
+	private exitListeners: Array<() => void> = [];
 	private pendingRequests: Map<string, { resolve: (response: RpcResponse) => void; reject: (error: Error) => void }> =
 		new Map();
 	private requestId = 0;
@@ -129,6 +130,15 @@ export class RpcClient {
 			this.handleLine(line);
 		});
 
+		// Notify exit listeners when the agent process dies (so the gateway can
+		// evict the dead pool entry immediately instead of waiting for idle
+		// timeout or a 30s sendCommand timeout on the next request).
+		this.process.on("exit", () => {
+			for (const listener of this.exitListeners) {
+				listener();
+			}
+		});
+
 		// Wait a moment for process to initialize
 		await new Promise((resolve) => setTimeout(resolve, 100));
 
@@ -163,6 +173,11 @@ export class RpcClient {
 		});
 
 		this.process = null;
+		// Reject all in-flight requests so callers don't hang for 30s
+		// waiting for a response from a dead agent.
+		for (const [, pending] of this.pendingRequests) {
+			pending.reject(new Error("Agent process stopped"));
+		}
 		this.pendingRequests.clear();
 	}
 
@@ -175,6 +190,20 @@ export class RpcClient {
 			const index = this.eventListeners.indexOf(listener);
 			if (index !== -1) {
 				this.eventListeners.splice(index, 1);
+			}
+		};
+	}
+
+	/**
+	 * Subscribe to the agent process exiting. Used by the gateway to evict a
+	 * dead pool entry immediately. Returns an unsubscribe fn.
+	 */
+	onExit(listener: () => void): () => void {
+		this.exitListeners.push(listener);
+		return () => {
+			const index = this.exitListeners.indexOf(listener);
+			if (index !== -1) {
+				this.exitListeners.splice(index, 1);
 			}
 		};
 	}
@@ -495,13 +524,19 @@ export class RpcClient {
 		}
 	}
 
-	private async send(command: RpcCommandBody): Promise<RpcResponse> {
+	/**
+	 * Send a Layer-0 command that already carries its own `id` (used by the
+	 * gateway to forward a channel frame verbatim — the response keeps the
+	 * same id so the originating channel can correlate it). Public so the
+	 * gateway multiplexer can forward arbitrary frames without a per-command
+	 * typed wrapper.
+	 */
+	async sendCommand(command: RpcCommand): Promise<RpcResponse> {
 		if (!this.process?.stdin) {
 			throw new Error("Client not started");
 		}
-
-		const id = `req_${++this.requestId}`;
-		const fullCommand = { ...command, id } as RpcCommand;
+		const id = command.id ?? `req_${++this.requestId}`;
+		const fullCommand = (command.id === undefined ? { ...command, id } : command) as RpcCommand;
 
 		return new Promise((resolve, reject) => {
 			this.pendingRequests.set(id, { resolve, reject });
@@ -524,6 +559,10 @@ export class RpcClient {
 
 			this.process!.stdin!.write(serializeJsonLine(fullCommand));
 		});
+	}
+
+	private send(command: RpcCommandBody): Promise<RpcResponse> {
+		return this.sendCommand({ ...command, id: `req_${++this.requestId}` } as RpcCommand);
 	}
 
 	private getData<T>(response: RpcResponse): T {

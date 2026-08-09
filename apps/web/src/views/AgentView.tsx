@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from "react";
 import { useOutletContext } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { sendCommandAwait, subscribeEvents, subscribeSidecarExit } from "@/lib/transport";
 import type { RpcSessionState, TypedEvent } from "@/lib/types";
 import { Conversation, type TimelineItem } from "@/components/Conversation";
 import { Composer, type ComposerImage, type LoadedFileAttachment } from "@/components/Composer";
-import { EmptyState } from "@/components/ui";
+import { EmptyState, Spinner } from "@/components/ui";
 import { approveToolCall, rejectToolCall } from "@/lib/transport";
 import { cn } from "@/lib/utils";
 import type { LayoutOutletContext } from "@/components/Layout";
@@ -243,6 +243,7 @@ export default function AgentView({
 	sidecarExitCode,
 	workspace,
 	workspaces,
+	waitingForWorkspace,
 	onRefreshState,
 }: {
 	state: RpcSessionState | null;
@@ -250,15 +251,26 @@ export default function AgentView({
 	sidecarExitCode: number | null;
 	workspace?: string | null;
 	workspaces?: import("@/lib/types").WorkspaceMeta[];
+	waitingForWorkspace?: boolean;
 	onRefreshState?: () => void;
 }) {
 	const { sidebarCollapsed } = useOutletContext<LayoutOutletContext>() ?? { sidebarCollapsed: false };
 	const { t } = useTranslation();
 	const [items, setItems] = useState<TimelineItem[]>([]);
 	const [error, setError] = useState("");
+	// True while history is being fetched from the sidecar (get_messages).
+	// Shows a loading indicator instead of the empty state so the user gets
+	// visual feedback that data is loading, which is especially important on
+	// first visit to a workspace with a long conversation history.
+	const [loadingHistory, setLoadingHistory] = useState(false);
 	const activeAssistantRef = useRef<string | null>(null);
 	const seenIdsRef = useRef<Set<string>>(new Set());
 	const scrollRef = useRef<HTMLDivElement>(null);
+	// Track whether the user is pinned to the bottom of the scroll area.
+	// Auto-scroll (on new items / streaming) only fires when the user is
+	// already at the bottom — if they've scrolled up to read earlier content,
+	// we don't yank them back down. Reset to true on workspace/session switch.
+	const pinnedToBottomRef = useRef(true);
 
 	// Per-workspace conversation persistence.
 	const itemsByWs = useRef<Map<string, TimelineItem[]>>(new Map());
@@ -298,6 +310,7 @@ export default function AgentView({
 		activeAssistantRef.current = null;
 		setError("");
 		// Re-fetch the new active session's messages.
+		setLoadingHistory(true);
 		let cancelled = false;
 		(async () => {
 			try {
@@ -310,6 +323,8 @@ export default function AgentView({
 				onRefreshState?.();
 			} catch {
 				// Silently ignore — the empty state will show.
+			} finally {
+				if (!cancelled) setLoadingHistory(false);
 			}
 		})();
 		return () => { cancelled = true; };
@@ -343,6 +358,7 @@ export default function AgentView({
 		// restored them. Otherwise, fetch from sidecar.
 		const cached = itemsByWs.current.get(workspace);
 		if (cached && cached.length > 0) return;
+		setLoadingHistory(true);
 		let cancelled = false;
 		(async () => {
 			try {
@@ -356,16 +372,67 @@ export default function AgentView({
 				}
 			} catch {
 				// Silently ignore — history will load on next workspace switch.
+			} finally {
+				if (!cancelled) setLoadingHistory(false);
 			}
 		})();
 		return () => { cancelled = true; };
 	}, [sidecarReady, workspace]);
 
+	// Track whether the user is pinned to the bottom of the scroll area.
+	// Key insight: we must distinguish "user actively scrolled up" from
+	// "content grew at the bottom while user was at bottom." A fixed px
+	// threshold fails because when content is prepended (progressive
+	// rendering) or appended (streaming), scrollHeight grows and the
+	// distanceFromBottom increases even though the user didn't scroll.
+	//
+	// Solution: compare scrollTop to its previous value. If scrollTop
+	// DECREASED, the user scrolled up → unpin. If scrollTop increased or
+	// stayed same (programmatic scroll or content growth), check distance
+	// from bottom with a tiny threshold to re-pin.
+	const lastScrollTopRef = useRef(0);
 	useEffect(() => {
-		if (scrollRef.current) {
-			scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+		const el = scrollRef.current;
+		if (!el) return;
+		const onScroll = () => {
+			// User scrolled up (scrollTop decreased) → stop auto-scrolling.
+			// Small tolerance (2px) to avoid flapping from sub-pixel rounding.
+			if (el.scrollTop < lastScrollTopRef.current - 2) {
+				pinnedToBottomRef.current = false;
+			} else {
+				// User scrolled down or programmatic scroll — re-pin if
+				// close to bottom (within 10px).
+				const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+				pinnedToBottomRef.current = distanceFromBottom < 10;
+			}
+			lastScrollTopRef.current = el.scrollTop;
+		};
+		el.addEventListener("scroll", onScroll, { passive: true });
+		return () => el.removeEventListener("scroll", onScroll);
+	}, []);
+
+	// Auto-scroll to bottom when new items arrive — but only if the user is
+	// already pinned to the bottom. If they've scrolled up to read, leave
+	// them where they are. Uses scrollTop/scrollHeight (not scrollIntoView)
+	// here because this fires on streaming appends where the DOM is already
+	// laid out — the layout is stable, just taller.
+	useLayoutEffect(() => {
+		if (!pinnedToBottomRef.current) return;
+		const el = scrollRef.current;
+		if (el) {
+			el.scrollTop = el.scrollHeight;
 		}
 	}, [items]);
+
+	// Reset pin-to-bottom on workspace / session switch so the new conversation
+	// starts scrolled to the latest message. The actual scroll-to-bottom is
+	// handled by the Conversation component's progressive-render anchor, so
+	// here we only reset the pin state (not the scroll position, which would
+	// be wrong since items haven't loaded yet).
+	useEffect(() => {
+		pinnedToBottomRef.current = true;
+		lastScrollTopRef.current = 0;
+	}, [workspace]);
 
 	const handleEvent = useCallback((event: TypedEvent & { _cwd?: string }) => {
 		const eventCwd = event._cwd ?? "";
@@ -892,16 +959,23 @@ export default function AgentView({
 			<div ref={scrollRef} className="flex-1 overflow-y-auto">
 				{items.length === 0 ? (
 					<div className="flex min-h-[calc(100vh-200px)] items-center justify-center">
-						<EmptyState
-							title={t("common.pizza")}
-							description={
-								sidecarReady
-									? t("agent.readyPrompt")
-									: sidecarExitCode !== null
-										? t("agent.sidecarExited", { code: sidecarExitCode })
-										: t("common.starting")
-							}
-						/>
+						{loadingHistory || waitingForWorkspace ? (
+							<div className="flex flex-col items-center gap-3">
+								<Spinner />
+								<p className="font-mono text-xs text-muted">{t("common.loadingHistory")}</p>
+							</div>
+						) : (
+							<EmptyState
+								title={t("common.pizza")}
+								description={
+									sidecarReady
+										? t("agent.readyPrompt")
+										: sidecarExitCode !== null
+											? t("agent.sidecarExited", { code: sidecarExitCode })
+											: t("common.starting")
+								}
+							/>
+						)}
 					</div>
 				) : (
 				<Conversation
