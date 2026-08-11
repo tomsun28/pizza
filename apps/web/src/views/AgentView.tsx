@@ -1023,7 +1023,7 @@ export default function AgentView({
 			<div
 				data-tauri-drag-region
 				className={cn(
-					"relative flex h-11 shrink-0 items-center border-b border-border bg-surface/80 pr-6 backdrop-blur transition-[padding] duration-150",
+					"relative flex h-11 shrink-0 items-center border-b border-border bg-surface/80 pr-[96px] backdrop-blur transition-[padding] duration-150",
 					sidebarCollapsed ? "pl-[120px]" : "pl-6",
 				)}
 			>
@@ -1034,7 +1034,10 @@ export default function AgentView({
 					type="button"
 					onClick={() => setSearchOpen((o) => { if (!o) setFocusSignal((s) => s + 1); return !o; })}
 					title={t("search.toggleHint")}
-					className="ml-2 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-surface-2 hover:text-fg"
+					className={cn(
+					"absolute right-[84px] top-2 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-surface-2",
+					searchOpen ? "text-accent" : "text-muted/60 hover:text-muted",
+				)}
 				>
 					{searchOpen ? <X className="h-4 w-4" /> : <Search className="h-4 w-4" />}
 				</button>
