@@ -1,8 +1,7 @@
 import { existsSync } from "node:fs";
-import { delimiter } from "node:path";
 import { spawn, spawnSync } from "child_process";
 import { getBinDir } from "../config.js";
-import { resolveLoginShellPath } from "./login-shell-path.js";
+import { mergePathValues, resolveLoginShellPath } from "./login-shell-path.js";
 
 export interface ShellConfig {
 	shell: string;
@@ -110,25 +109,18 @@ export function getShellEnv(): NodeJS.ProcessEnv {
 	const binDir = getBinDir();
 	const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
 	const currentPath = process.env[pathKey] ?? "";
-	// Priority: agent bin dir > user login-shell PATH (homebrew / cargo / nvm)
-	// > inherited PATH. The login-shell PATH is captured once (see
-	// login-shell-path.ts) so processes that inherit a minimal PATH
-	// (GUI/launchd-launched, never sourcing the user rc files) still find
-	// user-installed tools. Mirrors the Rust desktop resolve_shell_path().
-	const parts: (string | undefined)[] = [binDir, resolveLoginShellPath(), currentPath];
-	const seen = new Set<string>();
-	const merged: string[] = [];
-	for (const part of parts) {
-		for (const dir of (part ?? "").split(delimiter)) {
-			if (dir && !seen.has(dir)) {
-				seen.add(dir);
-				merged.push(dir);
-			}
-		}
-	}
+	// Priority: agent bin dir > inherited PATH > user login-shell PATH.
+	//
+	// The login-shell PATH is captured once (see login-shell-path.ts) so
+	// processes that inherit a minimal PATH (GUI/launchd-launched, never
+	// sourcing the user rc files) still find user-installed tools. It goes
+	// LAST, as a fallback: the inherited PATH describes the environment the
+	// agent was actually started in (an activated virtualenv, an nvm-selected
+	// node, a direnv-provisioned toolchain), and those must keep winning over
+	// whatever the login shell would have picked.
 	return {
 		...process.env,
-		[pathKey]: merged.join(delimiter),
+		[pathKey]: mergePathValues(binDir, currentPath, resolveLoginShellPath()),
 	};
 }
 

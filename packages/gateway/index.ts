@@ -54,6 +54,7 @@ export {
 	type GatewayRpcFrame,
 	type GatewayWorkspaceInfo,
 	type GatewayListResult,
+	GATEWAY_ASYNC_ACK_TIMEOUT,
 	GATEWAY_DEFAULT_TELL_TIMEOUT,
 	GATEWAY_PROTOCOL_VERSION,
 	isGatewayRequest,

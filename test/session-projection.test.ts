@@ -438,6 +438,22 @@ describe("SessionManager", () => {
 		expect(mgr.getActiveThread()?.status).toBe("active");
 	});
 
+	it("does not promote a background thread on a scheduler-driven switch", () => {
+		const mgr = new SessionManager(store, store);
+		mgr.createSession("user_explicit", "User");
+		const bg = mgr.createThread("Scheduled task", "schedule");
+		const bgSession = mgr.getActiveSessionId()!;
+		// A pinned scheduled run hops into its own session every fire; that must
+		// not turn the background thread into an interactive one.
+		mgr.switchToExistingSession(bgSession, "scheduled task", { background: true });
+		expect(mgr.getActiveThread()?.status).toBe("background");
+		// The same switch made by the user does promote it — including when the
+		// session is already the active one (the scheduler put us here).
+		mgr.switchToExistingSession(bgSession, "history tree row click");
+		expect(mgr.getActiveThread()?.status).toBe("active");
+		expect(mgr.getActiveThreadId()).toBe(bg.thread_id);
+	});
+
 	it("should throw when switching to non-existent session", () => {
 		const mgr = new SessionManager(store, store);
 		mgr.createSession("user_explicit");

@@ -719,6 +719,14 @@ export async function runRpcModeWithFacade(
 
 		switch (command.type) {
 			case "prompt":
+				// Reject up-front when a turn is already running. The runtime throws
+				// in that case, but the throw lands in the detached promise below —
+				// long after we acked `success`, so the caller would believe the
+				// prompt was accepted and silently lose the message. Fail the
+				// command instead so the sender can queue it (steer/follow_up).
+				if (facade.isRunning) {
+					return error(id, "prompt", "agent is already processing a prompt; use steer or follow_up to queue");
+				}
 				void facade.prompt(command.message, toEventImages(command.images), toEventFiles(command.files)).catch((e: unknown) => {
 					output(error(id, "prompt", e instanceof Error ? e.message : String(e)));
 				});

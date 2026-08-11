@@ -79,9 +79,15 @@ export interface GatewayTellRequest extends GatewayMessageBase {
 	/**
 	 * Deliver without waiting for the target agent to finish its turn. The gateway
 	 * acks with a `tell_result` carrying `delivered: true` + a `messageId` as soon
-	 * as the prompt is queued, instead of blocking until the reply is ready. The
-	 * receiver is then expected to reply on its own with a (possibly async) tell
-	 * back to the sender (symmetric messaging).
+	 * as the target has *accepted* the message, instead of blocking until the
+	 * reply is ready. The receiver is then expected to reply on its own with a
+	 * (possibly async) tell back to the sender (symmetric messaging).
+	 *
+	 * Note the ack means "accepted", not "instant": tells to one agent are
+	 * serialized, so an async tell queued behind another tell is acked only once
+	 * the agent takes it. If the agent is mid-turn on work the gateway does not
+	 * own (a desktop user's prompt), the message is handed to the agent's
+	 * follow-up queue and acked right away.
 	 */
 	async?: boolean;
 	/**
@@ -200,6 +206,14 @@ export function isGatewayResponse(value: unknown): value is GatewayResponse {
 
 /** Default tell timeout (ms) when the client omits one. */
 export const GATEWAY_DEFAULT_TELL_TIMEOUT = 120_000;
+
+/**
+ * How long an async tell waits for its delivery ack. The ack is sent as soon as
+ * the target accepts the prompt, but a tell queued behind another tell to the
+ * same (single-threaded) agent is only delivered once that turn finishes — so
+ * this has to allow for a full turn, not just a round trip.
+ */
+export const GATEWAY_ASYNC_ACK_TIMEOUT = GATEWAY_DEFAULT_TELL_TIMEOUT;
 
 /** Protocol version — bump on breaking wire changes. */
 export const GATEWAY_PROTOCOL_VERSION = 1;

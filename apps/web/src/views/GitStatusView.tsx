@@ -96,7 +96,7 @@ export default function GitStatusView({ workspace }: { workspace?: string | null
 		if (!cwd) {
 			setSummary(null);
 			setCommits([]);
-			setBranches([]);
+		setBranches([]);
 			setLoading(false);
 			return;
 		}
@@ -130,7 +130,7 @@ export default function GitStatusView({ workspace }: { workspace?: string | null
 		setLoading(true);
 		setSummary(null);
 		setCommits([]);
-			setBranches([]);
+		setBranches([]);
 		setSelection(null);
 		setDiff("");
 		void load();
@@ -476,7 +476,7 @@ function StatusGroup({
 	entries: GitStatusEntry[];
 	collapsed: boolean;
 	onToggle: () => void;
-	selection: { path: string } | null;
+	selection: { path: string; mode: GitDiffMode } | null;
 	mode: GitDiffMode;
 	onSelect: (path: string) => void;
 }) {
@@ -497,7 +497,7 @@ function StatusGroup({
 						<StatusRow
 							key={`${mode}-${e.path}`}
 							entry={e}
-							selected={selection?.path === e.path}
+							selected={selection?.path === e.path && selection.mode === mode}
 							onSelect={() => onSelect(e.path)}
 						/>
 					))}

@@ -361,7 +361,17 @@ export class SessionManager {
 		if (!target) {
 			throw new Error(`Session not found: ${session_id}`);
 		}
+		// `background: true` marks a scheduler-driven switch (it hops into the
+		// task's pinned session and hops back). Those must never promote a
+		// background thread — only an explicit user navigation does.
+		const userInitiated = options.background !== true;
 		if (session_id === this.activeSessionId && target.thread_id === this.activeThreadId) {
+			// Already here — still promote, otherwise a user sitting in a
+			// background thread never gets it promoted (the switch that brought
+			// them here may have been the scheduler's).
+			if (userInitiated && this._promoteThreadToActive(target.thread_id)) {
+				this._persistIndex();
+			}
 			return target;
 		}
 		const previousActive =
@@ -370,7 +380,7 @@ export class SessionManager {
 				: undefined;
 		this.activeSessionId = target.session_id;
 		this.activeThreadId = target.thread_id;
-		this._promoteThreadToActive(target.thread_id);
+		if (userInitiated) this._promoteThreadToActive(target.thread_id);
 		const jumpedEvent = this.store.append({
 			actor_id: "runtime",
 			type: "SESSION_JUMPED",
@@ -565,13 +575,16 @@ export class SessionManager {
 	 * active-thread selection on future reloads like any interactive thread.
 	 * No-op for threads that are already active. Closed threads are not
 	 * re-opened here.
+	 *
+	 * Returns true when the status actually changed, so callers that are not
+	 * already persisting the index can do so.
 	 */
-	private _promoteThreadToActive(threadId: string | undefined): void {
-		if (!threadId) return;
+	private _promoteThreadToActive(threadId: string | undefined): boolean {
+		if (!threadId) return false;
 		const thread = this.threads.get(threadId);
-		if (thread && thread.status === "background") {
-			thread.status = "active";
-		}
+		if (thread?.status !== "background") return false;
+		thread.status = "active";
+		return true;
 	}
 
 	private _generateThreadId(): string {

@@ -52,9 +52,8 @@ class FakeAgent implements AgentConnection {
 		return { id: command.id, type: "response", command: command.type, success: true } as unknown as RpcResponse;
 	}
 	async prompt(): Promise<void> {}
-	async promptAndWait(): Promise<unknown[]> {
-		return [];
-	}
+	async followUp(): Promise<void> {}
+	async waitForIdle(): Promise<void> {}
 	async getLastAssistantText(): Promise<string | null> {
 		return null;
 	}

@@ -44,9 +44,9 @@ class FakeAgent implements AgentConnection {
 		// Echo a success response carrying the same id so the channel correlates it.
 		return { id: command.id, type: "response", command: command.type, success: true } as unknown as RpcResponse;
 	}
-	async promptAndWait(): Promise<unknown[]> {
-		return [];
-	}
+	async prompt(): Promise<void> {}
+	async followUp(): Promise<void> {}
+	async waitForIdle(): Promise<void> {}
 	async getLastAssistantText(): Promise<string | null> {
 		return null;
 	}
