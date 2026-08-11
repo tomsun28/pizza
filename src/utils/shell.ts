@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { delimiter } from "node:path";
 import { spawn, spawnSync } from "child_process";
 import { getBinDir } from "../config.js";
+import { resolveLoginShellPath } from "./login-shell-path.js";
 
 export interface ShellConfig {
 	shell: string;
@@ -109,13 +110,25 @@ export function getShellEnv(): NodeJS.ProcessEnv {
 	const binDir = getBinDir();
 	const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
 	const currentPath = process.env[pathKey] ?? "";
-	const pathEntries = currentPath.split(delimiter).filter(Boolean);
-	const hasBinDir = pathEntries.includes(binDir);
-	const updatedPath = hasBinDir ? currentPath : [binDir, currentPath].filter(Boolean).join(delimiter);
-
+	// Priority: agent bin dir > user login-shell PATH (homebrew / cargo / nvm)
+	// > inherited PATH. The login-shell PATH is captured once (see
+	// login-shell-path.ts) so processes that inherit a minimal PATH
+	// (GUI/launchd-launched, never sourcing the user rc files) still find
+	// user-installed tools. Mirrors the Rust desktop resolve_shell_path().
+	const parts: (string | undefined)[] = [binDir, resolveLoginShellPath(), currentPath];
+	const seen = new Set<string>();
+	const merged: string[] = [];
+	for (const part of parts) {
+		for (const dir of (part ?? "").split(delimiter)) {
+			if (dir && !seen.has(dir)) {
+				seen.add(dir);
+				merged.push(dir);
+			}
+		}
+	}
 	return {
 		...process.env,
-		[pathKey]: updatedPath,
+		[pathKey]: merged.join(delimiter),
 	};
 }
 

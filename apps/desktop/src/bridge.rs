@@ -3302,8 +3302,49 @@ pub struct GitBranchEntry {
 	pub upstream: Option<String>,
 }
 
+/// Parse `git for-each-ref --format=%(HEAD)\t%(refname)\t%(upstream:short)` output
+/// (one ref per line, tab-separated) into branch entries. Using the full
+/// `refname` (`refs/heads/…` vs `refs/remotes/…`) is the only reliable way to
+/// tell local from remote — a short name like `feature/x` contains a slash but
+/// is local. The symbolic `refs/remotes/<remote>/HEAD` ref is skipped.
+fn parse_branches(raw: &str) -> Vec<GitBranchEntry> {
+	let mut branches = Vec::new();
+	for line in raw.lines() {
+		if line.is_empty() {
+			continue;
+		}
+		let mut parts = line.splitn(3, '\t');
+		let head_marker = parts.next().unwrap_or("");
+		let refname = parts.next().unwrap_or("");
+		let upstream = parts.next().filter(|s| !s.is_empty());
+		let (is_remote, name) = if let Some(n) = refname.strip_prefix("refs/remotes/") {
+			// Skip the symbolic per-remote HEAD pointer (refs/remotes/origin/HEAD).
+			if n.ends_with("/HEAD") {
+				continue;
+			}
+			(true, n.to_string())
+		} else if let Some(n) = refname.strip_prefix("refs/heads/") {
+			(false, n.to_string())
+		} else {
+			// Tags and anything else are not branches — ignore them.
+			continue;
+		};
+		branches.push(GitBranchEntry {
+			name,
+			is_current: head_marker == "*",
+			is_remote,
+			upstream: upstream.map(|s| s.to_string()),
+		});
+	}
+	branches
+}
+
 /// List all branches (local + remote) in the repo at `cwd`. If `cwd` is not a
 /// git repo, returns an empty list (no error) so the UI can hide the option.
+///
+/// Uses `git for-each-ref` (not `git branch`) because `git branch -z` is only
+/// supported on git >= 2.41, while `for-each-ref` with a custom `--format` is
+/// stable across versions and gives tab-separated fields for safe parsing.
 #[tauri::command]
 pub async fn git_branches(cwd: String) -> Result<Vec<GitBranchEntry>, String> {
 	// Cheap repo check — non-repo returns empty list, not an error.
@@ -3311,44 +3352,124 @@ pub async fn git_branches(cwd: String) -> Result<Vec<GitBranchEntry>, String> {
 	if !matches!(inside, Ok(s) if s.trim() == "true") {
 		return Ok(Vec::new());
 	}
-
-	// `--all` includes remote-tracking branches; `-z` NUL-separates for safe parsing.
+	// %(HEAD) is "*" for the current branch, " " otherwise; %09 is a TAB so a
+	// branch name containing a space can't corrupt the field split.
 	let raw = run_git_capture(
 		&cwd,
 		&[
-			"branch",
-			"--all",
-			"-z",
-			"--format=%(HEAD) %(refname:short) %(upstream:short)",
+			"for-each-ref",
+			"--format=%(HEAD)%09%(refname)%09%(upstream:short)",
+			"refs/heads",
+			"refs/remotes",
 		],
 	)?;
-	let mut branches = Vec::new();
-	for field in raw.split('\0').filter(|f| !f.is_empty()) {
-		let trimmed = field.trim();
-		if trimmed.is_empty() {
+	Ok(parse_branches(&raw))
+}
+
+/// One entry from `git log` — a read-only snapshot for the Git tab's history view.
+#[derive(serde::Serialize)]
+pub struct GitLogEntry {
+	/// Full commit hash.
+	pub hash: String,
+	/// Abbreviated hash (e.g. `4af2abd`).
+	pub short: String,
+	/// Author name.
+	pub author: String,
+	/// Author date in strict ISO 8601 (e.g. `2026-08-06T02:16:32+08:00`).
+	pub date: String,
+	/// Commit subject (first line of the message).
+	pub subject: String,
+	/// Refs pointing at this commit, comma-joined without the surrounding parens
+	/// (e.g. `HEAD -> main, origin/main, tag: v1.0`). Empty if none.
+	pub refs: String,
+}
+
+/// Parse `git log -z --format=%H\x1f%h\x1f%an\x1f%aI\x1f%s\x1f%d` into entries.
+/// Records are NUL-separated; fields within a record are separated by US (\x1f).
+/// The `%d` ref decoration comes through as " (...)" or empty -- we strip the
+/// surrounding parens for cleaner display.
+fn parse_log(raw: &str) -> Vec<GitLogEntry> {
+	let mut entries = Vec::new();
+	for record in raw.split('\0').filter(|r| !r.is_empty()) {
+		let mut parts = record.splitn(6, '\x1f');
+		let hash = parts.next().unwrap_or("").to_string();
+		let short = parts.next().unwrap_or("").to_string();
+		let author = parts.next().unwrap_or("").to_string();
+		let date = parts.next().unwrap_or("").to_string();
+		let subject = parts.next().unwrap_or("").to_string();
+		let mut refs = parts.next().unwrap_or("").trim().to_string();
+		if refs.starts_with('(') && refs.ends_with(')') {
+			refs = refs[1..refs.len() - 1].trim().to_string();
+		}
+		if hash.is_empty() {
 			continue;
 		}
-		// Format: "* branch-name upstream" or "  branch-name upstream"
-		let mut parts = trimmed.splitn(3, ' ');
-		let head_marker = parts.next().unwrap_or("");
-		let name = parts.next().unwrap_or("");
-		let upstream = parts.next().filter(|s| !s.is_empty());
-		if name.is_empty() {
-			continue;
-		}
-		let is_current = head_marker == "*";
-		let is_remote =
-			name.contains('/') && (name.starts_with("origin/") || name.starts_with("remotes/"));
-		// Strip the remotes/ prefix for display.
-		let clean_name = name.strip_prefix("remotes/").unwrap_or(name).to_string();
-		branches.push(GitBranchEntry {
-			name: clean_name,
-			is_current,
-			is_remote,
-			upstream: upstream.map(|s| s.to_string()),
+		entries.push(GitLogEntry {
+			hash,
+			short,
+			author,
+			date,
+			subject,
+			refs,
 		});
 	}
-	Ok(branches)
+	entries
+}
+
+/// Return recent commits in the repo at `cwd`. Read-only — the Git tab never
+/// mutates the repo; to commit/push/switch branches, ask the agent in chat so
+/// the action lands in the event log. If `cwd` is not a git repo, returns an
+/// empty list (no error) so the UI can hide the section. `limit` clamped 1..=200.
+#[tauri::command]
+pub async fn git_log(cwd: String, limit: Option<u32>) -> Result<Vec<GitLogEntry>, String> {
+	let inside = run_git_capture(&cwd, &["rev-parse", "--is-inside-work-tree"]);
+	if !matches!(inside, Ok(s) if s.trim() == "true") {
+		return Ok(Vec::new());
+	}
+	let n = limit.unwrap_or(100).clamp(1, 200);
+	let n_str = n.to_string();
+	// `%x1f` (US) separates fields within a record; `-z` NUL-separates records.
+	// `%d` yields " (refs…)" or empty — we trim/unwrap the parens below.
+	let raw = run_git_capture(
+		&cwd,
+		&[
+			"log",
+			"-z",
+			"-n",
+			&n_str,
+			"--format=%H%x1f%h%x1f%an%x1f%aI%x1f%s%x1f%d",
+		],
+	)?;
+	Ok(parse_log(&raw))
+}
+
+/// Return the unified diff a commit introduced (vs its first parent, or vs the
+/// empty tree for the root commit via `--root`). Read-only — for inspecting
+/// what landed in a commit from the Git tab's history view. `hash` may be any
+/// hex prefix or refname the agent or user clicked.
+#[tauri::command]
+pub async fn git_show(cwd: String, hash: String) -> Result<String, String> {
+	// Guard against option injection: a commit ref is hex (possibly with `/`,
+	// `.`, `_`, `-` for refnames) and never starts with `-`.
+	if hash.is_empty()
+		|| hash.starts_with('-')
+		|| hash.contains(|c: char| {
+			!(c.is_ascii_alphanumeric() || c == '/' || c == '.' || c == '_' || c == '-')
+		}) {
+		return Err("invalid commit ref".into());
+	}
+	// `--no-commit-id` keeps the output a pure patch (no leading hash line).
+	run_git_capture(
+		&cwd,
+		&[
+			"diff-tree",
+			"-p",
+			"--no-color",
+			"--root",
+			"--no-commit-id",
+			&hash,
+		],
+	)
 }
 
 /// Fetch the skills.sh leaderboard HTML page via Rust (bypasses CORS).
@@ -3453,5 +3574,42 @@ mod tests {
 	#[test]
 	fn parse_porcelain_handles_empty_output() {
 		assert!(parse_porcelain("", &HashMap::new()).is_empty());
+	}
+
+	#[test]
+	fn parse_log_reads_fields_and_strips_ref_parens() {
+		// Two NUL-separated records; fields split on US (\x1f). The first carries
+		// a %d decoration of " (HEAD -> main, tag: v1.0)", the second none.
+		let raw = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\x1fdeadbeef\x1fAda\x1f2026-08-06T02:16:32+08:00\x1finit\x1f (HEAD -> main, tag: v1.0)\0cafebabecafebabecafebabecafebabecafebabe\x1fcafebabe\x1fBob\x1f2026-08-07T10:00:00Z\x1ffix: oops\x1f\0";
+		let entries = parse_log(&raw);
+		assert_eq!(entries.len(), 2);
+		assert_eq!(entries[0].short, "deadbeef");
+		assert_eq!(entries[0].subject, "init");
+		assert_eq!(entries[0].author, "Ada");
+		// Parens stripped from the ref decoration.
+		assert_eq!(entries[0].refs, "HEAD -> main, tag: v1.0");
+		// Empty %d yields an empty refs string, not garbage.
+		assert_eq!(entries[1].refs, "");
+		assert_eq!(entries[1].subject, "fix: oops");
+	}
+
+	#[test]
+	fn parse_branches_splits_locals_remotes_and_skips_symbolic_head() {
+		// One ref per line, TAB-separated. "*" marks the current branch; refs/remotes/
+		//origin/HEAD is a symbolic ref that must be dropped, not listed.
+		let raw = "*\trefs/heads/main\torigin/main\n \trefs/heads/feature/x\t\n\trefs/remotes/origin/main\t\n\trefs/remotes/origin/HEAD\t\n";
+		let b = parse_branches(&raw);
+		assert_eq!(b.len(), 3, "the symbolic origin/HEAD must be skipped");
+		assert_eq!(b[0].name, "main");
+		assert!(b[0].is_current);
+		assert!(!b[0].is_remote);
+		assert_eq!(b[0].upstream.as_deref(), Some("origin/main"));
+		// A local branch with a slash in its name stays local (no upstream).
+		assert_eq!(b[1].name, "feature/x");
+		assert!(!b[1].is_remote);
+		assert_eq!(b[1].upstream, None);
+		// Remote-tracking branch, no leading refs/ in the display name.
+		assert_eq!(b[2].name, "origin/main");
+		assert!(b[2].is_remote);
 	}
 }

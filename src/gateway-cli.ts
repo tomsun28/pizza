@@ -16,6 +16,7 @@ import chalk from "chalk";
 import { gatewaySocketPath, ensureGateway } from "../packages/gateway/index.js";
 import { serializeJsonLine } from "../packages/gateway/jsonl.js";
 import { getAgentDir } from "./config.js";
+import { resolveLoginShellPath } from "./utils/login-shell-path.js";
 
 /** One-line JSONL over a Unix socket. Returns the first parsed response. */
 function sendOne<T>(socketPath: string, message: Record<string, unknown>, timeoutMs = 5000): Promise<T> {
@@ -166,6 +167,11 @@ async function cmdStart(socketPath: string): Promise<void> {
 		stdio: "ignore",
 		env: {
 			...process.env,
+			// The gateway daemon is spawned from launchd's minimal PATH (GUI/IDE
+			// launchers) and never sources the user rc files, so homebrew/cargo/nvm
+			// would be missing. Inject the captured login-shell PATH so the daemon
+			// and every agent it runs finds user-installed tools.
+			PATH: resolveLoginShellPath() ?? process.env.PATH,
 			PIZZA_GATEWAY_SOCKET: socketPath,
 			PIZZA_AGENT_DIR: getAgentDir(),
 		},

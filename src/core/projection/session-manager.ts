@@ -182,6 +182,7 @@ export class SessionManager {
 		if (source.event_range.end_event_id === "HEAD") {
 			this.activeSessionId = source.session_id;
 			this.activeThreadId = source.thread_id;
+			this._promoteThreadToActive(source.thread_id);
 		}
 
 		const forked = this.createSession("fork", source.name, {
@@ -341,6 +342,7 @@ export class SessionManager {
 		}
 		this.activeSessionId = target.session_id;
 		this.activeThreadId = target.thread_id;
+		this._promoteThreadToActive(target.thread_id);
 		this._persistIndex();
 	}
 
@@ -368,6 +370,7 @@ export class SessionManager {
 				: undefined;
 		this.activeSessionId = target.session_id;
 		this.activeThreadId = target.thread_id;
+		this._promoteThreadToActive(target.thread_id);
 		const jumpedEvent = this.store.append({
 			actor_id: "runtime",
 			type: "SESSION_JUMPED",
@@ -433,7 +436,13 @@ export class SessionManager {
 	 * events are tagged with thread_id. Creates the first session in the thread.
 	 */
 	createThread(name?: string, created_by: SessionDescriptor["created_by"] = "user_explicit"): ThreadDescriptor {
-		const thread = this._createThreadRecord(name);
+		// Scheduler-created threads are background threads: they exist to
+		// isolate automated/scheduled turns from the interactive thread.
+		// Background threads are never auto-selected as the active thread on
+		// reload (see _loadIndex), so a leftover scheduled thread cannot
+		// hijack the chat after a restart.
+		const status: ThreadDescriptor["status"] = created_by === "schedule" ? "background" : "active";
+		const thread = this._createThreadRecord(name, status);
 		this.createSession(created_by, name, { threadId: thread.thread_id });
 		this._persistIndex();
 		return thread;
@@ -454,14 +463,66 @@ export class SessionManager {
 		const index = this.sessionStore?.getSessionIndex();
 		if (!index) return;
 
+		// Load threads (without selecting an active thread yet) and index all
+		// sessions first. The active thread is chosen deterministically below.
 		for (const thread of index.threads ?? []) {
 			this.threads.set(thread.thread_id, thread);
-			if (thread.status === "active") {
-				this.activeThreadId = thread.thread_id;
-			}
 		}
 		for (const session of index.sessions) {
 			this.sessions.set(session.session_id, session);
+		}
+
+		// Deterministically select the active thread on reload.
+		//
+		// Background threads (created by the scheduler for automated tasks)
+		// must NEVER be auto-selected as the interactive active thread —
+		// otherwise a leftover background thread hijacks the user's chat on
+		// every restart (the bug where user prompts landed in the wrong thread).
+		//
+		// Among interactive threads (status "active"), pick the one whose most
+		// recent session was created latest — i.e. the thread the user was
+		// actually last working in. This replaces the previous "last active
+		// thread wins" behavior, which depended on storage iteration order and
+		// could nondeterministically select a stale thread.
+		const interactiveThreadIds = new Set(
+			(index.threads ?? []).filter((t) => t.status === "active").map((t) => t.thread_id),
+		);
+		if (interactiveThreadIds.size > 0) {
+			// Build a thread-created-at lookup so ties on session.created_at are
+			// broken deterministically by thread recency (never by iteration order).
+			const threadCreatedAt = new Map<string, number>();
+			for (const thread of index.threads ?? []) {
+				threadCreatedAt.set(thread.thread_id, thread.created_at);
+			}
+			let bestThreadId: string | undefined;
+			let bestSessionCreatedAt = -1;
+			let bestThreadCreatedAt = -1;
+			for (const session of this.sessions.values()) {
+				if (!interactiveThreadIds.has(session.thread_id)) continue;
+				const tca = threadCreatedAt.get(session.thread_id) ?? 0;
+				// Pick the thread whose latest session is newest; break ties by
+				// thread recency so the result is deterministic.
+				if (
+					session.created_at > bestSessionCreatedAt ||
+					(session.created_at === bestSessionCreatedAt && tca > bestThreadCreatedAt)
+				) {
+					bestSessionCreatedAt = session.created_at;
+					bestThreadCreatedAt = tca;
+					bestThreadId = session.thread_id;
+				}
+			}
+			// Fallback: if an interactive thread has no sessions, take the most
+			// recently created interactive thread.
+			if (!bestThreadId) {
+				bestThreadId = (index.threads ?? [])
+					.filter((t) => t.status === "active")
+					.sort((a, b) => b.created_at - a.created_at)[0]?.thread_id;
+			}
+			if (bestThreadId) this.activeThreadId = bestThreadId;
+		}
+
+		// Resolve the active session: the one at HEAD within the active thread.
+		for (const session of this.sessions.values()) {
 			if (session.event_range.end_event_id === "HEAD" && session.thread_id === this.activeThreadId) {
 				this.activeSessionId = session.session_id;
 			}
@@ -483,18 +544,34 @@ export class SessionManager {
 		return `sess_${timestamp}_${random}`;
 	}
 
-	/** Create a thread record (no session). Used by createThread and createSession's auto-thread fallback. */
-	private _createThreadRecord(name?: string): ThreadDescriptor {
+	/** Create a thread record (no session). Used by createThread and createSession auto-thread fallback. The status defaults to active; pass background for scheduler threads. */
+	private _createThreadRecord(name?: string, status: ThreadDescriptor["status"] = "active"): ThreadDescriptor {
 		const thread: ThreadDescriptor = {
 			thread_id: this._generateThreadId(),
 			workspace_id: this.store.workspace_id,
 			name,
 			created_at: Date.now(),
-			status: "active",
+			status,
 		};
 		this.threads.set(thread.thread_id, thread);
 		this.activeThreadId = thread.thread_id;
 		return thread;
+	}
+
+	/**
+	 * Promote a background thread to active when the user explicitly
+	 * navigates into it (history tree click / jump / switch). Once a user
+	 * has interacted with a scheduled thread, it should participate in
+	 * active-thread selection on future reloads like any interactive thread.
+	 * No-op for threads that are already active. Closed threads are not
+	 * re-opened here.
+	 */
+	private _promoteThreadToActive(threadId: string | undefined): void {
+		if (!threadId) return;
+		const thread = this.threads.get(threadId);
+		if (thread && thread.status === "background") {
+			thread.status = "active";
+		}
 	}
 
 	private _generateThreadId(): string {

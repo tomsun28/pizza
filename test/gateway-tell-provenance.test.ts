@@ -1,0 +1,175 @@
+/**
+ * Provenance tests for the `_tell` path.
+ *
+ * Verifies that a `tell` carrying `from` (sender {@link MessageSource}) is
+ * delivered to the target agent wrapped in a uniform `<message from="kind:id">`
+ * block — so the receiver knows who messaged it and where to reply. Also covers
+ * the back-compat path: a `tell` with no `from` falls back to the bare message.
+ *
+ * Uses a fake AgentConnection (no real LLM) that records the prompt it receives.
+ */
+
+import { describe, it, expect, afterEach } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { connect, type Socket } from "node:net";
+import {
+	createGatewayServer,
+	type GatewayServer,
+	type AgentConnection,
+} from "../packages/gateway/gateway-server.js";
+import { serializeJsonLine } from "../packages/gateway/jsonl.js";
+import type { RpcCommand, RpcResponse } from "@tomsun28/pizza-protocol";
+
+/** Fake agent that records the message handed to `promptAndWait`. */
+class RecordingAgent implements AgentConnection {
+	readonly cwd: string;
+	received: string[] = [];
+	constructor(cwd: string) {
+		this.cwd = cwd;
+	}
+	async start(): Promise<void> {}
+	async stop(): Promise<void> {}
+	onEvent(): () => void {
+		return () => {};
+	}
+	onExit(): () => void {
+		return () => {};
+	}
+	async sendCommand(command: RpcCommand): Promise<RpcResponse> {
+		return { id: command.id, type: "response", command: command.type, success: true } as unknown as RpcResponse;
+	}
+	async prompt(message?: string): Promise<void> {
+		if (message !== undefined) this.received.push(message);
+	}
+	async promptAndWait(message?: string): Promise<unknown[]> {
+		if (message !== undefined) this.received.push(message);
+		return [];
+	}
+	async getLastAssistantText(): Promise<string | null> {
+		return "ok";
+	}
+	getStderr(): string {
+		return "";
+	}
+}
+
+function uniqueSocketPath(): string {
+	return join(
+		tmpdir(),
+		`pizza-gw-prov-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.sock`,
+	);
+}
+
+async function sendAndWait(socketPath: string, message: object, timeoutMs = 3000): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const sock = connect(socketPath);
+		const timer = setTimeout(() => {
+			sock.destroy();
+			reject(new Error("timeout waiting for gateway response"));
+		}, timeoutMs);
+		sock.once("connect", () => {
+			sock.write(`${serializeJsonLine(message)}\n`);
+		});
+		let buf = "";
+		sock.on("data", (chunk) => {
+			buf += chunk.toString();
+			if (buf.includes("\n")) {
+				clearTimeout(timer);
+				sock.destroy();
+				resolve(buf.trim());
+			}
+		});
+		sock.once("error", (err) => {
+			clearTimeout(timer);
+			reject(err);
+		});
+	});
+}
+
+describe("gateway tell provenance", () => {
+	let server: GatewayServer | undefined;
+	const sockets: string[] = [];
+	const dirs: string[] = [];
+
+	async function startWithFake(cwd: string): Promise<RecordingAgent> {
+		const fake = new RecordingAgent(cwd);
+		const socketPath = uniqueSocketPath();
+		sockets.push(socketPath);
+		const dir = mkdtempSync(join(tmpdir(), "pizza-gw-prov-"));
+		dirs.push(dir);
+		server = createGatewayServer({
+			socketPath,
+			agentDir: dir,
+			createAgent: () => fake,
+		});
+		await server.start();
+		return fake;
+	}
+
+	afterEach(async () => {
+		if (server) {
+			await server.stop().catch(() => {});
+			server = undefined;
+		}
+		for (const s of sockets.splice(0)) rmSync(s, { recursive: true, force: true });
+		for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+	});
+
+	it("wraps the message with the sender's provenance when `from` is present", async () => {
+		const cwd = "/proj/web";
+		const fake = await startWithFake(cwd);
+		// resolveDestination accepts an absolute path directly.
+		const res = await sendAndWait(server!.socketPath, {
+			type: "tell",
+			id: "r1",
+			to: cwd,
+			message: "do these two files conflict?",
+			from: { kind: "agent", id: "/proj/pizza" },
+		});
+		const parsed = JSON.parse(res);
+		expect(parsed.ok).toBe(true);
+		expect(fake.received).toHaveLength(1);
+		const delivered = fake.received[0]!;
+		expect(delivered).toContain('<message from="agent:/proj/pizza"');
+		expect(delivered).toContain("do these two files conflict?");
+		expect(delivered).toContain("</message>");
+	});
+
+	it("delivers the bare message when `from` is absent (back-compat)", async () => {
+		const cwd = "/proj/web";
+		const fake = await startWithFake(cwd);
+		const res = await sendAndWait(server!.socketPath, {
+			type: "tell",
+			id: "r2",
+			to: cwd,
+			message: "hello there",
+		});
+		const parsed = JSON.parse(res);
+		expect(parsed.ok).toBe(true);
+		expect(fake.received).toHaveLength(1);
+		expect(fake.received[0]).toBe("hello there");
+	});
+	it("acks delivery without blocking when async is set", async () => {
+		const cwd = "/proj/web";
+		const fake = await startWithFake(cwd);
+		const res = await sendAndWait(server!.socketPath, {
+			type: "tell",
+			id: "r3",
+			to: cwd,
+			message: "build it and tell me when done",
+			from: { kind: "agent", id: "/proj/pizza" },
+			async: true,
+		});
+		const parsed = JSON.parse(res);
+		expect(parsed.ok).toBe(true);
+		expect(parsed.delivered).toBe(true);
+		expect(typeof parsed.messageId).toBe("string");
+		expect(parsed.reply).toBeUndefined();
+		// Still delivered with provenance; the receiver replies on its own.
+		expect(fake.received).toHaveLength(1);
+		expect(fake.received[0]).toContain("agent:/proj/pizza");
+		expect(fake.received[0]).toContain("build it and tell me when done");
+	});
+});

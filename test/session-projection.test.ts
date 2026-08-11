@@ -2,7 +2,7 @@
  * Session Projection tests
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { join } from "node:path";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -367,6 +367,75 @@ describe("SessionManager", () => {
 		expect(schedule.thread_id).toBe(scheduleThread.thread_id);
 		expect(schedule.thread_id).not.toBe(userThreadId);
 		expect(mgr.getSession(user.session_id)?.event_range.end_event_id).toBe("HEAD");
+	});
+
+	it("marks scheduler-created threads as background", () => {
+		const mgr = new SessionManager(store, store);
+		mgr.createSession("user_explicit", "User");
+		const bg = mgr.createThread("Scheduled task", "schedule");
+		expect(bg.status).toBe("background");
+		const normal = mgr.createThread("Chat", "user_explicit");
+		expect(normal.status).toBe("active");
+	});
+
+	it("does not auto-select a leftover background thread as active on reload", () => {
+		const userThreadId: string[] = [];
+		{
+			const mgr = new SessionManager(store, store);
+			const user = mgr.createSession("user_explicit", "User");
+			userThreadId.push(user.thread_id);
+			// Scheduler creates a background thread + session, then restores the
+			// previous interactive session (as rpc-mode dispatch does).
+			mgr.createThread("Scheduled task", "schedule");
+			mgr.switchToExistingSession(user.session_id, "schedule complete", { background: true });
+			expect(mgr.getActiveThreadId()).toBe(user.thread_id);
+			mgr.dispose();
+		}
+		// Reopen (simulates sidecar restart / _loadIndex).
+		const mgr2 = new SessionManager(store, store);
+		expect(mgr2.getActiveThreadId()).toBe(userThreadId[0]);
+		mgr2.dispose();
+	});
+
+	it("deterministically picks the most recently used interactive thread on reload", () => {
+		// Use fake timers to give each session/thread a distinct created_at so
+		// the "most recently used" selection is unambiguous (no same-ms ties).
+		vi.useFakeTimers();
+		try {
+			let expectedThreadId = "";
+			{
+				const mgr = new SessionManager(store, store);
+				vi.setSystemTime(new Date("2026-08-10T10:00:00Z"));
+				const a = mgr.createThread("A", "user_explicit");
+				vi.setSystemTime(new Date("2026-08-10T11:00:00Z"));
+				mgr.createThread("B", "user_explicit");
+				// Thread A gets the newest session -> it must be selected on reload.
+				vi.setSystemTime(new Date("2026-08-10T12:00:00Z"));
+				mgr.createSession("user_explicit", "latest-in-A", { threadId: a.thread_id });
+				expectedThreadId = a.thread_id;
+				mgr.dispose();
+			}
+			const mgr2 = new SessionManager(store, store);
+			expect(mgr2.getActiveThreadId()).toBe(expectedThreadId);
+			mgr2.dispose();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("promotes a background thread to active when the user navigates into it", () => {
+		const mgr = new SessionManager(store, store);
+		const user = mgr.createSession("user_explicit", "User");
+		const bg = mgr.createThread("Scheduled task", "schedule");
+		expect(bg.status).toBe("background");
+		// Scheduler restored the user session after the background run.
+		mgr.switchToExistingSession(user.session_id, "schedule complete", { background: true });
+		expect(mgr.getActiveThreadId()).toBe(user.thread_id);
+		// Later the user opens the scheduled session from the history tree.
+		const bgSession = mgr.listSessions().find((s) => s.thread_id === bg.thread_id)!.session_id;
+		mgr.switchToExistingSession(bgSession, "history tree row click");
+		expect(mgr.getActiveThreadId()).toBe(bg.thread_id);
+		expect(mgr.getActiveThread()?.status).toBe("active");
 	});
 
 	it("should throw when switching to non-existent session", () => {

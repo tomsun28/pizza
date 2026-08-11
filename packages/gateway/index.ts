@@ -33,6 +33,7 @@ export { ensureGateway } from "./gateway-lifecycle.js";
 export {
 	type GatewayRequest,
 	type GatewayTellRequest,
+	type MessageSource,
 	type GatewayPingRequest,
 	type GatewayStatusRequest,
 	type GatewayStatusResult,

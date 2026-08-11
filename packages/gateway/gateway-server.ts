@@ -31,6 +31,7 @@ import {
 	type GatewayChannelRequest,
 	type GatewayRpcFrame,
 	type GatewayWorkspaceInfo,
+	type MessageSource,
 	GATEWAY_DEFAULT_TELL_TIMEOUT,
 } from "./protocol.js";
 import type { RpcCommand, RpcResponse } from "../rpc/rpc-types.js";
@@ -63,6 +64,8 @@ export interface AgentConnection {
 	onExit(listener: () => void): () => void;
 	sendCommand(command: RpcCommand): Promise<RpcResponse>;
 	promptAndWait(message: string, images?: unknown[], timeout?: number): Promise<unknown[]>;
+	/** Non-blocking delivery: queue the prompt and return without waiting for the turn. */
+	prompt(message: string, images?: unknown[]): Promise<void>;
 	getLastAssistantText(): Promise<string | null>;
 	getStderr?(): string;
 }
@@ -184,6 +187,12 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 	function ensureForwarder(cwd: string, entry: PoolEntry): void {
 		if (eventForwarders.has(cwd)) return;
 		const unsubscribe = entry.client.onEvent((event) => {
+			// Any event the agent emits (streaming tokens, tool calls, turn
+			// lifecycle) is proof of life: refresh lastActivity so the idle
+			// timer never evicts an agent mid-turn. This covers the channel
+			// `rpc` path (e.g. a desktop prompt) which never touches the
+			// `tell` path the timer was originally wired to.
+			entry.lastActivity = Date.now();
 			broadcastEvent(cwd, event as unknown as GatewayRpcFrame);
 		});
 		eventForwarders.set(cwd, unsubscribe);
@@ -270,12 +279,38 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 		return entry;
 	}
 
+	/** True if at least one channel connection is currently subscribed to `cwd`. */
+	function hasLiveSubscribers(cwd: string): boolean {
+		return (subscribers.get(cwd)?.size ?? 0) > 0;
+	}
+
+	/**
+	 * Whether `entry` may be idle-evicted right now. We keep an agent resident
+	 * as long as ANY of these hold:
+	 *   - it is busy (a tell is in flight),
+	 *   - it has queued tells,
+	 *   - it emitted activity recently (within the idle window) — this is the
+	 *     signal that spans a full turn on the channel `rpc` path, where the
+	 *     prompt command is acked instantly and the turn plays out as events,
+	 *   - a channel connection is still attached to its workspace (e.g. a
+	 *     desktop window is open) — the pool exists precisely to reuse it.
+	 */
+	function isEntryInUse(entry: PoolEntry): boolean {
+		const now = Date.now();
+		return (
+			entry.busy ||
+			entry.queue.length > 0 ||
+			now - entry.lastActivity < agentIdleTimeout ||
+			hasLiveSubscribers(entry.cwd)
+		);
+	}
+
 	/** (Re)start the idle-eviction timer for an entry. */
 	function scheduleIdleEviction(entry: PoolEntry): void {
 		if (agentIdleTimeout <= 0) return;
 		if (entry.idleTimer) clearTimeout(entry.idleTimer);
 		entry.idleTimer = setTimeout(() => {
-			if (entry.busy || entry.queue.length > 0) {
+			if (isEntryInUse(entry)) {
 				// Still active — reschedule.
 				scheduleIdleEviction(entry);
 				return;
@@ -309,6 +344,24 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 		await entry.client.stop().catch(() => {});
 		emitter.emit("agentClosed", cwd as never);
 	}
+
+/**
+ * Render an inbound message as the block the receiving agent sees in its
+ * context. Uniform across all source kinds — only `from` varies — so the agent
+ * learns one format and can read its reply address straight off the block:
+ *
+ *   <message from="agent:web" id="m_...">
+ *   the message content
+ *   </message>
+ *
+ * `from` serializes a {@link MessageSource} as `kind:id`. A generated `id`
+ * tags the message for future `inReplyTo` threading. When `source` is absent
+ * the block is omitted and the content is returned bare (the legacy path).
+ */
+function renderInboundMessage(source: MessageSource | undefined, content: string, id: string): string {
+	if (!source) return content;
+	return `<message from="${source.kind}:${source.id}" id="${id}">\n${content}\n</message>`;
+}
 
 	// ── tell routing ──────────────────────────────────────────────────────
 
@@ -376,11 +429,34 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 			}
 		}
 
-		// Run the prompt.
+		// Wrap the message with sender provenance so the receiving agent knows who
+		// messaged it (and where to reply). Falls back to the bare message for
+		// clients that did not send `from`.
+		const messageId = `m_${Date.now().toString(36)}`;
+		const delivered = renderInboundMessage(request.from, request.message, messageId);
+
+		// Async path: deliver without waiting for the turn and ack immediately.
+		// The receiver is expected to reply on its own (symmetric messaging).
+		if (request.async) {
+			try {
+				await entry.client.prompt(delivered);
+				entry.lastActivity = Date.now();
+				scheduleIdleEviction(entry);
+				emitter.emit("tell", cwd, true, Date.now() - startedAt);
+				return { type: "tell_result", id: request.id, ok: true, delivered: true, messageId };
+			} catch (error) {
+				const m = error instanceof Error ? error.message : String(error);
+				emitter.emit("tell", cwd, false, Date.now() - startedAt);
+				await teardownAgent(cwd, "async tell failed").catch(() => {});
+				return { type: "tell_result", id: request.id, ok: false, error: `async tell to ${cwd} failed: ${m}` };
+			}
+		}
+
+		// Sync path: run the prompt and wait for the agent final assistant text.
 		entry.busy = true;
 		entry.lastActivity = Date.now();
 		try {
-			await entry.client.promptAndWait(request.message, undefined, timeout);
+			await entry.client.promptAndWait(delivered, undefined, timeout);
 			const reply = await entry.client.getLastAssistantText();
 			emitter.emit("tell", cwd, true, Date.now() - startedAt);
 			return { type: "tell_result", id: request.id, ok: true, reply: reply ?? "(no response)" };
@@ -465,6 +541,13 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 					return;
 				}
 				const entry = await getOrCreateAgent(cwd);
+				// Refresh activity on dispatch: sendCommand acks instantly for
+				// prompt/steer (the turn then streams as events, which also refresh
+				// lastActivity via the forwarder), so this closes the brief gap
+				// before the first streamed event. We deliberately do NOT toggle
+				// `busy` here — the authoritative liveness signal is the event
+				// stream, and toggling busy around an instant ack would be wrong.
+				entry.lastActivity = Date.now();
 				const response = await entry.client.sendCommand(request.frame as RpcCommand);
 				// Route the response back to THIS channel only (events fan out separately).
 				write({ type: "rpc", workspace: cwd, frame: response as GatewayRpcFrame });

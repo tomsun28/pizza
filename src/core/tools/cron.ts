@@ -6,10 +6,13 @@
  * where a SchedulerEngine is running. TUI mode has no scheduler, so the tool
  * is not registered there.
  *
- * Six actions:
- *  - list:    show all tasks (id, name, schedule, enabled, next fire).
+ * Eight actions:
+ *  - list:    show all tasks (id, name, schedule, enabled, next fire). Add --verbose to inline each prompt.
+ *  - show:    show one task in full (prompt body + complete schedule incl. time points).
  *  - create:  schedule a recurring prompt (--schedule shorthand or --cron-expr,
  *             plus --prompt; optional --name, --once, --new-session).
+ *  - update:  edit one task in place (--task + any of --schedule/--cron-expr/--prompt/--name).
+ *             Unspecified fields keep their current value.
  *  - pause:   disable a task (enabled = false).
  *  - resume:  re-enable a task (enabled = true).
  *  - delete:  remove a task.
@@ -22,13 +25,13 @@
  */
 
 import { Type, type Static } from "@sinclair/typebox";
-import type { ScheduledTaskSummary } from "@tomsun28/pizza-protocol";
+import type { ScheduleSpec, ScheduledTaskSummary } from "@tomsun28/pizza-protocol";
 import type { SchedulerEngine } from "../scheduler/engine.js";
 import { parseScheduleShorthand } from "../scheduler/shorthand.js";
 import { defineTool, type ToolDefinition } from "../extensions/types.js";
 
 /** Supported `_cron` subcommands. */
-export const CRON_ACTIONS = ["list", "create", "pause", "resume", "delete", "run"] as const;
+export const CRON_ACTIONS = ["list", "show", "create", "update", "pause", "resume", "delete", "run"] as const;
 export type CronAction = (typeof CRON_ACTIONS)[number];
 
 /**
@@ -51,7 +54,9 @@ const cronSchema = Type.Object({
 	action: Type.Union(
 		[
 			Type.Literal("list"),
+			Type.Literal("show"),
 			Type.Literal("create"),
+			Type.Literal("update"),
 			Type.Literal("pause"),
 			Type.Literal("resume"),
 			Type.Literal("delete"),
@@ -59,19 +64,25 @@ const cronSchema = Type.Object({
 		],
 		{
 			description:
-				"list shows all tasks; create schedules a recurring prompt; " +
+				"list shows all tasks (add --verbose to inline each prompt); show prints one task in full; " +
+				"create schedules a recurring prompt; update edits one in place; " +
 				"pause/resume toggle a task on/off; delete removes it; run fires it now.",
 		},
 	),
 	taskId: Type.Optional(
 		Type.String({
-			description: "Task id (st_xxx). Required for pause/resume/delete/run.",
+			description: "Task id (st_xxx). Required for show/update/pause/resume/delete/run.",
 		}),
 	),
 	schedule: Type.Optional(
 		Type.String({
 			description:
-				'Shorthand interval for create, e.g. "30m", "every 2h", or a cron expr "0 9 * * 1-5". Required for create unless cronExpr is set.',
+				'Shorthand interval for create/update, e.g. "30m", "every 2h", or a cron expr "0 9 * * 1-5". Required for create unless cronExpr is set.'
+		}),
+	),
+	verbose: Type.Optional(
+		Type.Boolean({
+			description: "list only: inline the prompt body of each task for quick review. Default: compact one-line rows.",
 		}),
 	),
 	cronExpr: Type.Optional(
@@ -80,7 +91,7 @@ const cronSchema = Type.Object({
 	prompt: Type.Optional(
 		Type.String({
 			description:
-				"Task instruction dispatched on each fire. Required for create. " +
+				"Task instruction dispatched on each fire. Required for create; optional for update (omit to keep current). " +
 				"Use --content or a <<EOF heredoc if it contains spaces/newlines.",
 		}),
 	),
@@ -115,6 +126,19 @@ function fmtTime(ms: number | null | undefined): string {
 	}
 }
 
+const WEEKDAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/** Pad a number to 2 digits, e.g. 9 -> "09". */
+function pad2(n: number): string {
+	return n < 10 ? `0${n}` : String(n);
+}
+
+/** Render a TimeOfDay as 24h "HH:MM". */
+function fmtTimeOfDay(t: { hour: number; minute: number }): string {
+	return `${pad2(t.hour)}:${pad2(t.minute)}`;
+}
+
+/** Render the schedule of a task as a compact, human-readable one-liner. */
 function fmtSchedule(t: ScheduledTaskSummary): string {
 	const s = t.schedule;
 	switch (s.mode) {
@@ -123,26 +147,80 @@ function fmtSchedule(t: ScheduledTaskSummary): string {
 		case "every_n_hours":
 			return `every ${s.everyN?.n ?? "?"} h`;
 		case "cron":
-			return `cron ${s.cron?.expression ?? "?"}`;
+			return `cron ${s.cron?.expression ?? "?"}${s.cron?.tz ? ` (${s.cron.tz})` : ""}`;
 		case "daily":
+			return `daily ${(s.times ?? []).map(fmtTimeOfDay).join(", ") || "?"}`;
 		case "weekdays":
-		case "weekly":
-		case "monthly":
-			return s.mode;
+			return `weekdays ${(s.times ?? []).map(fmtTimeOfDay).join(", ") || "?"}`;
+		case "weekly": {
+			const days = (s.weekdays ?? []).slice().sort((a, b) => a - b).map((d) => WEEKDAY_NAMES[d] ?? String(d)).join(", ");
+			const times = (s.times ?? []).map(fmtTimeOfDay).join(", ");
+			return `weekly ${days || "?"} @ ${times || "?"}`;
+		}
+		case "monthly": {
+			const days = (s.daysOfMonth ?? []).slice().sort((a, b) => a - b).join(", ");
+			const times = (s.times ?? []).map(fmtTimeOfDay).join(", ");
+			return `monthly day ${days || "?"} @ ${times || "?"}`;
+		}
 		default:
 			return s.mode;
 	}
 }
 
-function formatList(tasks: ScheduledTaskSummary[]): string {
+function formatList(tasks: ScheduledTaskSummary[], verbose = false): string {
 	if (tasks.length === 0) return "No scheduled tasks. Use `_cron create` to add one.";
 	const rows = tasks.map((t) => {
 		const status = t.enabled ? "on " : "off";
 		const next = t.nextRunAt == null ? "—" : fmtTime(t.nextRunAt);
 		const last = t.lastRunStatus ? ` [last: ${t.lastRunStatus}]` : "";
-		return `- ${t.id}  "${t.name}"  ${fmtSchedule(t)}  ${status}  next: ${next}${last}`;
+		const head = `- ${t.id}  "${t.name}"  ${fmtSchedule(t)}  ${status}  next: ${next}${last}`;
+		if (!verbose) return head;
+		// --verbose: indent the prompt body beneath the one-liner so the user can
+		// review what each task actually does without a separate `show` call.
+		const body = indent(t.prompt || "(no prompt)");
+		return `${head}\n${body}`;
 	});
 	return `${tasks.length} task(s):\n${rows.join("\n")}`;
+}
+
+/** Indent every line of `text` by 4 spaces (for nested display). */
+function indent(text: string): string {
+	return text
+		.split("\n")
+		.map((line) => `    ${line}`)
+		.join("\n");
+}
+
+/** Render the SessionTarget compactly, or "(default)" when unset. */
+function fmtSessionTarget(t: ScheduledTaskSummary): string {
+	const target = t.sessionTarget;
+	if (!target || target.kind === "current") return "current (default)";
+	if (target.kind === "pinned") return `pinned ${target.sessionId ?? "?"}`;
+	if (target.kind === "new") return `new session (purpose: ${target.purpose})`;
+	return JSON.stringify(target);
+}
+
+/** Full multi-line rendering of one task (used by the `show` action). */
+function formatDetail(t: ScheduledTaskSummary): string {
+	const lines: string[] = [
+		`${t.id}  "${t.name}"`,
+		`status:     ${t.enabled ? "enabled" : "paused"}${t.lastRunStatus ? `  (last run: ${t.lastRunStatus})` : ""}`,
+		`schedule:   ${fmtSchedule(t)}`,
+	];
+	if (t.sourceText) lines.push(`source:     ${t.sourceText}`);
+	lines.push(
+		`next fire:  ${fmtTime(t.nextRunAt)}`,
+		`last fire:  ${fmtTime(t.lastRunAt)}`,
+		`runs:       ${t.runCount ?? 0}`,
+		`target:     ${fmtSessionTarget(t)}`,
+		`created:    ${fmtTime(t.createdAt)}  by ${t.createdBy}`,
+		`updated:    ${fmtTime(t.updatedAt)}`,
+	);
+	if (t.timeoutMinutes) lines.push(`timeout:    ${t.timeoutMinutes} min`);
+	if (t.concurrencyPolicy) lines.push(`concurrency:${t.concurrencyPolicy}`);
+	lines.push("prompt:");
+	lines.push(indent(t.prompt || "(no prompt)"));
+	return lines.join("\n");
 }
 
 export function createCronToolDefinition(
@@ -152,8 +230,8 @@ export function createCronToolDefinition(
 		name: "cron",
 		label: "cron",
 		description:
-			"Manage scheduled/cron jobs. list shows all tasks; create schedules a recurring prompt; " +
-			"pause/resume toggle a task; delete removes it; run fires it immediately. " +
+			"Manage scheduled/cron jobs. list shows all tasks (--verbose inlines each prompt); show prints one task in full; " +
+			"create schedules a recurring prompt; update edits one in place (unspecified fields keep their value); " +
 			"Schedules fire by dispatching the prompt to the agent in its target session.",
 		parameters: cronSchema,
 		renderShell: "self",
@@ -168,9 +246,15 @@ export function createCronToolDefinition(
 
 			switch (params.action) {
 				case "list": {
-					return textResult(formatList(engine.list()));
+				return textResult(formatList(engine.list(), params.verbose === true));
 				}
 
+				case "show": {
+					if (!params.taskId) return errResult("_cron show: taskId is required.");
+					const t = engine.get(params.taskId);
+					if (!t) return errResult(`_cron show: task not found: ${params.taskId}`);
+					return textResult(formatDetail(t));
+				}
 				case "create": {
 					if (!params.prompt) return errResult("_cron create: --prompt is required.");
 					const expr = params.cronExpr ?? params.schedule;
@@ -228,6 +312,27 @@ export function createCronToolDefinition(
 					);
 				}
 
+				case "update": {
+					if (!params.taskId) return errResult("_cron update: --task is required.");
+					const patch: { schedule?: ScheduleSpec; prompt?: string; name?: string } = {};
+					const expr = params.cronExpr ?? params.schedule;
+					if (expr !== undefined) {
+						const parsed = parseScheduleShorthand(expr);
+						if (!parsed.ok) return errResult(`_cron update: ${parsed.error}`);
+						patch.schedule = parsed.spec;
+					}
+					if (params.prompt !== undefined) patch.prompt = params.prompt;
+					if (params.name !== undefined) patch.name = params.name;
+					if (expr === undefined && params.prompt === undefined && params.name === undefined) {
+						return errResult("_cron update: nothing to change. Pass --schedule/--cron-expr and/or --prompt/--name.");
+					}
+					const r = engine.update(params.taskId, patch);
+					if (!r.ok) return errResult(`_cron update: ${r.error}`);
+					return textResult(
+						`Updated task ${r.task.id} "${r.task.name}" (${fmtSchedule(r.task)}).\n` +
+							`Next fire: ${fmtTime(r.task.nextRunAt)}.`,
+					);
+				}
 				case "pause":
 				case "resume": {
 					if (!params.taskId) return errResult(`_cron ${params.action}: taskId is required.`);

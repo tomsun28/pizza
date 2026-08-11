@@ -1,6 +1,7 @@
 import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
+import { highlightText } from "@/lib/highlight";
 import { Markdown } from "./Markdown";
 import { Button, Badge } from "@/components/ui";
 import { FileAttachmentIcon } from "@/components/FileAttachmentIcon";
@@ -78,7 +79,7 @@ function useCopy(): [boolean, (text: string) => void] {
 }
 
 /** Long monospace block that collapses to a preview by default. */
-function CollapsibleCode({ text, isError }: { text: string; isError?: boolean }) {
+function CollapsibleCode({ text, isError, highlight, highlightActive }: { text: string; isError?: boolean; highlight?: string; highlightActive?: boolean }) {
 	const { t } = useTranslation();
 	const [expanded, setExpanded] = useState(false);
 	const lines = text.split("\n");
@@ -92,7 +93,7 @@ function CollapsibleCode({ text, isError }: { text: string; isError?: boolean })
 					isError ? "bg-danger/5 text-danger" : "bg-bg/60 text-muted",
 				)}
 			>
-				{shown}
+				{highlight ? highlightText(shown, highlight, highlightActive) : shown}
 				{long && !expanded && <span className="text-muted/60">{"\n…"}</span>}
 			</pre>
 			{long && (
@@ -109,7 +110,7 @@ function CollapsibleCode({ text, isError }: { text: string; isError?: boolean })
 }
 
 /** Collapsible reasoning/thinking block, collapsed by default. */
-function Thinking({ text, streaming }: { text: string; streaming?: boolean }) {
+function Thinking({ text, streaming, highlight, highlightActive }: { text: string; streaming?: boolean; highlight?: string; highlightActive?: boolean }) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
 	return (
@@ -125,7 +126,7 @@ function Thinking({ text, streaming }: { text: string; streaming?: boolean }) {
 			</button>
 			{open && (
 				<div className="mt-2 border-l-2 border-border pl-3 text-xs italic leading-relaxed text-muted">
-					<div className="whitespace-pre-wrap break-words">{text}</div>
+					<div className="whitespace-pre-wrap break-words">{highlight ? highlightText(text, highlight, highlightActive) : text}</div>
 				</div>
 			)}
 		</div>
@@ -222,15 +223,21 @@ function ApprovalSection({
 function ToolCard({
 	item,
 	onResolveApproval,
+	highlight,
+	highlightActive,
 }: {
 	item: TimelineItem;
 	onResolveApproval?: (intentEventId: string, toolCallId: string, approved: boolean) => void;
+	highlight?: string;
+	highlightActive?: boolean;
 }) {
 	const { t } = useTranslation();
 	const command = formatToolArgs(item.toolArgs);
 	const running = item.streaming && !item.toolResult;
 	const approval = item.pendingApproval;
 	const awaitingApproval = approval?.status === "pending";
+	// Tool name + title are matched by search too; highlight them when active.
+	const toolTitle = highlight ? highlightText(item.toolName || item.title, highlight, highlightActive) : (item.toolName || item.title);
 	return (
 		<div className="my-4 flex justify-start">
 			<div
@@ -246,7 +253,7 @@ function ToolCard({
 						) : (
 							<Terminal className="h-3.5 w-3.5 text-accent" />
 						)}
-						{item.toolName || item.title}
+						{toolTitle}
 					</span>
 					<span
 						className={cn(
@@ -263,7 +270,7 @@ function ToolCard({
 					{command && (
 						<div className="rounded-md bg-bg/60 px-3 py-2 font-mono text-xs leading-relaxed text-fg">
 							<span className="mr-1.5 select-none text-accent">$</span>
-							<span className="whitespace-pre-wrap break-words">{command}</span>
+							<span className="whitespace-pre-wrap break-words">{highlight ? highlightText(command, highlight, highlightActive) : command}</span>
 						</div>
 					)}
 					{approval && (
@@ -276,7 +283,7 @@ function ToolCard({
 							}
 						/>
 					)}
-					{item.toolResult && <CollapsibleCode text={item.toolResult} isError={item.isError} />}
+					{item.toolResult && <CollapsibleCode text={item.toolResult} isError={item.isError} highlight={highlight} highlightActive={highlightActive} />}
 					{running && !item.toolResult && (
 						<span className="font-mono text-xs text-accent">{t("conversation.running")}</span>
 					)}
@@ -337,7 +344,7 @@ function AssistantActions({ text, visible, timestamp }: { text: string; visible:
 	);
 }
 
-function UserBubble({ item }: { item: TimelineItem }) {
+function UserBubble({ item, highlight, highlightActive }: { item: TimelineItem; highlight?: string; highlightActive?: boolean }) {
 	const { t } = useTranslation();
 	const [copied, copy] = useCopy();
 	const [hover, setHover] = useState(false);
@@ -386,7 +393,7 @@ function UserBubble({ item }: { item: TimelineItem }) {
 				)}
 				{item.text && (
 					<div className="whitespace-pre-wrap break-words text-sm leading-relaxed text-fg">
-						{item.text}
+						{highlight ? highlightText(item.text, highlight, highlightActive) : item.text}
 					</div>
 				)}
 			</div>
@@ -441,7 +448,7 @@ function SystemNotice({ item }: { item: TimelineItem }) {
 	);
 }
 
-function AssistantMessage({ item }: { item: TimelineItem }) {
+function AssistantMessage({ item, highlight, highlightActive }: { item: TimelineItem; highlight?: string; highlightActive?: boolean }) {
 	const { t } = useTranslation();
 	const [hover, setHover] = useState(false);
 	return (
@@ -451,7 +458,7 @@ function AssistantMessage({ item }: { item: TimelineItem }) {
 			onMouseLeave={() => setHover(false)}
 		>
 			<div className="w-full max-w-full">
-				{item.thinking && <Thinking text={item.thinking} streaming={item.streaming} />}
+				{item.thinking && <Thinking text={item.thinking} streaming={item.streaming} highlight={highlight} highlightActive={highlightActive} />}
 				{item.images && item.images.length > 0 && (
 					<div className="mb-2 flex flex-wrap gap-2">
 						{item.images.map((src, i) => (
@@ -484,7 +491,7 @@ function AssistantMessage({ item }: { item: TimelineItem }) {
 					</div>
 				)}
 				{item.text ? (
-					<Markdown>{item.text}</Markdown>
+					<Markdown highlight={highlight} highlightActive={highlightActive}>{item.text}</Markdown>
 				) : item.streaming ? (
 					<span className="inline-flex items-center gap-2 text-sm text-muted">
 						<Loader2 className="h-3.5 w-3.5 animate-spin text-accent" />
@@ -512,12 +519,24 @@ const PROGRESSIVE_INITIAL = 50;
 export function Conversation({
 	items,
 	onResolveApproval,
+	searchQuery,
+	activeMatchId,
 }: {
 	items: TimelineItem[];
 	sidecarReady: boolean;
 	sidecarExitCode: number | null;
 	onResolveApproval?: (intentEventId: string, toolCallId: string, approved: boolean) => void;
+	/** Active chat-search query (empty/undefined when search is off). */
+	searchQuery?: string;
+	/** Item id of the currently-focused search match, for highlight + scroll. */
+	activeMatchId?: string | null;
 }) {
+	// When a search is active we must render every item (otherwise matches in
+	// the progressive-render tail wouldn't exist in the DOM to scroll to), so
+	// treat the list as fully rendered up-front. Searching a huge conversation
+	// is an explicit user action, so the perf trade-off is acceptable.
+	const searching = !!searchQuery && searchQuery.length > 0;
+
 	// Number of items to render, counted from the END of the array.
 	// Starts small and grows until it covers all items.
 	const [renderCount, setRenderCount] = useState(Math.min(PROGRESSIVE_INITIAL, items.length));
@@ -569,6 +588,11 @@ export function Conversation({
 	// all items are visible. Before each batch, snapshot the current
 	// scrollHeight so the layout effect below can keep the viewport steady.
 	useEffect(() => {
+		if (searching) {
+			// Searching forces full render; nothing to grow.
+			fullRenderRef.current = true;
+			return;
+		}
 		if (renderCount >= items.length) {
 			fullRenderRef.current = true;
 			return;
@@ -579,7 +603,7 @@ export function Conversation({
 			setRenderCount((prev) => Math.min(prev + PROGRESSIVE_BATCH_SIZE, items.length));
 		});
 		return () => cancelAnimationFrame(raf);
-	}, [renderCount, items.length]);
+	}, [renderCount, items.length, searching]);
 
 	// Keep the viewport visually stable across renders.
 	//
@@ -618,25 +642,57 @@ export function Conversation({
 		isFirstRenderRef.current = true;
 	}, [firstItemId]);
 
+	// Refs to each rendered item wrapper, keyed by item id. Used to scroll the
+	// active search match into view.
+	const itemRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+
+	// Scroll the active match into view (centered) whenever it changes. The
+	// element is guaranteed to exist because searching forces a full render.
+	useEffect(() => {
+		if (!activeMatchId) return;
+		const el = itemRefs.current.get(activeMatchId);
+		if (el) {
+			el.scrollIntoView({ block: "center" });
+		}
+	}, [activeMatchId]);
+
 	if (items.length === 0) {
 		return <div className="flex min-h-[calc(100vh-200px)] flex-col items-center justify-center gap-4 text-center text-muted" />;
 	}
 
 	// Render only the last `renderCount` items. Older items are progressively
 	// added as renderCount grows, so the user sees recent messages instantly.
-	const visibleItems = renderCount >= items.length ? items : items.slice(items.length - renderCount);
+	// While searching, render everything so all matches are present in the DOM.
+	const visibleItems = searching || renderCount >= items.length ? items : items.slice(items.length - renderCount);
 
 	return (
 		<div className="mx-auto max-w-3xl px-6 pb-32 pt-4">
 			{visibleItems.map((item) => {
-				if (item.role === "user") return <UserBubble key={item.id} item={item} />;
-				if (item.role === "system") return <SystemNotice key={item.id} item={item} />;
-				if (item.role === "tool") return <ToolCard key={item.id} item={item} onResolveApproval={onResolveApproval} />;
-				// Skip empty assistant bubbles (turns that produced only tool calls).
-				if (!item.streaming && !item.text && !item.thinking && !(item.images && item.images.length > 0)) {
+				const isActive = item.id === activeMatchId;
+				let content: React.ReactNode;
+				if (item.role === "user") {
+					content = <UserBubble item={item} highlight={searchQuery} highlightActive={isActive} />;
+				} else if (item.role === "system") {
+					content = <SystemNotice item={item} />;
+				} else if (item.role === "tool") {
+					content = <ToolCard item={item} onResolveApproval={onResolveApproval} highlight={searchQuery} highlightActive={isActive} />;
+				} else if (!item.streaming && !item.text && !item.thinking && !(item.images && item.images.length > 0)) {
+					// Skip empty assistant bubbles (turns that produced only tool calls).
 					return null;
+				} else {
+					content = <AssistantMessage item={item} highlight={searchQuery} highlightActive={isActive} />;
 				}
-				return <AssistantMessage key={item.id} item={item} />;
+				return (
+					<div
+						key={item.id}
+						ref={(el) => {
+							if (el) itemRefs.current.set(item.id, el);
+							else itemRefs.current.delete(item.id);
+						}}
+					>
+						{content}
+					</div>
+				);
 			})}
 			<div ref={bottomAnchorRef} />
 		</div>

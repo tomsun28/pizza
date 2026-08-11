@@ -13,7 +13,7 @@
  * Protocol: newline-delimited JSON (JSONL) over a single connection.
  *
  *   Client → Gateway:
- *     { "type": "tell",  "id": "req_1", "to": "<cwd|name>", "message": "...", "timeout": 60000 }
+ *     { "type": "tell",  "id": "req_1", "to": "<cwd|name>", "message": "...", "from": { "kind": "agent", "id": "web" }, "timeout": 60000 }
  *     { "type": "ping" }
  *
  *   Gateway → Client:
@@ -29,6 +29,28 @@ export interface GatewayMessageBase {
 }
 
 // ── Client → Gateway ─────────────────────────────────────────────────────
+
+/**
+ * Provenance of an inbound message — who/what it originates from.
+ *
+ * This is the unifying field for the agents inbound path: every turn-trigger
+ * (an agent tell, a cron tick, a file watcher, a webhook, a human user) is
+ * modelled as a message carrying a `MessageSource`, so the context-rendering
+ * and reply-routing code is source-agnostic and never needs a new type per
+ * originator kind.
+ *
+ * `kind` is an OPEN set ("user" | "agent" | "cron" | "watcher" | "webhook" | …):
+ * new external triggers add a value here without any protocol change. `id`
+ * identifies the specific originator — an agents workspace name/cwd, a cron
+ * job id, a watcher glob, etc. Together `kind:id` is the serialized address the
+ * receiving agent displays and replies to (e.g. `agent:web`).
+ */
+export interface MessageSource {
+	/** Open set: "user" | "agent" | "cron" | "watcher" | "webhook" | … */
+	kind: string;
+	/** Specific originator id (agent cwd/name, cron job id, watcher glob, …). */
+	id: string;
+}
 
 /**
  * `tell` — send a message to the agent for workspace `to` and wait for its
@@ -49,8 +71,25 @@ export interface GatewayTellRequest extends GatewayMessageBase {
 	to: string;
 	/** The message text to deliver to the target agent as its prompt. */
 	message: string;
-	/** Optional timeout in ms (default: 120000). */
+	/**
+	 * Optional timeout in ms (default 120000). Ignored when `async` is set
+	 * (async delivers return immediately).
+	 */
 	timeout?: number;
+	/**
+	 * Deliver without waiting for the target agent to finish its turn. The gateway
+	 * acks with a `tell_result` carrying `delivered: true` + a `messageId` as soon
+	 * as the prompt is queued, instead of blocking until the reply is ready. The
+	 * receiver is then expected to reply on its own with a (possibly async) tell
+	 * back to the sender (symmetric messaging).
+	 */
+	async?: boolean;
+	/**
+		 * Sender provenance. The gateway attaches this to the delivered prompt so
+		 * the receiving agent knows who messaged it (and can reply). Optional for
+		 * back-compat with older clients; absent means "unknown sender".
+		 */
+	from?: MessageSource;
 }
 
 /** `ping` — health check; the gateway replies with `{ type: "pong" }`. */
@@ -85,6 +124,15 @@ export type GatewayTellResult =
 			ok: true;
 			/** The target agent's final assistant text. */
 			reply: string;
+	  })
+	| (GatewayMessageBase & {
+			type: "tell_result";
+			id: string;
+			ok: true;
+			/** Async delivery ack: the prompt was queued; the receiver will reply on its own. */
+			delivered: true;
+			/** Correlates with a future `inReplyTo` on the reply message. */
+			messageId: string;
 	  })
 	| (GatewayMessageBase & {
 			type: "tell_result";

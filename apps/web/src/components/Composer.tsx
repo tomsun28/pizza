@@ -18,6 +18,7 @@ import { sendCommandAwait, setSafeMode, newSession, getSkills, invoke, searchFil
 import type { RpcSessionState, RpcContextUsage, RpcTokenUsage, ModelInfo } from "@/lib/types";
 import type { WorkspaceMeta, ScheduledTaskSummary } from "@/lib/types";
 import { resolveScheduleScope } from "@/lib/schedule-scope";
+import { COMPOSER_PREFILL_EVENT, type ComposerPrefillDetail } from "@/lib/composer-prefill";
 
 function isTauri(): boolean {
 	return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -854,6 +855,20 @@ ${insert}`;
 			unlistenNative?.();
 		};
 	}, [sidecarReady, addPathFiles]);
+
+	// Listen for prefill requests from other parts of the UI (e.g. the Git tab's
+	// read-only branch list offering to switch in chat). Scoped to this
+	// workspace so a prefill meant for another workspace is ignored.
+	useEffect(() => {
+		const onPrefill = (e: Event) => {
+			const detail = (e as CustomEvent<ComposerPrefillDetail>).detail;
+			if (!detail || detail.workspace !== (workspace ?? "")) return;
+			setInput((prev) => (prev.trim() ? prev.trimEnd() + " " : "") + detail.text);
+			requestAnimationFrame(() => textareaRef.current?.focus());
+		};
+		window.addEventListener(COMPOSER_PREFILL_EVENT, onPrefill as EventListener);
+		return () => window.removeEventListener(COMPOSER_PREFILL_EVENT, onPrefill as EventListener);
+	}, [workspace]);
 
 	// --- Drag-and-drop wiring ----------------------------------------------
 	// We listen on the outer composer wrapper (not the textarea) so users can

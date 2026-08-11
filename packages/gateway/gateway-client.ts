@@ -13,6 +13,7 @@ import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
 import {
 	type GatewayResponse,
 	type GatewayTellResult,
+	type MessageSource,
 	GATEWAY_DEFAULT_TELL_TIMEOUT,
 } from "./protocol.js";
 
@@ -82,15 +83,23 @@ export class GatewayClient {
 	}
 
 	/**
-	 * Send a `tell` message to another agent's workspace and wait for the reply.
-	 * Resolves with the target agent's final assistant text. Throws on error.
-	 */
-	async tell(to: string, message: string, timeout: number = GATEWAY_DEFAULT_TELL_TIMEOUT): Promise<string> {
+	 * Send a `tell` message to another agent workspace and wait for the reply.
+	 * `from` carries the sender provenance ({@link MessageSource}); the gateway
+	 * attaches it to the delivered prompt so the receiving agent knows who
+	 * messaged it and can reply. Omit only when the sender is genuinely unknown.
+	 * Resolves with the target agent final assistant text. Throws on error.
+		 */
+	async tell(
+		to: string,
+		message: string,
+		from: MessageSource,
+		timeout: number = GATEWAY_DEFAULT_TELL_TIMEOUT,
+	): Promise<string> {
 		if (!this.socket) {
 			throw new Error("GatewayClient is not connected — call connect() first");
 		}
 		const id = `t_${++this.requestId}`;
-		const payload = { type: "tell", id, to, message, timeout };
+		const payload = { type: "tell", id, to, message, from, timeout };
 		const result = await new Promise<GatewayTellResult>((resolve, reject) => {
 			this.pending.set(id, {
 				resolve: (r) => resolve(r as GatewayTellResult),
@@ -130,7 +139,58 @@ export class GatewayClient {
 		if (!result.ok) {
 			throw new Error(result.error);
 		}
-		return result.reply;
+		if ("reply" in result) return result.reply;
+		// An async ack should not reach the sync tell path; stay defensive.
+		throw new Error("unexpected async delivery ack on a synchronous tell");
+	}
+
+	/**
+	 * Send a tell without waiting for the target agent to finish its turn. The
+	 * gateway acks as soon as the prompt is queued and resolves with the assigned
+	 * messageId (the receiver is expected to reply on its own via a tell back to
+	 * `from`). Symmetric, non-blocking messaging.
+	 */
+	async tellAsync(to: string, message: string, from: MessageSource): Promise<string> {
+		if (!this.socket) {
+			throw new Error("GatewayClient is not connected — call connect() first");
+		}
+		const id = `t_${++this.requestId}`;
+		const payload = { type: "tell", id, to, message, from, async: true };
+		const result = await new Promise<GatewayTellResult>((resolve, reject) => {
+			this.pending.set(id, { resolve: (r) => resolve(r as GatewayTellResult), reject });
+			// Async acks should be near-instant; keep a safety timeout only.
+			const timer = setTimeout(() => {
+				if (this.pending.has(id)) {
+					this.pending.delete(id);
+					reject(new Error(`tellAsync to "${to}" timed out waiting for delivery ack`));
+				}
+			}, GATEWAY_DEFAULT_TELL_TIMEOUT);
+			const originalResolve = this.pending.get(id)!.resolve;
+			const originalReject = this.pending.get(id)!.reject;
+			this.pending.set(id, {
+				resolve: (r) => {
+					clearTimeout(timer);
+					originalResolve(r);
+				},
+				reject: (e) => {
+					clearTimeout(timer);
+					originalReject(e);
+				},
+			});
+			try {
+				this.socket!.write(`${serializeJsonLine(payload)}\n`);
+			} catch (error) {
+				this.pending.delete(id);
+				clearTimeout(timer);
+				reject(error instanceof Error ? error : new Error(String(error)));
+			}
+		});
+		if (!result.ok) {
+			throw new Error(result.error);
+		}
+		if ("messageId" in result) return result.messageId;
+		// A sync reply should not reach the async path; stay defensive.
+		return "(delivered synchronously)";
 	}
 
 	/** Close the connection. Safe to call multiple times. */

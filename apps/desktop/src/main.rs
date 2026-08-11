@@ -42,6 +42,8 @@ fn main() {
 			bridge::git_status,
 			bridge::git_diff,
 			bridge::git_branches,
+			bridge::git_log,
+			bridge::git_show,
 			bridge::fetch_skills_sh,
 		])
 		.setup(|app| {
