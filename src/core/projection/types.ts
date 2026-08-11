@@ -54,8 +54,8 @@ export interface ThreadDescriptor {
 	name?: string;
 	/** Creation timestamp */
 	created_at: number;
-	/** Lifecycle status. active = ongoing; closed = user-ended. */
-	status: "active" | "closed";
+	/** Lifecycle status. active = ongoing interaction; background = scheduler/automation thread (never auto-selected as the active thread on reload); closed = user-ended. */
+	status: "active" | "background" | "closed";
 }
 
 /** Session index storage (threads + their session branches) */

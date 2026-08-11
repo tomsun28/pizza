@@ -1,9 +1,12 @@
-import { useEffect, useLayoutEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useOutletContext } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { sendCommandAwait, subscribeEvents, subscribeSidecarExit } from "@/lib/transport";
 import type { RpcSessionState, TypedEvent } from "@/lib/types";
 import { Conversation, type TimelineItem } from "@/components/Conversation";
+import { ChatSearch } from "@/components/ChatSearch";
+import { Search, X } from "lucide-react";
+import { textMatches } from "@/lib/highlight";
 import { Composer, type ComposerImage, type LoadedFileAttachment } from "@/components/Composer";
 import { EmptyState, Spinner } from "@/components/ui";
 import { approveToolCall, rejectToolCall } from "@/lib/transport";
@@ -235,6 +238,21 @@ function buildTimelineFromMessages(
 		}
 	}
 	return history;
+}
+
+/**
+ * Does a timeline item contain the (case-insensitive) search query in any of
+ * its textual fields? Used to build the match list for the chat search bar.
+ */
+function itemMatchesQuery(item: TimelineItem, query: string): boolean {
+	return [
+		item.text,
+		item.thinking,
+		item.title,
+		item.toolName,
+		item.toolArgs,
+		item.toolResult,
+	].some((f) => textMatches(f, query));
 }
 
 export default function AgentView({
@@ -934,6 +952,63 @@ export default function AgentView({
 		[],
 	);
 
+	// --- Chat search (⌘/Ctrl+F) ---
+	const [searchOpen, setSearchOpen] = useState(false);
+	const [searchQuery, setSearchQuery] = useState("");
+	const [matchIndex, setMatchIndex] = useState(0);
+	// Incremented to imperatively (re)focus the search input — bumped on every
+	// ⌘/Ctrl+F and on open via the header button so the bar re-selects its text
+	// even when it was already open.
+	const [focusSignal, setFocusSignal] = useState(0);
+	const trimmedQuery = searchQuery.trim();
+
+	// Ordered list of item ids that contain the current query.
+	const matchIds = useMemo(() => {
+		if (!searchOpen || !trimmedQuery) return [];
+		return items.filter((it) => itemMatchesQuery(it, trimmedQuery)).map((it) => it.id);
+	}, [items, searchOpen, trimmedQuery]);
+
+	// Keep matchIndex in range when the match list shrinks (typing narrows
+	// results). Clamp to 0 rather than the last valid index so the highlight
+	// always lands on a real match.
+	useEffect(() => {
+		if (matchIndex > 0 && matchIndex >= matchIds.length) {
+			setMatchIndex(0);
+		}
+	}, [matchIndex, matchIds.length]);
+
+	const activeMatchId = matchIds.length > 0 ? matchIds[Math.min(matchIndex, matchIds.length - 1)] : null;
+	const goNextMatch = useCallback(() => {
+		setMatchIndex((i) => (matchIds.length ? (i + 1) % matchIds.length : 0));
+	}, [matchIds.length]);
+	const goPrevMatch = useCallback(() => {
+		setMatchIndex((i) => (matchIds.length ? (i - 1 + matchIds.length) % matchIds.length : 0));
+	}, [matchIds.length]);
+
+	// Global shortcut: ⌘/Ctrl+F opens (or re-focuses) the search bar and
+	// prevents the browser/webview native find bar. The bar is never toggled
+	// closed by the shortcut (matches editors/browsers); use Escape or the
+	// header button to dismiss. Escape is only handled here while open so we
+	// never swallow it from other controls.
+	useEffect(() => {
+		const onKey = (e: KeyboardEvent) => {
+			const mod = e.metaKey || e.ctrlKey;
+			if (mod && (e.key === "f" || e.key === "F")) {
+				e.preventDefault();
+				setSearchOpen(true);
+				setFocusSignal((s) => s + 1);
+			} else if (e.key === "Escape" && searchOpen) {
+				setSearchOpen(false);
+			}
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [searchOpen]);
+
+	// Only pass a query to the conversation while the bar is open; this also
+	// clears highlights the instant the bar is dismissed.
+	const activeQuery = searchOpen ? trimmedQuery : "";
+
 	const isRunning = state?.isStreaming ?? false;
 
 	// Session title: first user message (like Codex/ChatGPT), else workspace name.
@@ -948,13 +1023,36 @@ export default function AgentView({
 			<div
 				data-tauri-drag-region
 				className={cn(
-					"flex h-11 shrink-0 items-center border-b border-border bg-surface/80 pr-6 backdrop-blur transition-[padding] duration-150",
+					"relative flex h-11 shrink-0 items-center border-b border-border bg-surface/80 pr-[96px] backdrop-blur transition-[padding] duration-150",
 					sidebarCollapsed ? "pl-[120px]" : "pl-6",
 				)}
 			>
-				<span className="truncate text-sm font-medium text-fg" title={firstUserText || sessionTitle}>
+				<span className="min-w-0 flex-1 truncate text-sm font-medium text-fg" title={firstUserText || sessionTitle}>
 					{sessionTitle}
 				</span>
+				<button
+					type="button"
+					onClick={() => setSearchOpen((o) => { if (!o) setFocusSignal((s) => s + 1); return !o; })}
+					title={t("search.toggleHint")}
+					className={cn(
+					"absolute right-[84px] top-2 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-surface-2",
+					searchOpen ? "text-accent" : "text-muted/60 hover:text-muted",
+				)}
+				>
+					{searchOpen ? <X className="h-4 w-4" /> : <Search className="h-4 w-4" />}
+				</button>
+				{searchOpen && (
+					<ChatSearch
+						query={searchQuery}
+						onQueryChange={(q) => { setSearchQuery(q); setMatchIndex(0); }}
+						matchIndex={matchIds.length > 0 ? Math.min(matchIndex, matchIds.length - 1) : 0}
+						matchCount={matchIds.length}
+						onPrev={goPrevMatch}
+						onNext={goNextMatch}
+						onClose={() => setSearchOpen(false)}
+					focusSignal={focusSignal}
+					/>
+				)}
 			</div>
 			<div ref={scrollRef} className="flex-1 overflow-y-auto">
 				{items.length === 0 ? (
@@ -983,6 +1081,8 @@ export default function AgentView({
 					sidecarReady={sidecarReady}
 					sidecarExitCode={sidecarExitCode}
 					onResolveApproval={handleResolveApproval}
+					searchQuery={activeQuery}
+					activeMatchId={activeMatchId}
 				/>
 				)}
 			</div>

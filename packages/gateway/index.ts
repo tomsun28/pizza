@@ -33,6 +33,7 @@ export { ensureGateway } from "./gateway-lifecycle.js";
 export {
 	type GatewayRequest,
 	type GatewayTellRequest,
+	type MessageSource,
 	type GatewayPingRequest,
 	type GatewayStatusRequest,
 	type GatewayStatusResult,
@@ -53,6 +54,7 @@ export {
 	type GatewayRpcFrame,
 	type GatewayWorkspaceInfo,
 	type GatewayListResult,
+	GATEWAY_ASYNC_ACK_TIMEOUT,
 	GATEWAY_DEFAULT_TELL_TIMEOUT,
 	GATEWAY_PROTOCOL_VERSION,
 	isGatewayRequest,

@@ -31,6 +31,7 @@ import {
 	type GatewayChannelRequest,
 	type GatewayRpcFrame,
 	type GatewayWorkspaceInfo,
+	type MessageSource,
 	GATEWAY_DEFAULT_TELL_TIMEOUT,
 } from "./protocol.js";
 import type { RpcCommand, RpcResponse } from "../rpc/rpc-types.js";
@@ -62,7 +63,20 @@ export interface AgentConnection {
 	onEvent(listener: (event: unknown) => void): () => void;
 	onExit(listener: () => void): () => void;
 	sendCommand(command: RpcCommand): Promise<RpcResponse>;
-	promptAndWait(message: string, images?: unknown[], timeout?: number): Promise<unknown[]>;
+	/**
+	 * Hand the agent a prompt. Resolves once the agent has *accepted* it (the
+	 * turn then runs asynchronously); rejects when the agent refuses it, e.g.
+	 * because a turn is already in flight.
+	 */
+	prompt(message: string, images?: unknown[]): Promise<void>;
+	/**
+	 * Queue a message to be handled after the turn currently in flight. Used as
+	 * the fallback for async tells when the agent is mid-turn on work the
+	 * gateway does not own (e.g. a desktop user's prompt).
+	 */
+	followUp(message: string, images?: unknown[]): Promise<void>;
+	/** Resolve when the agent's current turn settles. Rejects on timeout. */
+	waitForIdle(timeout?: number): Promise<void>;
 	getLastAssistantText(): Promise<string | null>;
 	getStderr?(): string;
 }
@@ -101,14 +115,17 @@ interface PoolEntry {
 	client: AgentConnection;
 	cwd: string;
 	lastActivity: number;
-	/** Set when a prompt is in flight, so concurrent tells queue. */
+	/**
+	 * Set while a tell-driven turn is in flight, so concurrent tells queue.
+	 * Async tells hold it too (they release it in the background when the turn
+	 * settles) — the agent is single-threaded, so overlapping prompts are
+	 * rejected outright and would be lost.
+	 */
 	busy: boolean;
 	/** FIFO of pending tells waiting for the agent to become idle. */
 	queue: Array<{
 		resolve: () => void;
 		reject: (error: Error) => void;
-		message: string;
-		timeout: number;
 	}>;
 	/** Idle-eviction timer handle. */
 	idleTimer?: NodeJS.Timeout;
@@ -184,6 +201,12 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 	function ensureForwarder(cwd: string, entry: PoolEntry): void {
 		if (eventForwarders.has(cwd)) return;
 		const unsubscribe = entry.client.onEvent((event) => {
+			// Any event the agent emits (streaming tokens, tool calls, turn
+			// lifecycle) is proof of life: refresh lastActivity so the idle
+			// timer never evicts an agent mid-turn. This covers the channel
+			// `rpc` path (e.g. a desktop prompt) which never touches the
+			// `tell` path the timer was originally wired to.
+			entry.lastActivity = Date.now();
 			broadcastEvent(cwd, event as unknown as GatewayRpcFrame);
 		});
 		eventForwarders.set(cwd, unsubscribe);
@@ -270,12 +293,44 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 		return entry;
 	}
 
-	/** (Re)start the idle-eviction timer for an entry. */
+	/** True if at least one channel connection is currently subscribed to `cwd`. */
+	function hasLiveSubscribers(cwd: string): boolean {
+		return (subscribers.get(cwd)?.size ?? 0) > 0;
+	}
+
+	/**
+	 * Whether `entry` may be idle-evicted right now. We keep an agent resident
+	 * as long as ANY of these hold:
+	 *   - it is busy (a tell is in flight),
+	 *   - it has queued tells,
+	 *   - it emitted activity recently (within the idle window) — this is the
+	 *     signal that spans a full turn on the channel `rpc` path, where the
+	 *     prompt command is acked instantly and the turn plays out as events,
+	 *   - a channel connection is still attached to its workspace (e.g. a
+	 *     desktop window is open) — the pool exists precisely to reuse it.
+	 */
+	function isEntryInUse(entry: PoolEntry): boolean {
+		const now = Date.now();
+		return (
+			entry.busy ||
+			entry.queue.length > 0 ||
+			now - entry.lastActivity < agentIdleTimeout ||
+			hasLiveSubscribers(entry.cwd)
+		);
+	}
+
+	/**
+	 * (Re)start the idle-eviction timer for an entry. No-op once the entry has
+	 * left the pool (torn down): a stale timer would otherwise fire later and
+	 * evict whatever agent has since taken its place.
+	 */
 	function scheduleIdleEviction(entry: PoolEntry): void {
 		if (agentIdleTimeout <= 0) return;
+		if (pool.get(entry.cwd) !== entry) return;
 		if (entry.idleTimer) clearTimeout(entry.idleTimer);
 		entry.idleTimer = setTimeout(() => {
-			if (entry.busy || entry.queue.length > 0) {
+			if (pool.get(entry.cwd) !== entry) return;
+			if (isEntryInUse(entry)) {
 				// Still active — reschedule.
 				scheduleIdleEviction(entry);
 				return;
@@ -309,6 +364,36 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 		await entry.client.stop().catch(() => {});
 		emitter.emit("agentClosed", cwd as never);
 	}
+
+/**
+ * Render an inbound message as the block the receiving agent sees in its
+ * context. Uniform across all source kinds — only `from` varies — so the agent
+ * learns one format and can read its reply address straight off the block:
+ *
+ *   <message from="agent:web" id="m_...">
+ *   the message content
+ *   </message>
+ *
+ * `from` serializes a {@link MessageSource} as `kind:id`. A generated `id`
+ * tags the message for future `inReplyTo` threading. When `source` is absent
+ * the block is omitted and the content is returned bare (the legacy path).
+ */
+function renderInboundMessage(source: MessageSource | undefined, content: string, id: string): string {
+	if (!source) return content;
+	// Neutralize any `<message …>`/`</message>` markup the sender embedded:
+	// without this a message body can close the block early and forge whatever
+	// follows it (a cross-agent prompt injection). The attribute values are
+	// quoted, so a `"` in a cwd would break the block the same way.
+	const from = `${source.kind}:${source.id}`.replace(/"/g, "&quot;");
+	const body = content.replace(/<(\/?)message(\s[^>]*)?>/gi, (_m, slash: string, attrs = "") => `&lt;${slash}message${attrs}&gt;`);
+	return `<message from="${from}" id="${id}">\n${body}\n</message>`;
+}
+
+/** Unique-per-process message id. Date.now() alone collides within a tick. */
+let messageCounter = 0;
+function nextMessageId(): string {
+	return `m_${Date.now().toString(36)}_${(++messageCounter).toString(36)}`;
+}
 
 	// ── tell routing ──────────────────────────────────────────────────────
 
@@ -352,12 +437,7 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 		if (entry.busy) {
 			try {
 				await new Promise<void>((resolve, reject) => {
-					entry.queue.push({
-						message: request.message,
-						timeout,
-						resolve: () => resolve(),
-						reject,
-					});
+					entry.queue.push({ resolve: () => resolve(), reject });
 				});
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
@@ -376,11 +456,70 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 			}
 		}
 
-		// Run the prompt.
+		// Wrap the message with sender provenance so the receiving agent knows who
+		// messaged it (and where to reply). Falls back to the bare message for
+		// clients that did not send `from`.
+		const messageId = nextMessageId();
+		const delivered = renderInboundMessage(request.from, request.message, messageId);
+
+		// From here on we own the agent's turn slot in both paths. Async tells
+		// release it in the background when the turn settles; sync tells release
+		// it in `finally`.
 		entry.busy = true;
 		entry.lastActivity = Date.now();
+
+		// Subscribe to the turn BEFORE prompting so a fast turn can't complete
+		// between the two calls. Attach a no-op catch immediately: the rejection
+		// is handled where the promise is consumed, and an unobserved rejection
+		// in the async path would crash the daemon.
+		const settled = entry.client.waitForIdle(timeout);
+		settled.catch(() => {});
+
+		// Delivery is separate from the turn. A refused prompt means the agent is
+		// alive but mid-turn on work the gateway does not own (a desktop user's
+		// prompt on the channel `rpc` path), so never tear it down here:
+		//   - async: hand the message to the agent's own follow-up queue and ack;
+		//     it is picked up when the running turn finishes.
+		//   - sync: fail with a clear error — a follow-up would settle behind the
+		//     other turn, so we could not tell whose reply we were reading.
 		try {
-			await entry.client.promptAndWait(request.message, undefined, timeout);
+			await entry.client.prompt(delivered);
+		} catch (error) {
+			const m = error instanceof Error ? error.message : String(error);
+			releaseTurnSlot(entry);
+			if (request.async) {
+				try {
+					await entry.client.followUp(delivered);
+					emitter.emit("tell", cwd, true, Date.now() - startedAt);
+					return { type: "tell_result", id: request.id, ok: true, delivered: true, messageId };
+				} catch (followUpError) {
+					const fm = followUpError instanceof Error ? followUpError.message : String(followUpError);
+					emitter.emit("tell", cwd, false, Date.now() - startedAt);
+					return { type: "tell_result", id: request.id, ok: false, error: `async tell to ${cwd} failed: ${fm}` };
+				}
+			}
+			emitter.emit("tell", cwd, false, Date.now() - startedAt);
+			return {
+				type: "tell_result",
+				id: request.id,
+				ok: false,
+				error: `tell to ${cwd} was not accepted: ${m}. The agent is busy with another turn — retry, or send it asynchronously.`,
+			};
+		}
+
+		// Async path: ack the delivery now and let the turn play out in the
+		// background. The receiver replies on its own (symmetric messaging).
+		if (request.async) {
+			void settled.then(
+				() => emitter.emit("tell", cwd, true, Date.now() - startedAt),
+				() => emitter.emit("tell", cwd, false, Date.now() - startedAt),
+			).finally(() => releaseTurnSlot(entry));
+			return { type: "tell_result", id: request.id, ok: true, delivered: true, messageId };
+		}
+
+		// Sync path: wait for the turn and return the agent's final assistant text.
+		try {
+			await settled;
 			const reply = await entry.client.getLastAssistantText();
 			emitter.emit("tell", cwd, true, Date.now() - startedAt);
 			return { type: "tell_result", id: request.id, ok: true, reply: reply ?? "(no response)" };
@@ -388,8 +527,8 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 			const message = error instanceof Error ? error.message : String(error);
 			const stderr = entry.client.getStderr?.() ?? "";
 			emitter.emit("tell", cwd, false, Date.now() - startedAt);
-			// A failed prompt may leave the agent in a bad state — tear it down
-			// so the next tell gets a fresh agent.
+			// The turn never settled (timeout/crash) — the agent may be wedged, so
+			// tear it down and let the next tell spawn a fresh one.
 			await teardownAgent(cwd, "tell failed").catch(() => {});
 			return {
 				type: "tell_result",
@@ -398,15 +537,20 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 				error: `tell to ${cwd} failed: ${message}${stderr ? `\n--- stderr ---\n${stderr}` : ""}`,
 			};
 		} finally {
-			entry.busy = false;
-			entry.lastActivity = Date.now();
-			scheduleIdleEviction(entry);
-			// Drain one queued tell (the agent can now process it).
-			const next = entry.queue.shift();
-			if (next) {
-				next.resolve();
-			}
+			releaseTurnSlot(entry);
 		}
+	}
+
+	/**
+	 * Release the turn slot held by a tell: mark the agent idle, restart the
+	 * idle timer and hand the slot to the next queued tell (if any). Safe to
+	 * call on an entry that was already torn down.
+	 */
+	function releaseTurnSlot(entry: PoolEntry): void {
+		entry.busy = false;
+		entry.lastActivity = Date.now();
+		scheduleIdleEviction(entry);
+		entry.queue.shift()?.resolve();
 	}
 
 	// ── channel request handling ─────────────────────────────────────────
@@ -465,6 +609,13 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 					return;
 				}
 				const entry = await getOrCreateAgent(cwd);
+				// Refresh activity on dispatch: sendCommand acks instantly for
+				// prompt/steer (the turn then streams as events, which also refresh
+				// lastActivity via the forwarder), so this closes the brief gap
+				// before the first streamed event. We deliberately do NOT toggle
+				// `busy` here — the authoritative liveness signal is the event
+				// stream, and toggling busy around an instant ack would be wrong.
+				entry.lastActivity = Date.now();
 				const response = await entry.client.sendCommand(request.frame as RpcCommand);
 				// Route the response back to THIS channel only (events fan out separately).
 				write({ type: "rpc", workspace: cwd, frame: response as GatewayRpcFrame });

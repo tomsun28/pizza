@@ -87,7 +87,7 @@ export type ParsedBuiltinToolInput =
 		{
 			command: "cron";
 			input: {
-				action: "list" | "create" | "pause" | "resume" | "delete" | "run";
+				action: "list" | "show" | "create" | "update" | "pause" | "resume" | "delete" | "run";
 				taskId?: string;
 				schedule?: string;
 				cronExpr?: string;
@@ -95,6 +95,7 @@ export type ParsedBuiltinToolInput =
 				name?: string;
 				once?: boolean;
 				newSession?: boolean;
+				verbose?: boolean;
 			};
 	  }
 	  |
@@ -105,6 +106,7 @@ export type ParsedBuiltinToolInput =
 				to?: string;
 				message?: string;
 				timeout?: number;
+				asyncSend?: boolean;
 			};
 	  };
 
@@ -408,11 +410,13 @@ function parseTellInput(args: string[], heredoc?: string): {
 	to?: string;
 	message?: string;
 	timeout?: number;
+	asyncSend?: boolean;
 } {
 	let action: TellAction | undefined;
 	let to: string | undefined;
 	let message: string | undefined;
 	let timeout: number | undefined;
+	let asyncSend: boolean | undefined;
 	const positional: string[] = [];
 
 	for (let i = 0; i < args.length; i++) {
@@ -423,6 +427,8 @@ function parseTellInput(args: string[], heredoc?: string): {
 			message = args[++i];
 		} else if (arg === "--timeout") {
 			timeout = parseOptionalInt(args[++i]);
+		} else if (arg === "--async") {
+			asyncSend = true;
 		} else {
 			positional.push(arg);
 		}
@@ -457,7 +463,7 @@ function parseTellInput(args: string[], heredoc?: string): {
 		}
 	}
 
-	return { action, to, message, timeout };
+	return { action, to, message, timeout, asyncSend };
 }
 
 function parseSkillInput(args: string[]): {
@@ -518,13 +524,15 @@ function parseSkillInput(args: string[]): {
 	return { action, name, query, file };
 }
 
-const CRON_ACTIONS = ["list", "create", "pause", "resume", "delete", "run"] as const;
+const CRON_ACTIONS = ["list", "show", "create", "update", "pause", "resume", "delete", "run"] as const;
 type CronAction = (typeof CRON_ACTIONS)[number];
 
 /**
  * Parse the `cron` command args:
- *   cron list
+ *   cron list [--verbose]
+ *   cron show <taskId>
  *   cron create --schedule "30m" --prompt "..." [--name "..."] [--cron-expr "..."] [--once] [--new-session]
+ *   cron update --task <id> [--schedule "30m" | --cron-expr "..."] [--prompt "..."] [--name "..."]
  *   cron pause <taskId>
  *   cron resume <taskId>
  *   cron delete <taskId>
@@ -544,6 +552,7 @@ function parseCronInput(args: string[], heredoc?: string): {
 	name?: string;
 	once?: boolean;
 	newSession?: boolean;
+	verbose?: boolean;
 } {
 	let action: CronAction | undefined;
 	let taskId: string | undefined;
@@ -553,6 +562,7 @@ function parseCronInput(args: string[], heredoc?: string): {
 	let name: string | undefined;
 	let once: boolean | undefined;
 	let newSession: boolean | undefined;
+	let verbose: boolean | undefined;
 	const positionalPrompt: string[] = [];
 
 	for (let i = 0; i < args.length; i++) {
@@ -571,6 +581,8 @@ function parseCronInput(args: string[], heredoc?: string): {
 			once = true;
 		} else if (arg === "--new-session") {
 			newSession = true;
+		} else if (arg === "--verbose" || arg === "-v") {
+			verbose = true;
 		} else {
 			positionalPrompt.push(arg);
 		}
@@ -592,6 +604,11 @@ function parseCronInput(args: string[], heredoc?: string): {
 		if (taskId === undefined && positionalPrompt.length > 1) {
 			taskId = positionalPrompt[1];
 		}
+		// update may change the prompt via --prompt or a heredoc; trailing positionals
+		// are not interpreted as a prompt body (unlike create).
+		if (action === "update" && prompt === undefined && heredoc !== undefined) {
+			prompt = heredoc;
+		}
 	} else if (action === "create") {
 		if (prompt === undefined) {
 			if (positionalPrompt.length > 1) {
@@ -608,7 +625,7 @@ function parseCronInput(args: string[], heredoc?: string): {
 		throw new Error(`cron: action required. Valid actions: ${CRON_ACTIONS.join(", ")}`);
 	}
 
-	return { action, taskId, schedule, cronExpr, prompt, name, once, newSession };
+	return { action, taskId, schedule, cronExpr, prompt, name, once, newSession, verbose };
 }
 
 function parseEditInput(
@@ -934,6 +951,7 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"",
 				"Actions:",
 				"  send <to> <message>  Send a message to workspace <to>; blocks until it replies.",
+				"                       Add --async to deliver without blocking (the target replies on its own later).",
 				"  list                 Show known workspaces you can tell to (name, cwd, workspace_id, last_accessed).",
 				"",
 				"Parameters:",
@@ -942,6 +960,7 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"  --to, -t           Destination workspace (alternative to positional).",
 				"  --message, -m      Message text (alternative to positional).",
 				"  --timeout          Timeout in milliseconds (default 120000).",
+				"  --async            Deliver without blocking for the reply (symmetric messaging).",
 				"  <<EOF              Heredoc form for the message (multi-line).",
 				"  -h, --help         Show this help.",
 				"",
@@ -950,6 +969,7 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"  _tell send --to web --message \"what's in package.json?\"",
 				"  _tell send web \"fix the auth bug and summarize\"",
 				"  _tell send --to ../other-project --message \"check the tests\" --timeout 60000",
+				"  _tell send --async --to web --message \"build it and tell me when done\"  # non-blocking",
 				"  _tell send web <<EOF",
 				"  What files changed in the last commit?",
 				"  EOF",
@@ -960,12 +980,16 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"",
 				"Description:",
 				"  Schedule recurring prompts that fire on a timer. Only available when a scheduler",
-				"  is running (RPC / desktop / web mode). list shows tasks; create schedules one;",
+				"  is running (RPC / desktop / web mode). list shows tasks (and, with --verbose, each prompt); " +
+				"  show prints one task in full; create schedules one; update edits one in place; " +
 				"  pause/resume toggle; delete removes; run fires it immediately.",
 				"",
 				"Actions:",
-				"  list                 Show all scheduled tasks.",
+				"  list                 Show all scheduled tasks. Add --verbose to inline each prompt.",
+				"  show <taskId>        Show one task in full (prompt body + complete schedule).",
 				"  create               Schedule a recurring prompt (needs --schedule and --prompt).",
+				"  update --task <id>   Edit a task in place. Pass --schedule/--cron-expr and/or",
+				"                       --prompt/--name; fields you omit keep their current value.",
 				"  pause <taskId>       Disable a task.",
 				"  resume <taskId>      Re-enable a task.",
 				"  delete <taskId>      Remove a task.",
@@ -976,7 +1000,8 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"  --cron-expr        Explicit 5-field cron expression (alternative to --schedule).",
 				"  --prompt, -p       Task instruction dispatched on each fire (required for create).",
 				"  --name, -n         Optional task name.",
-				"  --task, -t         Task id (for pause/resume/delete/run).",
+				"  --task, -t         Task id (for show/update/pause/resume/delete/run).",
+				"  --verbose, -v      list only: inline each task prompt body.",
 				"  --once             Run exactly once, then auto-disable.",
 				"  --new-session      Dispatch each fire into a fresh session (default: pinned).",
 				"  <<EOF              Heredoc form for --prompt (multi-line).",
@@ -984,8 +1009,12 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"",
 				"Examples:",
 				"  _cron list",
+				"  _cron list --verbose",
+				"  _cron show st_abc123",
 				"  _cron create --schedule 30m --name \"self-review\" --prompt \"summarize recent changes\"",
 				"  _cron create --cron-expr \"0 9 * * 1-5\" --prompt \"standup\" --new-session",
+				"  _cron update --task st_abc123 --schedule \"10 10 * * *\"",
+				"  _cron update --task st_abc123 --prompt \"new instructions here\"",
 				"  _cron pause st_abc123",
 				"  _cron run st_abc123",
 				"",

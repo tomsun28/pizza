@@ -225,7 +225,13 @@ export class RpcClient {
 	 * Use waitForIdle() to wait for completion.
 	 */
 	async prompt(message: string, images?: ImageContent[]): Promise<void> {
-		await this.send({ type: "prompt", message, images });
+		const response = await this.send({ type: "prompt", message, images });
+		if (!response.success) {
+			// The agent refused the prompt (most commonly: a turn is already
+			// running). Surface it — a silently dropped prompt leaves the caller
+			// waiting for a reply that will never come.
+			throw new Error((response as Extract<RpcResponse, { success: false }>).error);
+		}
 	}
 
 	/**

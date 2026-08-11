@@ -577,6 +577,45 @@ export async function gitBranches(cwd: string): Promise<GitBranchEntry[]> {
 	return core.invoke<GitBranchEntry[]>("git_branches", { cwd });
 }
 
+
+/**
+ * One entry from `git log` for the Git tab's read-only history view.
+ */
+export interface GitLogEntry {
+	/** Full commit hash. */
+	hash: string;
+	/** Abbreviated hash (e.g. `4af2abd`). */
+	short: string;
+	/** Author name. */
+	author: string;
+	/** Author date in strict ISO 8601. */
+	date: string;
+	/** Commit subject (first line of the message). */
+	subject: string;
+	/** Refs at this commit, comma-joined (e.g. `HEAD -> main, tag: v1.0`). */
+	refs: string;
+}
+
+/**
+ * Recent commits in the repo at `cwd`. Read-only. Empty if not a git repo
+ * (no error) so the UI can hide the section.
+ */
+export async function gitLog(cwd: string, limit?: number): Promise<GitLogEntry[]> {
+	if (!isTauri()) return [];
+	const core = await import("@tauri-apps/api/core");
+	return core.invoke<GitLogEntry[]>("git_log", { cwd, limit });
+}
+
+/**
+ * Unified diff a commit introduced (read-only). For inspecting a commit from
+ * the Git tab's history view.
+ */
+export async function gitShow(cwd: string, hash: string): Promise<string> {
+	if (!isTauri()) return "";
+	const core = await import("@tauri-apps/api/core");
+	return core.invoke<string>("git_show", { cwd, hash });
+}
+
 // --- Provider management (Tauri only) ---
 
 export interface ProviderInfo {

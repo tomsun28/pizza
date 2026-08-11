@@ -325,3 +325,21 @@
 .diff-add { background: var(--diff-add-bg); }
 .diff-del { background: var(--diff-del-bg); }
 .diff-hunk { background: var(--diff-hunk-bg); color: var(--accent); }
+/* Chat search (⌘/ctrl+F) match highlighting. Non-active matches use a soft
+   yellow tint that works in both themes; the active (focused) match uses the
+   accent color so it stands out while navigating prev/next. */
+.chat-search-mark {
+	background: color-mix(in srgb, var(--warning) 38%, transparent);
+	color: inherit;
+	border-radius: 2px;
+	padding: 0 1px;
+}
+.dark .chat-search-mark {
+	background: color-mix(in srgb, var(--warning) 45%, transparent);
+}
+.chat-search-mark-active {
+	background: var(--accent);
+	color: var(--accent-fg);
+	border-radius: 2px;
+	padding: 0 1px;
+}
