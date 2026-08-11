@@ -12,7 +12,6 @@
 		"isolatedModules": true,
 		"resolveJsonModule": true,
 		"allowImportingTsExtensions": true,
-		"baseUrl": ".",
 		"paths": {
 			"@/*": ["./src/*"],
 			"@tomsun28/pizza-protocol": ["../../packages/protocol/index.ts"]
