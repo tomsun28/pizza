@@ -116,9 +116,7 @@ impl GatewayChannel {
 	pub fn connect(socket_path: &PathBuf) -> Result<Self, String> {
 		let pipe_name = socket_path.to_string_lossy().to_string();
 		let file = windows_connect_pipe(&pipe_name)?;
-		let write_half = file
-			.try_clone()
-			.map_err(|e| format!("clone pipe: {e}"))?;
+		let write_half = file.try_clone().map_err(|e| format!("clone pipe: {e}"))?;
 		let write: Box<dyn Write + Send> = Box::new(write_half);
 		Self::from_streams(file, write)
 	}
@@ -476,9 +474,7 @@ fn ping_gateway(socket_path: &PathBuf) -> Result<bool, String> {
 /// Open a fresh read+write stream to the gateway for a ping. One connection
 /// per probe; the long-lived channel uses `GatewayChannel::connect`.
 #[cfg(unix)]
-fn open_gateway_stream(
-	socket_path: &PathBuf,
-) -> Result<Box<dyn ReadWrite + Send>, String> {
+fn open_gateway_stream(socket_path: &PathBuf) -> Result<Box<dyn ReadWrite + Send>, String> {
 	let stream = UnixStream::connect(socket_path).map_err(|e| e.to_string())?;
 	stream
 		.set_read_timeout(Some(std::time::Duration::from_secs(2)))
@@ -487,9 +483,7 @@ fn open_gateway_stream(
 }
 
 #[cfg(windows)]
-fn open_gateway_stream(
-	socket_path: &PathBuf,
-) -> Result<Box<dyn ReadWrite + Send>, String> {
+fn open_gateway_stream(socket_path: &PathBuf) -> Result<Box<dyn ReadWrite + Send>, String> {
 	let pipe_name = socket_path.to_string_lossy().to_string();
 	let file = windows_connect_pipe(&pipe_name)?;
 	Ok(Box::new(file))
@@ -515,10 +509,9 @@ fn ping_with_stream(mut stream: Box<dyn ReadWrite + Send>) -> Result<bool, Strin
 #[cfg(windows)]
 fn windows_connect_pipe(pipe_name: &str) -> Result<std::fs::File, String> {
 	use std::os::windows::io::{FromRawHandle, RawHandle};
-	use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+	use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE};
 	use windows_sys::Win32::Storage::FileSystem::{
-		CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, GENERIC_READ,
-		GENERIC_WRITE, OPEN_EXISTING,
+		CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
 	};
 	let mut wide: Vec<u16> = pipe_name.encode_utf16().collect();
 	wide.push(0);

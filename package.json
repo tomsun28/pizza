@@ -51,8 +51,7 @@
 		"test:headless": "PIZZA_OFFLINE=1 vitest --run --no-file-parallelism --poolOptions.forks.singleFork",
 		"test:online": "vitest --run",
 		"install:local": "npm run build && npm link",
-		"prepublishOnly": "npm run clean && npm run build && npm run vendor-tools",
-		"publish": "npm publish --access public"
+		"prepublishOnly": "npm run clean && npm run build && npm run vendor-tools"
 	},
 	"dependencies": {
 		"@mariozechner/jiti": "^2.6.2",
