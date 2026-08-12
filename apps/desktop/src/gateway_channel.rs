@@ -14,7 +14,8 @@
 //! rewrite + GUI smoke test is a separate step (see ADR in the PR thread).
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
+#[cfg(unix)]
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -22,10 +23,27 @@ use std::thread;
 
 use serde_json::{json, Value};
 
-/// Default gateway socket path: ~/.pizza/gateway.sock
+/// Combined `Read + Write` so a single trait object can carry both halves
+/// (Rust forbids `dyn Read + Write` — only one non-auto trait per object).
+trait ReadWrite: Read + Write {}
+impl<T: Read + Write> ReadWrite for T {}
+
+/// Default gateway socket path. On Unix: `~/.pizza/gateway.sock`. On Windows:
+/// the named pipe `\\.\pipe\gateway` (mirrors the TS `gatewaySocketPath`).
 pub fn gateway_socket_path() -> Option<PathBuf> {
-	let home = std::env::var("HOME").ok()?;
-	Some(PathBuf::from(home).join(".pizza").join("gateway.sock"))
+	#[cfg(unix)]
+	{
+		let home = std::env::var("HOME").ok()?;
+		Some(PathBuf::from(home).join(".pizza").join("gateway.sock"))
+	}
+	#[cfg(windows)]
+	{
+		Some(PathBuf::from(r"\\.\pipe\gateway"))
+	}
+	#[cfg(not(any(unix, windows)))]
+	{
+		None
+	}
 }
 
 /// One message delivered to the caller: either an id-routed RPC response, or
@@ -62,16 +80,16 @@ type PendingMap = Arc<Mutex<HashMap<String, Arc<Mutex<Option<Value>>>>>>;
 /// use one per desktop process (the gateway multiplexes many workspaces).
 #[derive(Clone)]
 pub struct GatewayChannel {
-	write: Arc<Mutex<UnixStream>>,
+	write: Arc<Mutex<Box<dyn Write + Send>>>,
 	pending: PendingMap,
 	/// Inbox for non-response messages (events, attach_ok, list_result, error).
 	inbox: Arc<Mutex<Vec<ChannelMessage>>>,
 }
 
 impl GatewayChannel {
-	/// Connect to the gateway socket. Spawns a background reader thread that
-	/// parses JSONL and dispatches responses (by id) to pending waiters and
-	/// everything else into the shared inbox.
+	/// Connect to the gateway socket/pipe. Spawns a background reader thread
+	/// that parses JSONL and dispatches responses (by id) to pending waiters
+	/// and everything else into the shared inbox.
 	#[cfg(unix)]
 	pub fn connect(socket_path: &PathBuf) -> Result<Self, String> {
 		let stream = UnixStream::connect(socket_path).map_err(|e| {
@@ -87,14 +105,39 @@ impl GatewayChannel {
 		let write_stream = stream
 			.try_clone()
 			.map_err(|e| format!("clone stream: {e}"))?;
+		let write: Box<dyn Write + Send> = Box::new(write_stream);
+		Self::from_streams(stream, write)
+	}
 
+	/// Connect to the gateway named pipe (Windows). Spawns the same background
+	/// reader thread as the Unix path — a `File` over a duplicated pipe handle
+	/// implements `Read`/`Write`, so the JSONL dispatch logic is shared.
+	#[cfg(windows)]
+	pub fn connect(socket_path: &PathBuf) -> Result<Self, String> {
+		let pipe_name = socket_path.to_string_lossy().to_string();
+		let file = windows_connect_pipe(&pipe_name)?;
+		let write_half = file
+			.try_clone()
+			.map_err(|e| format!("clone pipe: {e}"))?;
+		let write: Box<dyn Write + Send> = Box::new(write_half);
+		Self::from_streams(file, write)
+	}
+
+	/// Build a channel from its read + write halves and spawn the shared
+	/// reader thread. Platform-specific `connect` impls produce the halves;
+	/// everything from here on (JSONL parsing, id-routed dispatch, EOF
+	/// handling) is identical across Unix sockets and Windows named pipes.
+	fn from_streams<R: Read + Send + 'static>(
+		read: R,
+		write: Box<dyn Write + Send>,
+	) -> Result<Self, String> {
 		let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
 		let inbox: Arc<Mutex<Vec<ChannelMessage>>> = Arc::new(Mutex::new(Vec::new()));
 
 		let reader_pending = Arc::clone(&pending);
 		let reader_inbox = Arc::clone(&inbox);
 		thread::spawn(move || {
-			let reader = BufReader::new(stream);
+			let reader = BufReader::new(read);
 			for line in reader.lines() {
 				match line {
 					Ok(line) => {
@@ -128,7 +171,7 @@ impl GatewayChannel {
 		});
 
 		Ok(Self {
-			write: Arc::new(Mutex::new(write_stream)),
+			write: Arc::new(Mutex::new(write)),
 			pending,
 			inbox,
 		})
@@ -321,11 +364,11 @@ impl GatewayChannel {
 }
 
 /// Spawn (or reuse) the gateway daemon: `pizza --mode gateway`. Detached, like
-/// the TS ensureGateway. Returns once the socket responds to a ping.
+/// the TS ensureGateway. Returns once the socket/pipe responds to a ping.
 pub fn ensure_gateway(socket_path: &PathBuf, pizza_cmd: (&str, &[String])) -> Result<(), String> {
 	use std::process::{Command, Stdio};
 	// Fast path: ping an existing gateway.
-	if socket_path.exists() && ping_gateway(socket_path).unwrap_or(false) {
+	if gateway_ready(socket_path) {
 		return Ok(());
 	}
 	let env_pizza = std::env::var("PIZZA_BIN").ok();
@@ -333,8 +376,15 @@ pub fn ensure_gateway(socket_path: &PathBuf, pizza_cmd: (&str, &[String])) -> Re
 	// sub-agents spawned for that cwd. The gateway itself does NOT run as
 	// the main agent (no --main flag); it just needs to know the path.
 	let main_dir = std::env::var("HOME")
+		.or_else(|_| std::env::var("USERPROFILE"))
 		.ok()
-		.map(|h| format!("{}/.pizza/main", h));
+		.map(|h| {
+			PathBuf::from(h)
+				.join(".pizza")
+				.join("main")
+				.to_string_lossy()
+				.to_string()
+		});
 	let (program, base_args): (String, Vec<String>) = if let Some(bin) = env_pizza {
 		let parts: Vec<&str> = bin.split_whitespace().collect();
 		let p = parts[0].to_string();
@@ -364,16 +414,23 @@ pub fn ensure_gateway(socket_path: &PathBuf, pizza_cmd: (&str, &[String])) -> Re
 	cmd.stdin(Stdio::null());
 	cmd.stdout(Stdio::null());
 	cmd.stderr(Stdio::null());
+	// On Windows, detach the child from this console so it survives exit.
+	#[cfg(windows)]
+	{
+		use std::os::windows::process::CommandExt;
+		// DETACHED_PROCESS = 0x00000008; CREATE_NEW_PROCESS_GROUP = 0x00000200.
+		cmd.creation_flags(0x00000008 | 0x00000200);
+	}
 	let child = cmd
 		.spawn()
 		.map_err(|e| format!("Failed to spawn gateway: {e}"))?;
 	// Detach so it outlives the desktop process.
 	let _ = child.id();
-	// Wait for the socket to respond.
+	// Wait for the socket/pipe to respond.
 	let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
 	while std::time::Instant::now() < deadline {
 		std::thread::sleep(std::time::Duration::from_millis(100));
-		if socket_path.exists() && ping_gateway(socket_path).unwrap_or(false) {
+		if gateway_ready(socket_path) {
 			return Ok(());
 		}
 	}
@@ -383,17 +440,69 @@ pub fn ensure_gateway(socket_path: &PathBuf, pizza_cmd: (&str, &[String])) -> Re
 	))
 }
 
-/// Ping the gateway; true if it answers pong.
+/// True if the gateway is listening and answers a ping. On Unix the socket
+/// file must exist first (cheap stat); on Windows a named pipe has no
+/// filesystem entry, so we probe by connecting directly.
+#[cfg(unix)]
+fn gateway_ready(socket_path: &PathBuf) -> bool {
+	socket_path.exists() && ping_gateway(socket_path).unwrap_or(false)
+}
+
+#[cfg(windows)]
+fn gateway_ready(socket_path: &PathBuf) -> bool {
+	ping_gateway(socket_path).unwrap_or(false)
+}
+
+/// Ping the gateway; true if it answers pong. Runs the probe on a background
+/// thread with a 2s deadline so a hung/nonexistent gateway can't stall the
+/// caller (named-pipe reads have no portable per-op timeout on Windows, and
+/// this keeps the Unix and Windows paths uniform).
 fn ping_gateway(socket_path: &PathBuf) -> Result<bool, String> {
-	let mut stream = UnixStream::connect(socket_path).map_err(|e| e.to_string())?;
+	let path = socket_path.clone();
+	let (tx, rx) = std::sync::mpsc::channel();
+	thread::spawn(move || {
+		let result = open_gateway_stream(&path).and_then(ping_with_stream);
+		let _ = tx.send(result);
+	});
+	match rx.recv_timeout(std::time::Duration::from_secs(2)) {
+		Ok(Ok(pong)) => Ok(pong),
+		// A connect/read error means "not ready yet" → not a hard failure.
+		Ok(Err(_)) => Ok(false),
+		// Timeout or sender dropped (thread panicked) → treat as not ready.
+		Err(_) => Ok(false),
+	}
+}
+
+/// Open a fresh read+write stream to the gateway for a ping. One connection
+/// per probe; the long-lived channel uses `GatewayChannel::connect`.
+#[cfg(unix)]
+fn open_gateway_stream(
+	socket_path: &PathBuf,
+) -> Result<Box<dyn ReadWrite + Send>, String> {
+	let stream = UnixStream::connect(socket_path).map_err(|e| e.to_string())?;
 	stream
 		.set_read_timeout(Some(std::time::Duration::from_secs(2)))
 		.map_err(|e| e.to_string())?;
+	Ok(Box::new(stream))
+}
+
+#[cfg(windows)]
+fn open_gateway_stream(
+	socket_path: &PathBuf,
+) -> Result<Box<dyn ReadWrite + Send>, String> {
+	let pipe_name = socket_path.to_string_lossy().to_string();
+	let file = windows_connect_pipe(&pipe_name)?;
+	Ok(Box::new(file))
+}
+
+/// Send `{"type":"ping"}` and check for a `pong` reply on a single stream.
+fn ping_with_stream(mut stream: Box<dyn ReadWrite + Send>) -> Result<bool, String> {
 	let payload = serde_json::to_string(&json!({ "type": "ping" })).map_err(|e| e.to_string())?;
 	stream
 		.write_all(payload.as_bytes())
 		.map_err(|e| e.to_string())?;
 	stream.write_all(b"\n").map_err(|e| e.to_string())?;
+	stream.flush().map_err(|e| e.to_string())?;
 	let mut reader = BufReader::new(stream);
 	let mut line = String::new();
 	reader.read_line(&mut line).map_err(|e| e.to_string())?;
@@ -401,18 +510,50 @@ fn ping_gateway(socket_path: &PathBuf) -> Result<bool, String> {
 	Ok(parsed.get("type").and_then(|t| t.as_str()) == Some("pong"))
 }
 
-#[cfg(not(unix))]
-mod _non_unix_stub {
-	//! Gateway channel is Unix-socket-based for now. Windows uses named pipes
-	//! (the TS gateway already handles both); the Rust client's Windows path is
-	//! a follow-up. This stub keeps the crate compiling on non-unix targets.
+/// Connect to a Windows named pipe (e.g. `\\.\pipe\gateway`) and return it as
+/// a `File`, which implements `Read`/`Write`/`try_clone` just like `UnixStream`.
+#[cfg(windows)]
+fn windows_connect_pipe(pipe_name: &str) -> Result<std::fs::File, String> {
+	use std::os::windows::io::{FromRawHandle, RawHandle};
+	use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+	use windows_sys::Win32::Storage::FileSystem::{
+		CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, GENERIC_READ,
+		GENERIC_WRITE, OPEN_EXISTING,
+	};
+	let mut wide: Vec<u16> = pipe_name.encode_utf16().collect();
+	wide.push(0);
+	let handle = unsafe {
+		CreateFileW(
+			wide.as_ptr(),
+			GENERIC_READ | GENERIC_WRITE,
+			FILE_SHARE_READ | FILE_SHARE_WRITE,
+			std::ptr::null(),
+			OPEN_EXISTING,
+			FILE_ATTRIBUTE_NORMAL,
+			core::ptr::null(),
+		)
+	};
+	if handle == INVALID_HANDLE_VALUE {
+		return Err(format!(
+			"Failed to connect to gateway pipe {}: {}",
+			pipe_name,
+			std::io::Error::last_os_error()
+		));
+	}
+	// SAFETY: CreateFileW returned a valid, owned HANDLE; wrapping it as a
+	// File transfers ownership (File::drop closes the handle).
+	Ok(unsafe { std::fs::File::from_raw_handle(handle as RawHandle) })
+}
+
+#[cfg(not(any(unix, windows)))]
+mod _unsupported_stub {
+	//! No gateway transport on this platform. Keeps the crate compiling.
 	use super::*;
 	impl GatewayChannel {
 		pub fn connect(_socket_path: &PathBuf) -> Result<Self, String> {
 			Err("gateway channel is not implemented on this platform".into())
 		}
 	}
-	#[cfg(unix)]
 	pub fn ensure_gateway(
 		_socket_path: &PathBuf,
 		_pizza_cmd: (&str, &[String]),
@@ -478,7 +619,7 @@ mod tests {
 			.any(|m| matches!(m, ChannelMessage::Error(_))));
 	}
 
-	#[cfg(test)]
+	#[cfg(unix)]
 	mod live_tests {
 		use super::*;
 		use std::os::unix::net::UnixListener;

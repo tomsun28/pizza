@@ -1599,7 +1599,7 @@ pub async fn new_workspace(app: AppHandle) -> Result<String, String> {
 	let label = format!("workspace-{}", uuid::Uuid::new_v4().simple());
 	log_file(&format!("new_workspace: creating window={}", label));
 	let _window = {
-		let mut builder = tauri::WebviewWindowBuilder::new(
+		let builder = tauri::WebviewWindowBuilder::new(
 			&app,
 			&label,
 			tauri::WebviewUrl::App("index.html".into()),
@@ -1609,11 +1609,9 @@ pub async fn new_workspace(app: AppHandle) -> Result<String, String> {
 		.min_inner_size(720.0, 480.0)
 		.background_color(tauri::webview::Color(18, 18, 18, 255));
 		#[cfg(target_os = "macos")]
-		{
-			builder = builder
-				.title_bar_style(tauri::TitleBarStyle::Transparent)
-				.hidden_title(true);
-		}
+		let builder = builder
+			.title_bar_style(tauri::TitleBarStyle::Transparent)
+			.hidden_title(true);
 		builder
 			.build()
 			.map_err(|e| format!("Failed to create window: {e}"))?

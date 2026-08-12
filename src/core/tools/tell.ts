@@ -123,7 +123,7 @@ export function createTellToolDefinition(
 		description:
 			"Send a message to another agent's workspace and get its reply (agent-to-agent messaging via the gateway). " +
 			"The gateway keeps target agents alive — repeated tells to the same workspace are conversational and " +
-			"repeated tells to the same workspace are conversational and the agent remembers the context. " +
+			"the agent remembers the context. " +
 			"Use `list` to discover target workspaces, then `send` with `--to` (a workspace name or path) and `--message`.",
 		promptSnippet: "_tell: send a message to another workspace's agent via the gateway and get its reply (conversational, reuses the agent)",
 		promptGuidelines: [

@@ -2486,7 +2486,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "pizza-gui"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "base64 0.22.1",
  "env_logger",
@@ -2500,6 +2500,7 @@ dependencies = [
  "tauri-plugin-shell",
  "tokio",
  "uuid",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
