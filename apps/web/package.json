@@ -12,7 +12,6 @@
 		"lint:fix": "eslint . --fix"
 	},
 	"dependencies": {
-		"@pizza/protocol": "file:../../packages/protocol",
 		"@pxlkit/ui-kit": "^2.0.1",
 		"@tauri-apps/api": "^2.1.1",
 		"@tauri-apps/plugin-dialog": "^2.7.1",
