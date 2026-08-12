@@ -9,7 +9,9 @@
  *   - unquoted: a backslash escapes the next character (a trailing backslash
  *     is kept literally)
  *
- * Whitespace outside quotes separates words.
+ * Whitespace outside quotes separates words. An empty quoted region (`''` or
+ * `""`) yields a single empty-string word, matching POSIX shells — e.g.
+ * `a "" b` splits into ["a", "", "b"].
  */
 
 export interface SplitShellWordsMeta {
@@ -32,6 +34,10 @@ export function splitShellWords(input: string): string[] {
 export function splitShellWordsWithMeta(input: string): { words: string[]; meta: SplitShellWordsMeta } {
 	const words: string[] = [];
 	let current = "";
+	// Whether the current word has begun (saw any character, including an
+	// opening quote delimiter). Distinct from `current.length > 0` so that an
+	// empty quoted region ("") still counts as a word.
+	let inWord = false;
 	// Active quote context: undefined (unquoted), "'" (single), or '"' (double).
 	let quote: "'" | '"' | undefined;
 	let quoteDelimitersConsumed = 0;
@@ -79,26 +85,30 @@ export function splitShellWordsWithMeta(input: string): { words: string[]; meta:
 				// A trailing backslash is kept literally.
 				current += "\\";
 			}
+			inWord = true;
 			continue;
 		}
 		if (char === "'" || char === '"') {
 			quote = char;
 			quoteDelimitersConsumed++;
+			inWord = true;
 			continue;
 		}
 		if (/\s/.test(char)) {
-			if (current.length > 0) {
+			if (inWord) {
 				words.push(current);
 				current = "";
+				inWord = false;
 			}
 			continue;
 		}
 		current += char;
+		inWord = true;
 	}
 
 	// An unterminated quote keeps whatever was collected (best-effort); a
 	// trailing backslash was already handled inside the loop.
-	if (current.length > 0) {
+	if (inWord) {
 		words.push(current);
 	}
 	return { words, meta: { quoteDelimitersConsumed } };
