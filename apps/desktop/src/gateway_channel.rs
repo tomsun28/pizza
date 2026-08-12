@@ -523,7 +523,7 @@ fn windows_connect_pipe(pipe_name: &str) -> Result<std::fs::File, String> {
 			std::ptr::null(),
 			OPEN_EXISTING,
 			FILE_ATTRIBUTE_NORMAL,
-			core::ptr::null(),
+			0,
 		)
 	};
 	if handle == INVALID_HANDLE_VALUE {
