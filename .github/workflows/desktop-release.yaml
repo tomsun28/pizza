@@ -53,6 +53,14 @@ jobs:
           key: cargo-${{ matrix.label }}-${{ hashFiles('apps/desktop/Cargo.lock') }}
           restore-keys: cargo-${{ matrix.label }}-
 
+      - name: Cache tauri tools
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.tauri
+            ~/.local/share/tauri
+          key: tauri-tools-${{ matrix.label }}
+
       - name: Install tauri-cli
         run: |
           curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
@@ -123,8 +131,12 @@ jobs:
                 fi
                 ;;
             esac
-            mv "$file" "$dir/$new_name"
-            echo "Renamed: $base -> $new_name"
+            if [ "$base" != "$new_name" ]; then
+              mv "$file" "$dir/$new_name"
+              echo "Renamed: $base -> $new_name"
+            else
+              echo "Already named: $base"
+            fi
           done
         shell: bash
 
