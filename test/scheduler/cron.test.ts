@@ -28,6 +28,23 @@ describe("parseCron", () => {
 		expect(p.weekday.values).toEqual([0]);
 	});
 
+	it("accepts ranges that include 7 (=Sunday) in weekday field", () => {
+		// Regression: a naive /\b7\b/ string rewrite turned "5-7" into "5-0"
+		// (inverted range -> error) and "0-7" into "0-0" (lost all days).
+		const friToSun = parseCron("0 9 * * 5-7");
+		expect(friToSun.weekday.values).toEqual([0, 5, 6]);
+
+		const satToSun = parseCron("0 9 * * 6-7");
+		expect(satToSun.weekday.values).toEqual([0, 6]);
+
+		const allDays = parseCron("0 9 * * 0-7");
+		expect(allDays.weekday.values).toEqual([0, 1, 2, 3, 4, 5, 6]);
+
+		// A list mixing a range with a standalone 7 still works.
+		const list = parseCron("0 9 * * 1-5,7");
+		expect(list.weekday.values).toEqual([0, 1, 2, 3, 4, 5]);
+	});
+
 	it("rejects out-of-range values", () => {
 		expect(() => parseCron("60 9 * * *")).toThrow();
 		expect(() => parseCron("0 24 * * *")).toThrow();
