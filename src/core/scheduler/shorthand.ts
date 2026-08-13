@@ -34,10 +34,14 @@ export function parseScheduleShorthand(input: string): ParsedShorthand {
 	const raw = input.trim();
 	if (!raw) return { ok: false, error: "schedule is empty" };
 
-	// 1) Cron: 5 whitespace-separated fields AND at least one cron metachar
-	//    (star, slash, dash, comma).
+	// 1) Cron: 5 whitespace-separated fields, each a valid cron token (digits,
+	//    star, slash, dash, comma). We do NOT require a metacharacter — an
+	//    all-numeric expression like "0 9 1 1 1" (9am every Jan 1) is a valid
+	//    cron and must be accepted. Every field must look like a cron field so
+	//    that interval phrases (e.g. "every 2h", which has 2 fields) and free
+	//    text fall through to the interval parser instead.
 	const fields = raw.split(/\s+/);
-	const looksCron = fields.length === 5 && /[*\/\-,:]/.test(raw);
+	const looksCron = fields.length === 5 && fields.every((f) => /^[\d*/\-,]+$/.test(f));
 	if (looksCron) {
 		const verr = validateCron(raw);
 		if (verr) return { ok: false, error: `invalid cron expression: ${verr}` };
