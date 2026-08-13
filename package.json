@@ -31,7 +31,7 @@
 	],
 	"workspaces": [
 		"packages/protocol",
-		"channels/*"
+		"packages/channels/*"
 	],
 	"bundleDependencies": [
 		"@tomsun28/pizza-protocol"

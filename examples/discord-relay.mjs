@@ -1,4 +1,4 @@
-/** NOTE: this is a zero-build single-file demo. The real, maintained package lives at channels/discord (@tomsun28/pizza-channel-discord). Use that for anything serious. */
+/** NOTE: this is a zero-build single-file demo. The real, maintained package lives at packages/channels/discord (@tomsun28/pizza-channel-discord). Use that for anything serious. */
 /**
  * Discord ↔ Pizza gateway relay (thin "external message channel").
  *

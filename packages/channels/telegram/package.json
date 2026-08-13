@@ -1,8 +1,8 @@
 {
-	"name": "@tomsun28/pizza-channel-webhook",
+	"name": "@tomsun28/pizza-channel-telegram",
 	"version": "0.2.4",
 	"private": true,
-	"description": "Generic webhook channel relay for Pizza — an HTTP endpoint that delivers inbound POSTs into a workspace agent and returns the reply as JSON. No external SDK.",
+	"description": "Telegram channel relay for Pizza — delivers Telegram messages into a workspace agent and posts the reply back.",
 	"type": "module",
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
@@ -21,10 +21,11 @@
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/tomsun28/pizza.git",
-		"directory": "channels/webhook"
+		"directory": "packages/channels/telegram"
 	},
 	"dependencies": {
-		"@tomsun28/pizza-channel-core": "*"
+		"@tomsun28/pizza-channel-core": "*",
+		"grammy": "^1.30.0"
 	},
 	"devDependencies": {
 		"shx": "^0.4.0",

@@ -4,7 +4,7 @@
  * A "channel" is an external message integration (Discord / Lark / Slack /
  * Telegram / webhook) that delivers inbound messages into a workspace agent and
  * relays the agent's replies back out. This package holds the parts that are
- * identical for every platform so each `channels/<platform>` stays a thin
+ * identical for every platform so each `packages/channels/<platform>` stays a thin
  * adapter: gateway lifecycle, provenance, config, and the deliver/reply loop.
  *
  *   external platform ──message──▶ runtime.deliver(workspace, text, source)

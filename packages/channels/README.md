@@ -32,7 +32,7 @@ platforms add a `kind` value, nothing else changes.
 ## Layout
 
 ```
-channels/
+packages/channels/
   core/      @tomsun28/pizza-channel-core     shared engine (runtime, provenance, harness)
   discord/   @tomsun28/pizza-channel-discord  discord.js — FULL
   webhook/   @tomsun28/pizza-channel-webhook  plain node http, no SDK — FULL
@@ -65,14 +65,14 @@ PIZZA_WORKSPACE=myrepo WEBHOOK_TOKEN=secret \
 #   -d '{"message":"hi","source":"ci-bot"}'
 ```
 
-> Adding `channels/*` to the root workspaces means a plain `npm install` will
+> Adding `packages/channels/*` to the root workspaces means a plain `npm install` will
 > pull every channel's platform SDK. If you only use one channel and want a
 > leaner install, remove the others from the root `workspaces` array (or delete
 > their directories) — they are fully independent packages.
 
 ## Add a new channel
 
-1. Copy `channels/webhook` (simplest) or `channels/discord`.
+1. Copy `packages/channels/webhook` (simplest) or `packages/channels/discord`.
 2. Bump the package name, swap the platform SDK + `messageCreate` handler.
 3. Call `runtime.deliver(workspace, text, provenance("<kind>", sourceId))` on the
    inbound message, post the reply back.

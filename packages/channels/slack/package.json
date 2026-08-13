@@ -1,8 +1,8 @@
 {
-	"name": "@tomsun28/pizza-channel-telegram",
+	"name": "@tomsun28/pizza-channel-slack",
 	"version": "0.2.4",
 	"private": true,
-	"description": "Telegram channel relay for Pizza — delivers Telegram messages into a workspace agent and posts the reply back.",
+	"description": "Slack channel relay for Pizza (scaffold — platform wiring TBD).",
 	"type": "module",
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
@@ -21,11 +21,11 @@
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/tomsun28/pizza.git",
-		"directory": "channels/telegram"
+		"directory": "packages/channels/slack"
 	},
 	"dependencies": {
 		"@tomsun28/pizza-channel-core": "*",
-		"grammy": "^1.30.0"
+		"@slack/bolt": "^3.21.0"
 	},
 	"devDependencies": {
 		"shx": "^0.4.0",
