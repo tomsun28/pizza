@@ -20,13 +20,18 @@
 		"./hooks": {
 			"types": "./dist/src/core/hooks/index.d.ts",
 			"import": "./dist/src/core/hooks/index.js"
+		},
+		"./gateway": {
+			"types": "./dist/packages/gateway/index.d.ts",
+			"import": "./dist/packages/gateway/index.js"
 		}
 	},
 	"files": [
 		"dist"
 	],
 	"workspaces": [
-		"packages/protocol"
+		"packages/protocol",
+		"channels/*"
 	],
 	"bundleDependencies": [
 		"@tomsun28/pizza-protocol"

@@ -22,6 +22,7 @@ import { type Static, Type } from "@sinclair/typebox";
 import { Text } from "@earendil-works/pi-tui";
 import { defineTool, type ToolDefinition } from "../extensions/types.js";
 import { GatewayClient, ensureGateway, gatewaySocketPath, type MessageSource } from "../../../packages/gateway/index.js";
+import { VERSION } from "../../config.js";
 
 /** Supported `tell` subcommands. */
 export const TELL_ACTIONS = ["send", "list"] as const;
@@ -160,7 +161,7 @@ export function createTellToolDefinition(
 
 			let socketPath: string;
 			try {
-				socketPath = await ensureGateway(agentDir);
+				socketPath = await ensureGateway(agentDir, undefined, VERSION);
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				return textResult(`Failed to start gateway: ${message}`);

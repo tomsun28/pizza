@@ -1511,6 +1511,7 @@ async fn init_sidecar_via_gateway(
 		gateway_channel::ensure_gateway(
 			&socket_for_blocking,
 			(&program_for_blocking, &args_for_blocking),
+			Some(env!("CARGO_PKG_VERSION")),
 		)
 	})
 	.await

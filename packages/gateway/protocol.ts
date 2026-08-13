@@ -160,6 +160,8 @@ export interface GatewayStatusResult extends GatewayMessageBase {
 	uptime: number;
 	/** Number of subscribed channels. */
 	channels: number;
+	/** Pizza version of the gateway process (from package.json). */
+	version: string;
 	/** One entry per agent in the pool. */
 	agents: Array<{
 		cwd: string;

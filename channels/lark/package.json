@@ -1,0 +1,34 @@
+{
+	"name": "@tomsun28/pizza-channel-lark",
+	"version": "0.2.4",
+	"private": true,
+	"description": "Lark / Feishu channel relay for Pizza (scaffold — platform wiring TBD).",
+	"type": "module",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"scripts": {
+		"build": "tsc",
+		"start": "node dist/index.js",
+		"clean": "shx rm -rf dist"
+	},
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/tomsun28/pizza.git",
+		"directory": "channels/lark"
+	},
+	"dependencies": {
+		"@tomsun28/pizza-channel-core": "*",
+		"@larksuiteoapi/node-sdk": "^1.42.0"
+	},
+	"devDependencies": {
+		"shx": "^0.4.0",
+		"typescript": "^5.7.3"
+	}
+}

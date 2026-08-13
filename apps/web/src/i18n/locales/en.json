@@ -358,6 +358,7 @@
     "tabs": {
       "skills": "Skills",
       "extensions": "Extensions",
+      "channels": "Channels",
       "mcp": "MCP"
     },
     "skills": {
@@ -400,6 +401,65 @@
     "mcp": {
       "comingSoon": "MCP servers coming soon",
       "comingSoonHint": "MCP server configuration will be available here."
+    }
+  },
+  "channels": {
+    "add": "Add Channel",
+    "loading": "Loading channels...",
+    "error": "Error: {{error}}",
+    "empty": "No channels configured",
+    "emptyHint": "Connect Discord, Lark, Slack, Telegram, or a webhook to receive messages into a workspace.",
+    "status": {
+      "connected": "Connected",
+      "disconnected": "Disconnected",
+      "error": "Error",
+      "configuring": "Not configured"
+    },
+    "bind": "→ {{workspace}}",
+    "bindNone": "Not bound",
+    "recent": "active {{time}} ago",
+    "recentNever": "no activity",
+    "enable": "Enable",
+    "disable": "Disable",
+    "configure": "Configure",
+    "delete": "Delete",
+    "confirmDelete": "Delete channel \"{{name}}\"?",
+    "test": "Test",
+    "testing": "Testing…",
+    "save": "Save",
+    "saving": "Saving…",
+    "types": {
+      "discord": "Discord",
+      "lark": "Lark",
+      "slack": "Slack",
+      "telegram": "Telegram",
+      "webhook": "Webhook"
+    },
+    "dialog": {
+      "createTitle": "Add Channel",
+      "editTitle": "Edit Channel",
+      "type": "Channel type",
+      "name": "Display name",
+      "namePlaceholder": "e.g. Dev alerts",
+      "token": "Bot token",
+      "tokenHint": "Stored securely; used to authenticate with the platform.",
+      "server": "Server / Guild",
+      "serverPlaceholder": "e.g. pizza-hq",
+      "channel": "Channel / Chat",
+      "channelPlaceholder": "e.g. #dev-alerts",
+      "webhookUrl": "Webhook URL",
+      "urlHint": "Inbound messages arrive at this URL; replies are POSTed back.",
+      "workspace": "Deliver to workspace",
+      "workspaceHint": "Inbound messages route to this workspace's agent.",
+      "workspacePlaceholder": "Select a workspace…",
+      "noWorkspaces": "No workspaces available. Create one first.",
+      "enabled": "Enabled",
+      "enabledHint": "When off, inbound messages are paused.",
+      "cancel": "Cancel",
+      "nameRequired": "Display name is required",
+      "workspaceRequired": "Select a workspace",
+      "tokenRequired": "Bot token is required",
+      "urlRequired": "Webhook URL is required"
     }
   },
   "settings": {

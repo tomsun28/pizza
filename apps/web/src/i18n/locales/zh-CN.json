@@ -358,6 +358,7 @@
     "tabs": {
       "skills": "技能",
       "extensions": "扩展",
+      "channels": "频道",
       "mcp": "MCP"
     },
     "skills": {
@@ -400,6 +401,65 @@
     "mcp": {
       "comingSoon": "MCP 即将推出",
       "comingSoonHint": "MCP 服务器配置将在这里提供。"
+    }
+  },
+  "channels": {
+    "add": "添加频道",
+    "loading": "正在加载频道...",
+    "error": "错误:{{error}}",
+    "empty": "尚未配置频道",
+    "emptyHint": "连接 Discord、飞书、Slack、Telegram 或 Webhook，将消息接入到工作区。",
+    "status": {
+      "connected": "已连接",
+      "disconnected": "未连接",
+      "error": "错误",
+      "configuring": "未配置"
+    },
+    "bind": "→ {{workspace}}",
+    "bindNone": "未绑定",
+    "recent": "{{time}}前活动",
+    "recentNever": "暂无活动",
+    "enable": "启用",
+    "disable": "禁用",
+    "configure": "配置",
+    "delete": "删除",
+    "confirmDelete": "确认删除频道\"{{name}}\"？",
+    "test": "测试",
+    "testing": "测试中…",
+    "save": "保存",
+    "saving": "保存中…",
+    "types": {
+      "discord": "Discord",
+      "lark": "飞书",
+      "slack": "Slack",
+      "telegram": "Telegram",
+      "webhook": "Webhook"
+    },
+    "dialog": {
+      "createTitle": "添加频道",
+      "editTitle": "编辑频道",
+      "type": "频道类型",
+      "name": "显示名称",
+      "namePlaceholder": "例如：开发告警",
+      "token": "机器人 Token",
+      "tokenHint": "安全存储，用于向平台进行身份验证。",
+      "server": "服务器 / 群组",
+      "serverPlaceholder": "例如：pizza-hq",
+      "channel": "频道 / 会话",
+      "channelPlaceholder": "例如：#dev-alerts",
+      "webhookUrl": "Webhook URL",
+      "urlHint": "入站消息到达此 URL，回复将被 POST 回去。",
+      "workspace": "投递到工作区",
+      "workspaceHint": "入站消息会路由到该工作区的助理。",
+      "workspacePlaceholder": "选择一个工作区…",
+      "noWorkspaces": "暂无可用工作区，请先创建。",
+      "enabled": "启用",
+      "enabledHint": "关闭后将暂停接收入站消息。",
+      "cancel": "取消",
+      "nameRequired": "请填写显示名称",
+      "workspaceRequired": "请选择工作区",
+      "tokenRequired": "请填写机器人 Token",
+      "urlRequired": "请填写 Webhook URL"
     }
   },
   "settings": {

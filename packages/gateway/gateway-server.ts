@@ -88,6 +88,8 @@ export interface GatewayServerOptions {
 	agentDir: string;
 	/** The main agent working directory — excluded from workspace name lookups. */
 	mainDir?: string;
+	/** Pizza version (from package.json), reported in `status` so clients can detect an outdated gateway after an upgrade. */
+	version?: string;
 	/**
 	 * Idle timeout (ms): agent processes with no recent activity are torn down
 	 * after this period. Default: 10 minutes. 0 disables idle eviction.
@@ -163,6 +165,7 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 	const socketPath = options.socketPath ?? gatewaySocketPath();
 	const agentDir = options.agentDir;
 	const mainDir = options.mainDir;
+	const gatewayVersion = options.version ?? "unknown";
 	const agentIdleTimeout = options.agentIdleTimeout ?? 10 * 60_000;
 	const healthCheckInterval = options.agentHealthCheckInterval ?? 60_000;
 	const healthCheckTimeout = options.agentHealthTimeout ?? 10_000;
@@ -689,6 +692,7 @@ function nextMessageId(): string {
 					type: "status_result",
 					uptime: now - startTime,
 					channels: subscribers.size,
+					version: gatewayVersion,
 					agents: Array.from(pool.values()).map((e) => ({
 						cwd: e.cwd,
 						busy: e.busy,
