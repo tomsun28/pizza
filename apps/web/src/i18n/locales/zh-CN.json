@@ -396,7 +396,8 @@
       "install": "安装",
       "installing": "安装中…",
       "uninstall": "卸载",
-      "uninstalling": "卸载中…"
+      "uninstalling": "卸载中…",
+      "actions": "操作"
     },
     "mcp": {
       "comingSoon": "MCP 即将推出",
@@ -423,6 +424,7 @@
     "disable": "禁用",
     "configure": "配置",
     "delete": "删除",
+    "actions": "操作",
     "confirmDelete": "确认删除频道\"{{name}}\"？",
     "test": "测试",
     "testing": "测试中…",

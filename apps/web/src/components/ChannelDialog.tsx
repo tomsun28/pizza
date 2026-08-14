@@ -127,6 +127,8 @@ export function ChannelDialog({ open, onClose, existing, onSaved }: ChannelDialo
 		<Modal
 			open={open}
 			onClose={onClose}
+			size="md"
+			backdrop={false}
 			title={isEdit ? t("channels.dialog.editTitle") : t("channels.dialog.createTitle")}
 			footer={
 				<div className="flex w-full items-center justify-between gap-2">

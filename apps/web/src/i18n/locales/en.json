@@ -396,7 +396,8 @@
       "install": "Install",
       "installing": "Installing…",
       "uninstall": "Uninstall",
-      "uninstalling": "Uninstalling…"
+      "uninstalling": "Uninstalling…",
+      "actions": "Actions"
     },
     "mcp": {
       "comingSoon": "MCP servers coming soon",
@@ -423,6 +424,7 @@
     "disable": "Disable",
     "configure": "Configure",
     "delete": "Delete",
+    "actions": "Actions",
     "confirmDelete": "Delete channel \"{{name}}\"?",
     "test": "Test",
     "testing": "Testing…",

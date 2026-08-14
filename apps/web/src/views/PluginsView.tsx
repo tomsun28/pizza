@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useLocation, useOutletContext } from "react-router-dom";
-import { PageHeader, Card, Badge, Button } from "@/components/ui";
+import { PageHeader, Card, Badge, Button, MoreMenu, type ContextMenuItem } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import {
 	fetchSkillsSh,
@@ -301,38 +301,31 @@ function ExtensionCard({
 						)}
 					</div>
 				</div>
-				<div className="flex shrink-0 flex-row flex-wrap items-center gap-2 @sm:flex-col @sm:items-end">
-					{ext.installable && (
-						<Button
-							size="sm"
-							tone={ext.installed ? "neutral" : "accent"}
-							loading={busy}
-							disabled={busy}
-							onClick={() => (ext.installed ? onUninstall(ext.id) : onInstall(ext.id))}
-							title={ext.installed ? t("plugins.extensions.uninstall") : t("plugins.extensions.install")}
-							iconLeft={ext.installed ? <Trash2 className="h-3.5 w-3.5" /> : <Download className="h-3.5 w-3.5" />}
-						>
-							{busy
-								? ext.installed
-									? t("plugins.extensions.uninstalling")
-									: t("plugins.extensions.installing")
-								: ext.installed
-									? t("plugins.extensions.uninstall")
-									: t("plugins.extensions.install")}
-						</Button>
-					)}
-					{showToggle && (
-						<Button
-							size="sm"
-							tone={ext.enabled ? "danger" : "accent"}
-							disabled={busy}
-							onClick={() => onToggle(ext.id, !ext.enabled)}
-							title={ext.enabled ? t("plugins.extensions.disable") : t("plugins.extensions.enable")}
-							iconLeft={<Power className="h-3.5 w-3.5" />}
-						>
-							{ext.enabled ? t("plugins.extensions.disable") : t("plugins.extensions.enable")}
-						</Button>
-					)}
+				<div className="flex shrink-0 items-center gap-2">
+					<MoreMenu
+						disabled={busy}
+						title={t("plugins.extensions.actions")}
+						items={[
+							...(ext.installable
+								? [{
+										icon: ext.installed ? Trash2 : Download,
+										label: busy
+											? (ext.installed ? t("plugins.extensions.uninstalling") : t("plugins.extensions.installing"))
+											: (ext.installed ? t("plugins.extensions.uninstall") : t("plugins.extensions.install")),
+										disabled: busy,
+										onClick: () => (ext.installed ? onUninstall(ext.id) : onInstall(ext.id)),
+									}]
+								: []),
+							...(showToggle
+								? [{
+										icon: Power,
+										label: ext.enabled ? t("plugins.extensions.disable") : t("plugins.extensions.enable"),
+										disabled: busy,
+										onClick: () => onToggle(ext.id, !ext.enabled),
+									}]
+								: []),
+						]}
+					/>
 				</div>
 			</div>
 		</Card>
@@ -536,25 +529,33 @@ function ChannelCard({
 						)}
 					</div>
 				</div>
-				<div className="flex shrink-0 flex-row flex-wrap items-center gap-2 @sm:flex-col @sm:items-end">
-					<Button
-						size="sm"
-						tone={channel.enabled ? "danger" : "accent"}
+				<div className="flex shrink-0 items-center gap-2">
+					<MoreMenu
 						disabled={busy}
-						onClick={() => onToggle(channel.id, !channel.enabled)}
-						title={channel.enabled ? t("channels.disable") : t("channels.enable")}
-						iconLeft={<Power className="h-3.5 w-3.5" />}
-					>
-						{channel.enabled ? t("channels.disable") : t("channels.enable")}
-					</Button>
-					<div className="flex items-center gap-1">
-						<Button size="sm" tone="neutral" disabled={busy} onClick={() => onConfigure(channel)} iconLeft={<Settings className="h-3.5 w-3.5" />}>
-							{t("channels.configure")}
-						</Button>
-						<Button size="sm" tone="neutral" variant="ghost" disabled={busy} onClick={() => onDelete(channel.id)} title={t("channels.delete")}>
-							<Trash2 className="h-3.5 w-3.5" />
-						</Button>
-					</div>
+						title={t("channels.actions")}
+						items={[
+							{
+								icon: Power,
+								label: channel.enabled ? t("channels.disable") : t("channels.enable"),
+								disabled: busy,
+								onClick: () => onToggle(channel.id, !channel.enabled),
+							},
+							{
+								icon: Settings,
+								label: t("channels.configure"),
+								disabled: busy,
+								onClick: () => onConfigure(channel),
+							},
+							{ divider: true },
+							{
+								icon: Trash2,
+								label: t("channels.delete"),
+								danger: true,
+								disabled: busy,
+								onClick: () => onDelete(channel.id),
+							},
+						]}
+					/>
 				</div>
 			</div>
 		</Card>
