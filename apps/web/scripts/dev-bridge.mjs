@@ -385,8 +385,15 @@ export function pizzaRpcBridge() {
 
 	function ensureChild() {
 		if (child) return;
-		console.log("[pizza-rpc-bridge] spawning pizza --mode rpc...");
-		child = spawn("pizza", ["--mode", "rpc"], {
+		// Prefer the local build (dist/src/cli.js) over the global `pizza` so
+		// that dev:desktop uses the same code and node_modules as the build.
+		const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
+		const localCli = path.join(repoRoot, "dist", "src", "cli.js");
+		const useLocal = fs.existsSync(localCli);
+		const cmd = useLocal ? "node" : "pizza";
+		const args = useLocal ? [localCli, "--mode", "rpc"] : ["--mode", "rpc"];
+		console.log(`[pizza-rpc-bridge] spawning ${cmd} ${args.join(" ")}...`);
+		child = spawn(cmd, args, {
 			stdio: ["pipe", "pipe", "pipe"],
 			cwd: process.cwd(),
 		});

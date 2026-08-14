@@ -266,8 +266,8 @@ function ExtensionCard({
 	const showToggle = ext.canToggle && !notInstalledInstallable;
 	const showEnabledBadge = !notInstalledInstallable;
 	return (
-		<Card className="transition-colors hover:border-accent/40">
-			<div className="flex items-start justify-between gap-3">
+		<Card className="@container transition-colors hover:border-accent/40">
+			<div className="flex flex-col gap-3 @sm:flex-row @sm:items-start @sm:justify-between">
 				<div className="min-w-0 flex-1">
 					<div className="flex items-center gap-2">
 						<Puzzle className="h-4 w-4 shrink-0 text-accent" />
@@ -301,7 +301,7 @@ function ExtensionCard({
 						)}
 					</div>
 				</div>
-				<div className="flex shrink-0 flex-col items-end gap-2">
+				<div className="flex shrink-0 flex-row flex-wrap items-center gap-2 @sm:flex-col @sm:items-end">
 					{ext.installable && (
 						<Button
 							size="sm"
@@ -505,8 +505,8 @@ function ChannelCard({
 	const statusKey = channel.enabled ? channel.status : "disconnected";
 	const wsName = channel.workspace ? channel.workspace.replace(/\/+$/, "").split("/").pop() ?? channel.workspace : "";
 	return (
-		<Card className="transition-colors hover:border-accent/40">
-			<div className="flex items-start justify-between gap-3">
+		<Card className="@container transition-colors hover:border-accent/40">
+			<div className="flex flex-col gap-3 @sm:flex-row @sm:items-start @sm:justify-between">
 				<div className="min-w-0 flex-1">
 					<div className="flex items-center gap-2">
 						<Icon className="h-4 w-4 shrink-0 text-accent" />
@@ -536,7 +536,7 @@ function ChannelCard({
 						)}
 					</div>
 				</div>
-				<div className="flex shrink-0 flex-col items-end gap-2">
+				<div className="flex shrink-0 flex-row flex-wrap items-center gap-2 @sm:flex-col @sm:items-end">
 					<Button
 						size="sm"
 						tone={channel.enabled ? "danger" : "accent"}

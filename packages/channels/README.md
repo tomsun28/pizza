@@ -37,7 +37,7 @@ packages/channels/
   discord/   @tomsun28/pizza-channel-discord  discord.js — FULL
   webhook/   @tomsun28/pizza-channel-webhook  plain node http, no SDK — FULL
   telegram/  @tomsun28/pizza-channel-telegram grammy — FULL
-  lark/      @tomsun28/pizza-channel-lark     @larksuiteoapi/node-sdk — SCAFFOLD
+  lark/      @tomsun28/pizza-channel-lark     @larksuiteoapi/node-sdk — FULL
   slack/     @tomsun28/pizza-channel-slack    @slack/bolt — SCAFFOLD
 ```
 
@@ -57,7 +57,12 @@ npm run build -w @tomsun28/pizza-channel-discord
 DISCORD_TOKEN=xxx PIZZA_ROUTES='#dev-alerts=myrepo' \
   npm start -w @tomsun28/pizza-channel-discord
 
-# 3. e.g. webhook (no SDK)
+# 3. e.g. Lark / Feishu (WebSocket long connection, no public endpoint needed)
+npm run build -w @tomsun28/pizza-channel-lark
+LARK_APP_ID=cli_xxx LARK_APP_SECRET=xxx PIZZA_WORKSPACE=myrepo \
+  npm start -w @tomsun28/pizza-channel-lark
+
+# 4. e.g. webhook (no SDK)
 npm run build -w @tomsun28/pizza-channel-webhook
 PIZZA_WORKSPACE=myrepo WEBHOOK_TOKEN=secret \
   npm start -w @tomsun28/pizza-channel-webhook

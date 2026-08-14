@@ -73,9 +73,11 @@ void runChannel(async (runtime: ChannelRuntime) => {
 		const text = msg.content.replace(/<@!?\d+>/g, "").trim(); // strip the @bot mention
 		if (!text) return;
 
-		// Reflect "typing" while the agent works (it may take a while).
-		await msg.channel.sendTyping().catch(() => {});
-		const typing = setInterval(() => msg.channel.sendTyping().catch(() => {}), 8_000);
+		// Reflect "typing" while the agent works (it may take a while). Not every
+		// channel kind can be typed in (e.g. partial group DMs), hence the guard.
+		const typeable = msg.channel.isSendable() ? msg.channel : undefined;
+		await typeable?.sendTyping().catch(() => {});
+		const typing = setInterval(() => void typeable?.sendTyping().catch(() => {}), 8_000);
 
 		try {
 			const reply = await runtime.deliver(workspace, text, provenance("discord", channelName));
