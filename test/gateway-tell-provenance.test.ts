@@ -3,8 +3,11 @@
  *
  * Verifies that a `tell` carrying `from` (sender {@link MessageSource}) is
  * delivered to the target agent wrapped in a uniform `<message from="kind:id">`
- * block — so the receiver knows who messaged it and where to reply. Also covers
- * the back-compat path: a `tell` with no `from` falls back to the bare message.
+ * block — so the receiver knows who messaged it and where to reply — and that
+ * delivery is always asynchronous: the client gets a delivery ack, and the
+ * gateway relays the told agent's final answer back to the sender automatically.
+ * Also covers the back-compat path: a `tell` with no `from` falls back to the
+ * bare message.
  *
  * Uses a fake AgentConnection (no real LLM) that records the prompt it receives.
  */
@@ -68,8 +71,10 @@ class RecordingAgent implements AgentConnection {
 		this.settleTurn?.();
 		this.settleTurn = null;
 	}
+	/** Text getLastAssistantText reports; null disables the reply relay. */
+	lastAssistantText: string | null = null;
 	async getLastAssistantText(): Promise<string | null> {
-		return "ok";
+		return this.lastAssistantText;
 	}
 	getStderr(): string {
 		return "";
@@ -275,8 +280,8 @@ describe("gateway tell provenance", () => {
 		expect(fake.followUps).toHaveLength(1);
 		expect(fake.followUps[0]).toContain("queued work");
 
-		// A sync tell cannot use the follow-up queue (it would read the other
-		// turn's reply), so it fails loudly instead of silently dropping.
+		// A tell without the (now-deprecated) async flag takes the same
+		// follow-up queue path — delivery is always asynchronous.
 		const syncRes = JSON.parse(
 			await sendAndWait(server!.socketPath, {
 				type: "tell",
@@ -286,7 +291,62 @@ describe("gateway tell provenance", () => {
 				from: { kind: "agent", id: "/proj/pizza" },
 			}),
 		);
-		expect(syncRes.ok).toBe(false);
-		expect(syncRes.error).toContain("busy with another turn");
+		expect(syncRes.ok).toBe(true);
+		expect(syncRes.delivered).toBe(true);
+		expect(fake.followUps).toHaveLength(2);
+		expect(fake.followUps[1]).toContain("need an answer");
+	});
+
+	it("relays the told agent's final answer back to the sender automatically", async () => {
+		const targetCwd = "/proj/web";
+		const senderCwd = "/proj/pizza";
+		const target = new RecordingAgent(targetCwd);
+		const sender = new RecordingAgent(senderCwd);
+		target.holdTurn = true;
+		target.lastAssistantText = "the answer";
+
+		const socketPath = uniqueSocketPath();
+		sockets.push(socketPath);
+		const dir = mkdtempSync(join(tmpdir(), "pizza-gw-prov-"));
+		dirs.push(dir);
+		server = createGatewayServer({
+			socketPath,
+			agentDir: dir,
+			createAgent: (cwd) => (cwd === targetCwd ? target : sender),
+		});
+		await server.start();
+
+		const res = JSON.parse(
+			await sendAndWait(server!.socketPath, {
+				type: "tell",
+				id: "r9",
+				to: targetCwd,
+				message: "what is the answer?",
+				from: { kind: "agent", id: senderCwd },
+			}),
+		);
+		// Delivery ack — never the reply itself.
+		expect(res.ok).toBe(true);
+		expect(res.delivered).toBe(true);
+		expect(res.reply).toBeUndefined();
+		// The delivered block announces the auto-relay.
+		expect(target.received[0]).toContain('relay="auto"');
+
+		// The told turn settles → the reply is relayed to the sender.
+		target.finishTurn();
+		const deadline = Date.now() + 3000;
+		while (sender.received.length === 0 && Date.now() < deadline) {
+			await new Promise((r) => setTimeout(r, 20));
+		}
+		expect(sender.received).toHaveLength(1);
+		const relayed = sender.received[0]!;
+		expect(relayed).toContain('<message from="agent:/proj/web"');
+		expect(relayed).toContain("the answer");
+		// Loop guard: the relayed turn is never relayed again (no reply back to
+		// the target, and the sender's block does not promise auto-relay).
+		expect(relayed).not.toContain('relay="auto"');
+		await new Promise((r) => setTimeout(r, 100));
+		expect(sender.received).toHaveLength(1);
+		expect(target.received).toHaveLength(1);
 	});
 });
