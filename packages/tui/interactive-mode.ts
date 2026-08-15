@@ -16,8 +16,8 @@ import type {
   ImageContent,
   Message,
   Model,
-  OAuthProviderId,
 } from "@earendil-works/pi-ai/compat";
+import type { OAuthProviderId } from "../../src/core/oauth.js";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import type {
   AutocompleteItem,
@@ -44,9 +44,10 @@ import {
   setKeybindings,
   Text,
   TruncatedText,
-  TUI,
+  TuiMainScreen,
   visibleWidth,
 } from "@earendil-works/pi-tui";
+import type { TUI } from "@earendil-works/pi-tui";
 import { spawn, spawnSync } from "child_process";
 import {
   APP_NAME,
@@ -682,7 +683,7 @@ export class InteractiveMode {
   private initUI(): void {
     const settingsMgr = this.settingsManager;
     this.version = VERSION;
-    this.ui = new TUI(
+    this.ui = new TuiMainScreen(
       new ProcessTerminal(),
       settingsMgr.getShowHardwareCursor(),
     );

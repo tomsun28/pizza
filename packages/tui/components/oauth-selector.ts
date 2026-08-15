@@ -1,5 +1,4 @@
-import type { OAuthProviderInterface } from "@earendil-works/pi-ai/compat";
-import { getOAuthProviders } from "@earendil-works/pi-ai/oauth";
+import { getOAuthProviders, type OAuthProviderInterface } from "../../../src/core/oauth.js";
 import { Container, getKeybindings, Spacer, TruncatedText } from "@earendil-works/pi-tui";
 import type { AuthStorage } from "../../../src/core/auth-storage.js";
 import { theme } from "../theme/theme.js";

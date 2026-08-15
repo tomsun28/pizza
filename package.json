@@ -60,11 +60,12 @@
 		"prepublishOnly": "npm run clean && npm run build && npm run vendor-tools"
 	},
 	"dependencies": {
+		"@earendil-works/pi-ai": "0.84.2",
+		"@earendil-works/pi-tui": "0.84.2",
 		"@mariozechner/jiti": "^2.6.2",
-		"@earendil-works/pi-ai": "0.80.6",
-		"@earendil-works/pi-tui": "0.80.6",
 		"@silvia-odwyer/photon-node": "^0.3.4",
 		"@sinclair/typebox": "^0.34.41",
+		"@tomsun28/pizza-protocol": "^0.2.1",
 		"ajv": "^8.17.1",
 		"chalk": "^5.5.0",
 		"cli-highlight": "^2.1.11",
@@ -76,14 +77,13 @@
 		"ignore": "^7.0.5",
 		"marked": "^15.0.12",
 		"minimatch": "^10.2.3",
+		"node-pty": "^1.0.0",
 		"proper-lockfile": "^4.1.2",
 		"strip-ansi": "^7.1.0",
 		"undici": "^7.19.1",
 		"uuid": "^11.1.0",
-		"node-pty": "^1.0.0",
-		"yaml": "^2.8.2",
 		"ws": "^8.18.0",
-		"@tomsun28/pizza-protocol": "^0.2.1"
+		"yaml": "^2.8.2"
 	},
 	"overrides": {
 		"rimraf": "6.1.2",

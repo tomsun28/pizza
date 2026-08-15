@@ -5,19 +5,17 @@
 import {
 	type Api,
 	type AssistantMessageEventStream,
+	type BuiltinProvider,
 	type Context,
 	getModels,
 	getProviders,
-	type KnownProvider,
 	type Model,
-	type OAuthProviderInterface,
 	type OpenAICompletionsCompat,
 	type OpenAIResponsesCompat,
 	registerApiProvider,
 	resetApiProviders,
 	type SimpleStreamOptions,
 } from "@earendil-works/pi-ai/compat";
-import { registerOAuthProvider, resetOAuthProviders } from "@earendil-works/pi-ai/oauth";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { type Static, Type } from "@sinclair/typebox";
 import AjvModule from "ajv";
@@ -31,6 +29,13 @@ import {
 	resolveConfigValueUncached,
 	resolveHeadersOrThrow,
 } from "./resolve-config-value.js";
+import {
+	getOAuthAuthExtras,
+	getOAuthProviders,
+	type OAuthProviderInterface,
+	registerOAuthProvider,
+	resetOAuthProviders,
+} from "./oauth.js";
 
 const Ajv = (AjvModule as any).default || AjvModule;
 const ajv = new Ajv();
@@ -41,6 +46,7 @@ const ajv = new Ajv();
  * already good display names. Add entries here only to override/supplement.
  */
 const PROVIDER_NAME_OVERRIDES: Record<string, string> = {};
+
 
 /** Lazily-built map of provider id -> display name from pi-ai built-ins. */
 let providerNameMap: Map<string, string> | undefined;
@@ -230,7 +236,9 @@ export type ResolvedRequestAuth =
 			ok: true;
 			apiKey?: string;
 			headers?: Record<string, string>;
-	  }
+			/** Per-credential baseUrl override (e.g., GitHub Copilot enterprise endpoints) */
+			baseUrl?: string;
+		  }
 	| {
 			ok: false;
 			error: string;
@@ -399,7 +407,8 @@ export class ModelRegistry {
 		modelOverrides: Map<string, Map<string, ModelOverride>>,
 	): Model<Api>[] {
 		return getProviders().flatMap((provider) => {
-			const models = getModels(provider as KnownProvider) as Model<Api>[];
+			const models = getModels(provider as BuiltinProvider) as Model<Api>[];
+
 			const providerOverride = overrides.get(provider);
 			const perModelOverrides = modelOverrides.get(provider);
 
@@ -554,7 +563,7 @@ export class ModelRegistry {
 		const getBuiltInDefaults = (providerName: string): { api: string; baseUrl: string } | undefined => {
 			if (!builtInProviders.has(providerName)) return undefined;
 			if (builtInDefaultsCache.has(providerName)) return builtInDefaultsCache.get(providerName);
-			const builtIn = getModels(providerName as KnownProvider) as Model<Api>[];
+			const builtIn = getModels(providerName as BuiltinProvider) as Model<Api>[];
 			if (builtIn.length === 0) return undefined;
 			const defaults = { api: builtIn[0].api, baseUrl: builtIn[0].baseUrl };
 			builtInDefaultsCache.set(providerName, defaults);
@@ -687,7 +696,7 @@ export class ModelRegistry {
 		try {
 			const providerConfig = this.providerRequestConfigs.get(model.provider);
 			const apiKeyFromAuthStorage = await this.authStorage.getApiKey(model.provider, { includeFallback: false });
-			const apiKey =
+			let apiKey =
 				apiKeyFromAuthStorage ??
 				(providerConfig?.apiKey
 					? resolveConfigValueOrThrow(providerConfig.apiKey, `API key for provider "${model.provider}"`)
@@ -704,6 +713,23 @@ export class ModelRegistry {
 					? { ...model.headers, ...providerHeaders, ...modelHeaders }
 					: undefined;
 
+			// OAuth providers may derive a per-credential baseUrl (e.g. GitHub
+			// Copilot enterprise) from the stored token.
+			let baseUrl: string | undefined;
+			const oauthCred = this.authStorage.get(model.provider);
+			if (oauthCred?.type === "oauth") {
+				try {
+					const extras = await getOAuthAuthExtras(model.provider, oauthCred);
+					if (extras) {
+						baseUrl = extras.baseUrl;
+						if (extras.apiKey && !apiKey) apiKey = extras.apiKey;
+						if (extras.headers) headers = { ...headers, ...extras.headers };
+					}
+				} catch {
+					// Extra auth derivation is best-effort; the plain API key still works
+				}
+			}
+
 			if (providerConfig?.authHeader) {
 				if (!apiKey) {
 					return { ok: false, error: `No API key found for "${model.provider}"` };
@@ -715,6 +741,7 @@ export class ModelRegistry {
 				ok: true,
 				apiKey,
 				headers: headers && Object.keys(headers).length > 0 ? headers : undefined,
+				baseUrl,
 			};
 		} catch (error) {
 			return {

@@ -6,13 +6,8 @@
  * try to refresh tokens simultaneously.
  */
 
-import {
-	getEnvApiKey,
-	type OAuthCredentials,
-	type OAuthLoginCallbacks,
-	type OAuthProviderId,
-} from "@earendil-works/pi-ai/compat";
-import { getOAuthApiKey, getOAuthProvider, getOAuthProviders } from "@earendil-works/pi-ai/oauth";
+import { getEnvApiKey, type OAuthCredentials, type OAuthLoginCallbacks } from "@earendil-works/pi-ai/compat";
+import { getOAuthProvider, getOAuthProviders, type OAuthProviderId } from "./oauth.js";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
@@ -330,7 +325,7 @@ export class AuthStorage {
 	}
 
 	/**
-	 * Get all credentials (for passing to getOAuthApiKey).
+	 * Get all stored credentials.
 	 */
 	getAll(): AuthStorageData {
 		return { ...this.data };
@@ -388,17 +383,11 @@ export class AuthStorage {
 				return { result: { apiKey: provider.getApiKey(cred), newCredentials: cred } };
 			}
 
-			const oauthCreds: Record<string, OAuthCredentials> = {};
-			for (const [key, value] of Object.entries(currentData)) {
-				if (value.type === "oauth") {
-					oauthCreds[key] = value;
-				}
-			}
-
-			const refreshed = await getOAuthApiKey(providerId, oauthCreds);
-			if (!refreshed) {
+			const newCredentials = await provider.refreshToken(cred);
+			if (!newCredentials) {
 				return { result: null };
 			}
+			const refreshed = { apiKey: provider.getApiKey(newCredentials), newCredentials };
 
 			const merged: AuthStorageData = {
 				...currentData,

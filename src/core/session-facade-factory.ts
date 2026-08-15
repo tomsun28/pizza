@@ -708,11 +708,16 @@ export async function createSessionFacade(
 				if (!auth.ok) {
 					throw new Error(auth.error);
 				}
-				return streamSimple(m, context, {
-					...opts,
-					apiKey: auth.apiKey,
-					headers: auth.headers ?? opts?.headers,
-				});
+				return streamSimple(
+					// OAuth providers may carry a per-credential baseUrl (e.g. GitHub Copilot)
+					auth.baseUrl ? { ...m, baseUrl: auth.baseUrl } : m,
+					context,
+					{
+						...opts,
+						apiKey: auth.apiKey,
+						headers: auth.headers ?? opts?.headers,
+					},
+				);
 			}, {
 				thinkingBudgets: settingsManager.getThinkingBudgets(),
 				transport: settingsManager.getTransport(),

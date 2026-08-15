@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Api, Context, Model, OpenAICompletionsCompat } from "@earendil-works/pi-ai/compat";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
-import { getOAuthProvider } from "@earendil-works/pi-ai/oauth";
+import { getOAuthProvider } from "../src/core/oauth.js";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { clearApiKeyCache, ModelRegistry } from "../src/core/model-registry.js";
@@ -1206,5 +1206,37 @@ describe("ModelRegistry", () => {
 				}
 			});
 		});
+	describe("extra built-in models", () => {
+		test("glm-5.3 is available on zai-coding-cn via pi-ai built-ins", () => {
+			const registry = ModelRegistry.inMemory(authStorage);
+
+			const glm53 = registry.find("zai-coding-cn", "glm-5.3");
+			expect(glm53).toBeDefined();
+			expect(glm53!.name).toBe("GLM-5.3");
+			expect(glm53!.contextWindow).toBe(1_000_000);
+			expect(glm53!.api).toBe("openai-completions");
+		});
+
+		test("custom models.json still wins over extra built-in models", () => {
+			writeRawModelsJson({
+				"zai-coding-cn": {
+					models: [
+					{
+						id: "glm-5.3",
+						name: "My GLM-5.3",
+						contextWindow: 123456,
+						maxTokens: 4096,
+					},
+				],
+				},
+			});
+
+			const registry = ModelRegistry.create(authStorage, modelsJsonPath);
+			const model = registry.find("zai-coding-cn", "glm-5.3");
+			expect(model).toBeDefined();
+			expect(model!.name).toBe("My GLM-5.3");
+			expect(model!.contextWindow).toBe(123456);
+		});
+	});
 	});
 });
