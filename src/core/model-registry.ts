@@ -722,8 +722,12 @@ export class ModelRegistry {
 					const extras = await getOAuthAuthExtras(model.provider, oauthCred);
 					if (extras) {
 						baseUrl = extras.baseUrl;
-						if (extras.apiKey && !apiKey) apiKey = extras.apiKey;
 						if (extras.headers) headers = { ...headers, ...extras.headers };
+						// Header-based flows (e.g. Kimi Coding: Authorization: Bearer)
+						// authenticate via headers only — drop the raw access-token
+						// apiKey so the request doesn't double-authenticate.
+						apiKey = extras.apiKey ?? (extras.headers ? undefined : apiKey);
+					}
 					}
 				} catch {
 					// Extra auth derivation is best-effort; the plain API key still works
