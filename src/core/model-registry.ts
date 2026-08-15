@@ -47,7 +47,6 @@ const ajv = new Ajv();
  */
 const PROVIDER_NAME_OVERRIDES: Record<string, string> = {};
 
-
 /** Lazily-built map of provider id -> display name from pi-ai built-ins. */
 let providerNameMap: Map<string, string> | undefined;
 
