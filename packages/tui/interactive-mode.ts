@@ -17,7 +17,6 @@ import type {
   Message,
   Model,
 } from "@earendil-works/pi-ai/compat";
-import type { OAuthProviderId } from "../../src/core/oauth.js";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import type {
   AutocompleteItem,
@@ -57,6 +56,7 @@ import {
   getShareViewerUrl,
   VERSION,
 } from "../../src/config.js";
+import { getApiKeyOptions } from "../../src/core/oauth.js";
 import { parseSkillBlock } from "../../src/core/skill-block-parser.js";
 import { executeBashWithOperations } from "../../src/core/bash-executor.js";
 import {
@@ -4864,12 +4864,11 @@ export class InteractiveMode {
 
   private async showOAuthSelector(mode: "login" | "logout"): Promise<void> {
     if (mode === "logout") {
-      const providers = this.modelRegistryValue.authStorage.list();
-      const loggedInProviders = providers.filter(
-        (p) => this.modelRegistryValue.authStorage.get(p)?.type === "oauth",
-      );
-      if (loggedInProviders.length === 0) {
-        this.showStatus("No OAuth providers logged in. Use /login first.");
+      const stored = this.modelRegistryValue.authStorage
+        .list()
+        .filter((id) => this.modelRegistryValue.authStorage.get(id) !== undefined);
+      if (stored.length === 0) {
+        this.showStatus("No accounts signed in. Use /login first.");
         return;
       }
     }
@@ -4878,17 +4877,19 @@ export class InteractiveMode {
       const selector = new OAuthSelectorComponent(
         mode,
         this.modelRegistryValue.authStorage,
-        async (providerId: string) => {
+        async (providerId: string, kind: "account" | "apiKey") => {
           done();
 
           if (mode === "login") {
-            await this.showLoginDialog(providerId);
+            if (kind === "apiKey") {
+              await this.showApiKeyLoginDialog(providerId);
+            } else {
+              await this.showLoginDialog(providerId);
+            }
           } else {
             // Logout flow
-            const providerInfo = this.modelRegistryValue.authStorage
-              .getOAuthProviders()
-              .find((p) => p.id === providerId);
-            const providerName = providerInfo?.name || providerId;
+            const providerName =
+              this.displayNameForAuth(providerId, kind) || providerId;
 
             try {
               this.modelRegistryValue.authStorage.logout(providerId);
@@ -4911,15 +4912,75 @@ export class InteractiveMode {
     });
   }
 
+  /** Resolve a display name for either auth category. */
+  private displayNameForAuth(providerId: string, kind: "account" | "apiKey"): string {
+    const flows = this.modelRegistryValue.authStorage.getOAuthFlows();
+    if (kind === "account") {
+      return flows.find((f) => f.id === providerId)?.name ?? providerId;
+    }
+    return getApiKeyOptions().find((o) => o.id === providerId)?.name ?? providerId;
+  }
+
+  /** "Sign in with an API key": prompt for the key and store it. */
+  private async showApiKeyLoginDialog(providerId: string): Promise<void> {
+    const providerName = this.displayNameForAuth(providerId, "apiKey");
+    const dialog = new LoginDialogComponent(this.ui, providerId, () => {}, "apiKey");
+
+    this.editorContainer.clear();
+    this.editorContainer.addChild(dialog);
+    this.ui.setFocus(dialog);
+    this.ui.requestRender();
+
+    const restoreEditor = () => {
+      this.editorContainer.clear();
+      this.editorContainer.addChild(this.editor);
+      this.ui.setFocus(this.editor);
+      this.ui.requestRender();
+    };
+
+    try {
+      await this.modelRegistryValue.authStorage.loginApiKey(providerId, {
+        signal: dialog.signal,
+        prompt: async (prompt) => {
+          if (prompt.type === "select") {
+            throw new Error("Unexpected selection prompt during API key login");
+          }
+          if (prompt.type === "manual_code") {
+            return dialog.showManualInput("Paste API key:").then((v) => v ?? "");
+          }
+          // pi-ai API-key login issues text/secret prompts
+          return dialog.showPrompt(
+            prompt.message || `Enter ${providerName}`,
+            prompt.placeholder,
+          );
+        },
+        notify: (event) => {
+          if (event.type === "info" || event.type === "progress") {
+            dialog.showProgress(event.message);
+          }
+        },
+      });
+
+      restoreEditor();
+      this.modelRegistryValue.refresh();
+      await this.updateAvailableProviderCount();
+      this.showStatus(`API key saved for ${providerName}`);
+    } catch (error) {
+      restoreEditor();
+      const message = error instanceof Error ? error.message : String(error);
+      this.showError(`API key login failed: ${message}`);
+    }
+  }
+
   private async showLoginDialog(providerId: string): Promise<void> {
-    const providerInfo = this.modelRegistryValue.authStorage
-      .getOAuthProviders()
-      .find((p) => p.id === providerId);
-    const providerName = providerInfo?.name || providerId;
+    const flow = this.modelRegistryValue.authStorage
+      .getOAuthFlows()
+      .find((f) => f.id === providerId);
+    const providerName = flow?.name || providerId;
     const previousModel = this.currentModel;
 
     // Providers that use callback servers (can paste redirect URL)
-    const usesCallbackServer = providerInfo?.usesCallbackServer ?? false;
+    const usesCallbackServer = flow?.usesCallbackServer ?? false;
 
     // Create login dialog component
     const dialog = new LoginDialogComponent(
@@ -4953,77 +5014,78 @@ export class InteractiveMode {
     };
 
     try {
-      await this.modelRegistryValue.authStorage.login(
-        providerId as OAuthProviderId,
-        {
-          onAuth: (info: { url: string; instructions?: string }) => {
-            dialog.showAuth(info.url, info.instructions);
+      await this.modelRegistryValue.authStorage.login(providerId, {
+        signal: dialog.signal,
 
-            if (usesCallbackServer) {
-              // Show input for manual paste, racing with callback
-              dialog
-                .showManualInput(
-                  "Paste redirect URL below, or complete login in browser:",
-                )
-                .then((value) => {
-                  if (value && manualCodeResolve) {
-                    manualCodeResolve(value);
-                    manualCodeResolve = undefined;
-                  }
-                })
-                .catch(() => {
-                  if (manualCodeReject) {
-                    manualCodeReject(new Error("Login cancelled"));
-                    manualCodeReject = undefined;
-                  }
-                });
-            } else if (providerId === "github-copilot") {
-              // GitHub Copilot polls after onAuth
-              dialog.showWaiting("Waiting for browser authentication...");
-            }
-            // For Anthropic: onPrompt is called immediately after
-          },
-
-          onPrompt: async (prompt: {
-            message: string;
-            placeholder?: string;
-          }) => {
-            return dialog.showPrompt(prompt.message, prompt.placeholder);
-          },
-
-          onProgress: (message: string) => {
-            dialog.showProgress(message);
-          },
-
-          onManualCodeInput: () => manualCodePromise,
-
-          onDeviceCode: (info) => {
-            dialog.showAuth(
-              info.verificationUri,
-              `Enter code: ${info.userCode}`,
-            );
-          },
-
-          onSelect: async (prompt) => {
-            const optionsText = prompt.options
-              .map((o) => `${o.id}: ${o.label}`)
-              .join("\n");
-            try {
+        // pi-ai AuthInteraction.prompt: text / secret / select / manual_code
+        prompt: async (prompt) => {
+          switch (prompt.type) {
+            case "select": {
+              const optionsText = prompt.options
+                .map((o) => `${o.id}: ${o.label}`)
+                .join("\n");
               const input = await dialog.showPrompt(
                 `${prompt.message}\n${optionsText}`,
                 prompt.options[0]?.id,
               );
-              return prompt.options.find(
+              const selected = prompt.options.find(
                 (o) => o.id === input || o.label === input,
               )?.id;
-            } catch {
-              return undefined;
+              if (!selected) throw new Error("Selection cancelled");
+              return selected;
             }
-          },
-
-          signal: dialog.signal,
+            case "manual_code":
+              return manualCodePromise;
+            default:
+              // "text" | "secret"
+              return dialog.showPrompt(prompt.message, prompt.placeholder);
+          }
         },
-      );
+
+        // pi-ai AuthInteraction.notify: auth_url / device_code / info / progress
+        notify: (event) => {
+          switch (event.type) {
+            case "auth_url":
+              dialog.showAuth(event.url, event.instructions);
+
+              if (usesCallbackServer) {
+                // Show input for manual paste, racing with callback
+                dialog
+                  .showManualInput(
+                    "Paste redirect URL below, or complete login in browser:",
+                  )
+                  .then((value) => {
+                    if (value && manualCodeResolve) {
+                      manualCodeResolve(value);
+                      manualCodeResolve = undefined;
+                    }
+                  })
+                  .catch(() => {
+                    if (manualCodeReject) {
+                      manualCodeReject(new Error("Login cancelled"));
+                      manualCodeReject = undefined;
+                    }
+                  });
+              } else if (providerId === "github-copilot") {
+                // GitHub Copilot polls after auth_url
+                dialog.showWaiting("Waiting for browser authentication...");
+              }
+              break;
+
+            case "device_code":
+              dialog.showAuth(
+                event.verificationUri,
+                `Enter code: ${event.userCode}`,
+              );
+              break;
+
+            default:
+              // "info" | "progress"
+              dialog.showProgress(event.message);
+              break;
+          }
+        },
+      });
 
       // Success
       restoreEditor();

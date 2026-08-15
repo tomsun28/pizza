@@ -1,209 +1,135 @@
 /**
- * Pizza-side OAuth provider registry.
+ * OAuth flow registry for pizza.
  *
- * pi-ai 0.84 removed the global OAuth provider registry
- * (registerOAuthProvider/getOAuthProviders/getOAuthApiKey) and moved OAuth
- * flows onto `Provider.auth.oauth` (`OAuthAuth`). Pizza keeps its own small
- * registry with the legacy callback surface (`OAuthLoginCallbacks`) that the
- * TUI login dialogs and extensions are written against, and adapts the new
- * built-in `OAuthAuth` flows to it.
+ * pi-ai 0.84 removed its global OAuth provider registry; OAuth flows now live
+ * on `Provider.auth.oauth` (`OAuthAuth`). Pizza discovers built-in flows from
+ * the provider catalog and lets extensions register additional ones.
+ * Credentials are persisted by AuthStorage (auth.json); request auth
+ * (apiKey / headers / baseUrl) is derived per credential via `toAuth()`.
  */
 
-import type { AuthEvent, AuthPrompt, ModelAuth, OAuthAuth, OAuthCredential } from "@earendil-works/pi-ai/compat";
+import type { ApiKeyAuth, ModelAuth, OAuthAuth } from "@earendil-works/pi-ai/compat";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
-import type { OAuthCredentials, OAuthLoginCallbacks } from "@earendil-works/pi-ai/oauth";
 
-export type OAuthProviderId = string;
-
-/**
- * Legacy OAuth provider interface that pizza's TUI and extension API are
- * written against. Built-in providers are adapted from pi-ai's new
- * `OAuthAuth`; extensions may register their own implementations.
- */
-export interface OAuthProviderInterface {
-	readonly id: OAuthProviderId;
-	readonly name: string;
-	/** Run the login flow, return credentials to persist */
-	login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials>;
-	/** Whether login uses a local callback server and supports manual code input */
-	usesCallbackServer?: boolean;
-	/** Refresh expired credentials, return updated credentials to persist */
-	refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials>;
-	/** Convert credentials to API key string for the provider (sync) */
-	getApiKey(credentials: OAuthCredentials): string;
-	/** Optional: modify models for this provider (e.g., update baseUrl) */
-	modifyModels?(models: any[], credentials: OAuthCredentials): any[];
+/** A login-able OAuth flow: pi-ai `OAuthAuth` plus pizza display metadata. */
+export interface OAuthFlow {
+	id: string;
+	name: string;
+	oauth: OAuthAuth;
+	/** Whether login spins up a local callback server (manual paste supported) */
+	usesCallbackServer: boolean;
 }
 
-/** Request-auth extras derivable from an OAuth credential (per-credential baseUrl/headers) */
-export interface OAuthAuthExtras {
-	apiKey?: string;
-	baseUrl?: string;
-	headers?: Record<string, string>;
+/** A provider that can be configured with a manually entered API key. */
+export interface ApiKeyOption {
+	id: string;
+	name: string;
+	auth: ApiKeyAuth;
 }
 
-/** Providers whose login flow uses a local callback server (manual paste supported) */
-/** Providers whose login flow uses a local callback server (manual paste supported).
- * Device-code flows: github-copilot, kimi-coding, xai. */
+/** Flows whose login uses a local callback server. Device-code flows: github-copilot, kimi-coding, xai. */
 const CALLBACK_SERVER_PROVIDERS = new Set(["anthropic", "openai-codex", "openrouter", "radius"]);
-
-function callbacksToInteraction(callbacks: OAuthLoginCallbacks): {
-	signal: AbortSignal;
-	prompt(prompt: AuthPrompt): Promise<string>;
-	notify(event: AuthEvent): void;
-} {
-	const signal = callbacks.signal ?? new AbortController().signal;
-	return {
-		signal,
-		async prompt(prompt) {
-			switch (prompt.type) {
-				case "select":
-					return (
-						(await callbacks.onSelect({
-							message: prompt.message,
-							options: prompt.options.map((o) => ({
-								id: o.id,
-								label: o.label,
-								...(o.description ? { description: o.description } : {}),
-							})),
-						})) ?? ""
-					);
-				case "manual_code":
-					return (await callbacks.onManualCodeInput?.()) ?? "";
-				default:
-					// "text" | "secret"
-					return callbacks.onPrompt({
-						message: prompt.message,
-						placeholder: prompt.placeholder,
-						allowEmpty: prompt.type !== "secret",
-					});
-			}
-		},
-		notify(event) {
-			switch (event.type) {
-				case "auth_url":
-					callbacks.onAuth({ url: event.url, instructions: event.instructions });
-					break;
-				case "device_code":
-					callbacks.onDeviceCode({
-						userCode: event.userCode,
-						verificationUri: event.verificationUri,
-						intervalSeconds: event.intervalSeconds,
-						expiresInSeconds: event.expiresInSeconds,
-					});
-					break;
-				case "info":
-				case "progress":
-					callbacks.onProgress?.(event.message);
-					break;
-			}
-		},
-	};
-}
-
-/** Strip the `type` discriminator so credentials merge cleanly into auth storage */
-function toCredentials(credential: OAuthCredential): OAuthCredentials {
-	const { type: _type, ...rest } = credential;
-	return rest;
-}
-
-/** Adapt a new-style pi-ai OAuthAuth flow to pizza's legacy interface */
-function adaptOAuthAuth(id: string, name: string, oauth: OAuthAuth): OAuthProviderInterface {
-	return {
-		id,
-		name,
-		usesCallbackServer: CALLBACK_SERVER_PROVIDERS.has(id),
-		async login(callbacks) {
-			const credential = await oauth.login(callbacksToInteraction(callbacks));
-			return toCredentials(credential);
-		},
-		async refreshToken(credentials) {
-			const refreshed = await oauth.refresh(credentials as OAuthCredential, new AbortController().signal);
-			return toCredentials(refreshed);
-		},
-		getApiKey(credentials) {
-			// All built-in flows authenticate with the access token
-			return credentials.access;
-		},
-	};
-}
-
-/** Custom (extension-registered) providers, overriding built-ins by id */
-const customProviders = new Map<string, OAuthProviderInterface>();
-
-/** Built-in providers adapted from pi-ai's provider catalog (lazily built) */
-let builtinAdapted: OAuthProviderInterface[] | undefined;
-
-function getBuiltinAdapted(): OAuthProviderInterface[] {
-	if (!builtinAdapted) {
-		builtinAdapted = getBuiltinProvidersCached().flatMap((provider) => {
-			const oauth = provider.auth.oauth;
-			if (!oauth) return [];
-			const name = oauth.isSubscription && oauth.loginLabel ? oauth.loginLabel : oauth.name || provider.name;
-			return [adaptOAuthAuth(provider.id, name, oauth)];
-		});
-	}
-	return builtinAdapted;
-}
-
-/**
- * Get all registered OAuth providers (built-ins + custom).
- * Custom providers replace built-ins with the same id.
- */
-export function getOAuthProviders(): OAuthProviderInterface[] {
-	const byId = new Map<string, OAuthProviderInterface>();
-	for (const provider of getBuiltinAdapted()) {
-		byId.set(provider.id, provider);
-	}
-	for (const [id, provider] of customProviders) {
-		byId.set(id, provider);
-	}
-	return [...byId.values()];
-}
-
-/** Get an OAuth provider by ID */
-export function getOAuthProvider(id: OAuthProviderId): OAuthProviderInterface | undefined {
-	return customProviders.get(id) ?? getBuiltinAdapted().find((p) => p.id === id);
-}
-
-/** Register a custom OAuth provider (replaces a built-in with the same id) */
-export function registerOAuthProvider(provider: OAuthProviderInterface): void {
-	customProviders.set(provider.id, provider);
-}
-
-/** Unregister a custom OAuth provider. No effect on built-ins. */
-export function unregisterOAuthProvider(id: string): void {
-	customProviders.delete(id);
-}
-
-/** Remove all custom providers, restoring built-ins. */
-export function resetOAuthProviders(): void {
-	customProviders.clear();
-}
-
 
 /** Cached `builtinProviders()` — cheap to construct but avoid rebuilding on every request. */
 let builtinProvidersCache: ReturnType<typeof builtinProviders> | undefined;
 function getBuiltinProvidersCached(): ReturnType<typeof builtinProviders> {
 	return (builtinProvidersCache ??= builtinProviders());
 }
+
+/** Built-in flows derived from pi-ai's provider catalog (lazily built). */
+let builtinFlowsCache: OAuthFlow[] | undefined;
+
+function getBuiltinFlows(): OAuthFlow[] {
+	if (!builtinFlowsCache) {
+		builtinFlowsCache = getBuiltinProvidersCached().flatMap((provider) => {
+			const oauth = provider.auth.oauth;
+			if (!oauth) return [];
+			const name =
+				oauth.isSubscription && oauth.loginLabel ? oauth.loginLabel : oauth.name || provider.name;
+			return [
+				{
+					id: provider.id,
+					name,
+					oauth,
+					usesCallbackServer: CALLBACK_SERVER_PROVIDERS.has(provider.id),
+				},
+			];
+		});
+	}
+	return builtinFlowsCache;
+}
+
+/** Extension-registered flows, overriding built-ins by id. */
+const customFlows = new Map<string, OAuthFlow>();
+
 /**
- * Derive request-auth extras (per-credential baseUrl/headers) from an OAuth
- * credential. Returns undefined for providers without an OAuth flow or when
- * a custom (extension) provider overrides the built-in one.
+ * Get all registered OAuth flows (built-ins + extension-registered).
+ * Custom flows replace built-ins with the same id.
  */
-export async function getOAuthAuthExtras(
-	providerId: OAuthProviderId,
-	credentials: OAuthCredentials,
-): Promise<OAuthAuthExtras | undefined> {
-	if (customProviders.has(providerId)) return undefined;
-	const provider = getBuiltinProvidersCached().find((p) => p.id === providerId);
-	const oauth = provider?.auth.oauth;
-	if (!oauth) return undefined;
-	const auth: ModelAuth = await oauth.toAuth(credentials as OAuthCredential);
-	return {
-		apiKey: auth.apiKey,
-		baseUrl: auth.baseUrl,
-		headers: auth.headers as Record<string, string> | undefined,
-	};
+export function getOAuthFlows(): OAuthFlow[] {
+	const byId = new Map<string, OAuthFlow>();
+	for (const flow of getBuiltinFlows()) {
+		byId.set(flow.id, flow);
+	}
+	for (const [id, flow] of customFlows) {
+		byId.set(id, flow);
+	}
+	return [...byId.values()];
+}
+
+/** Get an OAuth flow by provider ID. */
+export function getOAuthFlow(id: string): OAuthFlow | undefined {
+	return customFlows.get(id) ?? getBuiltinFlows().find((f) => f.id === id);
+}
+
+/**
+ * Register an extension OAuth flow (replaces a built-in with the same id).
+ * `oauth.name` is used as the display name.
+ */
+export function registerOAuthFlow(id: string, oauth: OAuthAuth): void {
+	customFlows.set(id, {
+		id,
+		name: oauth.name,
+		oauth,
+		usesCallbackServer: CALLBACK_SERVER_PROVIDERS.has(id),
+	});
+}
+
+/** Unregister an extension flow. No effect on built-ins. */
+export function unregisterOAuthFlow(id: string): void {
+	customFlows.delete(id);
+}
+
+/** Remove all extension flows, restoring built-ins. */
+export function resetOAuthFlows(): void {
+	customFlows.clear();
+}
+
+/**
+ * Derive request auth (apiKey / headers / per-credential baseUrl) from a
+ * stored OAuth credential via the flow's `toAuth()`. Returns undefined when
+ * no flow is registered for the provider.
+ */
+export async function getOAuthRequestAuth(providerId: string, credentials: object): Promise<ModelAuth | undefined> {
+	const flow = getOAuthFlow(providerId);
+	if (!flow) return undefined;
+	return flow.oauth.toAuth(credentials as never);
+}
+
+/** Cached API-key login options (providers whose `auth.apiKey` has a login). */
+let apiKeyOptionsCache: ApiKeyOption[] | undefined;
+
+/**
+ * All providers that support "Sign in with an API key" (interactive key entry),
+ * derived from pi-ai's provider catalog.
+ */
+export function getApiKeyOptions(): ApiKeyOption[] {
+	if (!apiKeyOptionsCache) {
+		apiKeyOptionsCache = getBuiltinProvidersCached().flatMap((provider) => {
+			const auth = provider.auth.apiKey;
+			if (!auth?.login) return [];
+			return [{ id: provider.id, name: auth.name || provider.name, auth }];
+		});
+	}
+	return apiKeyOptionsCache;
 }

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Api, Context, Model, OpenAICompletionsCompat } from "@earendil-works/pi-ai/compat";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
-import { getOAuthProvider } from "../src/core/oauth.js";
+import { getOAuthFlow } from "../src/core/oauth.js";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { clearApiKeyCache, ModelRegistry } from "../src/core/model-registry.js";
@@ -850,20 +850,21 @@ describe("ModelRegistry", () => {
 				oauth: {
 					name: "Custom Anthropic OAuth",
 					login: async () => ({
+						type: "oauth",
 						access: "custom-access-token",
 						refresh: "custom-refresh-token",
 						expires: Date.now() + 60_000,
 					}),
-					refreshToken: async (credentials) => credentials,
-					getApiKey: (credentials) => credentials.access,
+					refresh: async (credential) => credential,
+					toAuth: async (credential) => ({ apiKey: credential.access }),
 				},
 			});
 
-			expect(getOAuthProvider("anthropic")?.name).toBe("Custom Anthropic OAuth");
+			expect(getOAuthFlow("anthropic")?.name).toBe("Custom Anthropic OAuth");
 
 			registry.unregisterProvider("anthropic");
 
-			expect(getOAuthProvider("anthropic")?.name).not.toBe("Custom Anthropic OAuth");
+			expect(getOAuthFlow("anthropic")?.name).not.toBe("Custom Anthropic OAuth");
 		});
 
 		test("unregisterProvider removes custom streamSimple override and restores built-in API stream handler", () => {
@@ -1206,8 +1207,8 @@ describe("ModelRegistry", () => {
 				}
 			});
 		});
-	describe("extra built-in models", () => {
-		test("glm-5.3 is available on zai-coding-cn via pi-ai built-ins", () => {
+	describe("pi-ai built-in models", () => {
+		test("glm-5.3 is available on zai-coding-cn", () => {
 			const registry = ModelRegistry.inMemory(authStorage);
 
 			const glm53 = registry.find("zai-coding-cn", "glm-5.3");
@@ -1217,17 +1218,17 @@ describe("ModelRegistry", () => {
 			expect(glm53!.api).toBe("openai-completions");
 		});
 
-		test("custom models.json still wins over extra built-in models", () => {
+		test("custom models.json still wins over built-ins", () => {
 			writeRawModelsJson({
 				"zai-coding-cn": {
 					models: [
-					{
-						id: "glm-5.3",
-						name: "My GLM-5.3",
-						contextWindow: 123456,
-						maxTokens: 4096,
-					},
-				],
+						{
+							id: "glm-5.3",
+							name: "My GLM-5.3",
+							contextWindow: 123456,
+							maxTokens: 4096,
+						},
+					],
 				},
 			});
 

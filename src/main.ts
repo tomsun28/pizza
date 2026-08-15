@@ -46,6 +46,7 @@ import { initTheme, stopThemeWatcher } from "../packages/tui/theme/theme.js";
 import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.js";
 import { handleBuiltinCommand } from "./builtin-cli.js";
 import { handleGatewayCommand } from "./gateway-cli.js";
+import { handleAuthCommand } from "./auth-cli.js";
 import { isLocalPath } from "./utils/paths.js";
 
 /**
@@ -433,6 +434,10 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 
 	if (await handleGatewayCommand(args)) {
+		return;
+	}
+
+	if (await handleAuthCommand(args)) {
 		return;
 	}
 

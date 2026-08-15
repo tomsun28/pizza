@@ -658,6 +658,81 @@ export async function listProviders(): Promise<ProviderInfo[]> {
 	return core.invoke<ProviderInfo[]>("list_providers");
 }
 
+/** Auth login option kinds surfaced to the GUI. */
+export interface AuthLoginOption {
+	id: string;
+	name: string;
+	kind: "account" | "apiKey";
+}
+
+/** One JSONL line from `pizza auth login --mode jsonl`. */
+export type AuthLoginEvent =
+	| { type: "prompt"; prompt: { type: string; message: string; placeholder?: string; options?: { id: string; label: string }[] } }
+	| { type: "event"; event: { type: string; url?: string; userCode?: string; verificationUri?: string; message?: string; instructions?: string } }
+	| { type: "done"; ok: boolean; error?: string };
+
+export async function listAuthLoginOptions(): Promise<AuthLoginOption[]> {
+	if (!isTauri()) {
+		const resp = await fetch("/rpc/auth-options");
+		return resp.json();
+	}
+	const core = await import("@tauri-apps/api/core");
+	return core.invoke<AuthLoginOption[]>("list_auth_options");
+}
+
+export async function oauthLogin(provider: string): Promise<void> {
+	if (!isTauri()) {
+		await fetch("/rpc/auth-login", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ provider }),
+		});
+		return;
+	}
+	const core = await import("@tauri-apps/api/core");
+	await core.invoke("oauth_login", { provider });
+}
+
+export async function oauthLoginAnswer(answer: string): Promise<void> {
+	if (!isTauri()) {
+		await fetch("/rpc/auth-login-answer", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ answer }),
+		});
+		return;
+	}
+	const core = await import("@tauri-apps/api/core");
+	await core.invoke("oauth_login_answer", { answer });
+}
+
+export async function oauthLoginCancel(): Promise<void> {
+	if (!isTauri()) {
+		await fetch("/rpc/auth-login-cancel", { method: "POST" });
+		return;
+	}
+	const core = await import("@tauri-apps/api/core");
+	await core.invoke("oauth_login_cancel");
+}
+
+/** Subscribe to JSONL login events emitted by the Rust bridge. */
+export function onAuthLoginEvent(handler: (event: AuthLoginEvent) => void): () => void {
+	let disposed = false;
+	let unlisten: (() => void) | undefined;
+	import("@tauri-apps/api/event").then(({ listen }) =>
+		listen<AuthLoginEvent>("auth_login_event", (e) => {
+			if (!disposed) handler(e.payload);
+		}),
+	).then((fn) => {
+		if (disposed) fn();
+		else unlisten = fn;
+	});
+	return () => {
+		disposed = true;
+		unlisten?.();
+	};
+}
+
 export async function setProviderApiKey(provider: string, apiKey: string): Promise<void> {
 	if (!isTauri()) {
 		await fetch("/rpc/providers", {

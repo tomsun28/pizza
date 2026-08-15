@@ -8,6 +8,13 @@ import { PixelSelect, PixelCombobox } from "@pxlkit/ui-kit";
 import {
 	listProviders,
 	setProviderApiKey,
+	type AuthLoginEvent,
+	type AuthLoginOption,
+	listAuthLoginOptions,
+	oauthLogin,
+	oauthLoginAnswer,
+	oauthLoginCancel,
+	onAuthLoginEvent,
 	removeProviderApiKey,
 	saveCustomProvider,
 	testCustomProvider,
@@ -238,6 +245,143 @@ function GeneralTab({ state }: { state: RpcSessionState | null }) {
 							<span className="text-xs text-muted">{t("schedule.minute")} (0 = {t("schedule.timeoutNoLimit")})</span>
 						</div>
 					</div>
+				</div>
+			</Card>
+		</div>
+	);
+}
+
+/**
+ * "Sign in with an account" dialog — drives the CLI OAuth flow
+ * (`pizza auth login --mode jsonl`) via bridge events.
+ */
+function AccountLoginDialog({
+	provider,
+	providerName,
+	onDone,
+	onCancel,
+}: {
+	provider: string;
+	providerName: string;
+	onDone: (ok: boolean, message?: string) => void;
+	onCancel: () => void;
+}) {
+	const { t } = useTranslation();
+	const [status, setStatus] = useState("");
+	const [authUrl, setAuthUrl] = useState("");
+	const [instructions, setInstructions] = useState("");
+	const [prompt, setPrompt] = useState<AuthLoginEvent | null>(null);
+	const [answer, setAnswer] = useState("");
+	const [busy, setBusy] = useState(true);
+
+	useEffect(() => {
+		const dispose = onAuthLoginEvent((event) => {
+			if (event.type === "prompt") {
+				setPrompt(event);
+				setAnswer("");
+				setBusy(false);
+			} else if (event.type === "event") {
+				const e = event.event;
+				if (e.type === "auth_url" && e.url) {
+					setAuthUrl(e.url);
+					if (e.instructions) setInstructions(e.instructions);
+				} else if (e.type === "device_code" && e.verificationUri) {
+					setAuthUrl(e.verificationUri);
+					setInstructions(`Enter code: ${e.userCode ?? ""}`);
+				} else if (e.message) {
+					setStatus(e.message);
+				}
+			} else if (event.type === "done") {
+				setBusy(false);
+				onDone(event.ok, event.error);
+			}
+		});
+		void oauthLogin(provider).catch((e) => {
+			setBusy(false);
+			onDone(false, e instanceof Error ? e.message : String(e));
+		});
+		return dispose;
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [provider]);
+
+	const submitAnswer = useCallback(async () => {
+		if (!prompt || prompt.type !== "prompt") return;
+		const value = answer.trim();
+		if (!value) return;
+		setBusy(true);
+		setPrompt(null);
+		try {
+			await oauthLoginAnswer(value);
+		} catch (e) {
+			setBusy(false);
+			onDone(false, e instanceof Error ? e.message : String(e));
+		}
+	}, [answer, prompt, onDone]);
+
+	return (
+		<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+			<Card className="w-full max-w-lg">
+				<div className="mb-3 text-sm font-medium text-fg">
+					{t("settings.provider.accountLoginTitle", { name: providerName })}
+				</div>
+				{authUrl && (
+					<div className="mb-3 space-y-1">
+						<a href={authUrl} target="_blank" rel="noreferrer" className="break-all text-xs text-accent underline">
+							{authUrl}
+						</a>
+						{instructions && <p className="font-mono text-[10px] text-muted">{instructions}</p>}
+					</div>
+				)}
+				{status && <p className="mb-3 font-mono text-[10px] text-muted">{status}</p>}
+				{prompt?.type === "prompt" ? (
+					<div className="space-y-2">
+						{prompt.prompt.options ? (
+							<div className="space-y-1">
+								{prompt.prompt.options.map((o) => (
+									<button
+										key={o.id}
+										onClick={() => {
+											setAnswer(o.id);
+											setTimeout(() => void submitAnswer(), 0);
+										}}
+										className="block w-full rounded-md border border-border bg-surface px-3 py-1.5 text-left text-xs text-fg hover:border-accent"
+									>
+										{o.label}
+									</button>
+								))}
+							</div>
+						) : (
+							<div className="flex items-center gap-2">
+								<input
+									autoFocus
+									value={answer}
+									onChange={(e) => setAnswer(e.target.value)}
+									placeholder={prompt.prompt.placeholder ?? prompt.prompt.message}
+									className="flex-1 rounded-md border border-border bg-surface px-3 py-1.5 font-mono text-xs text-fg placeholder:text-muted focus:border-accent focus:outline-none"
+									onKeyDown={(e) => e.key === "Enter" && void submitAnswer()}
+								/>
+								<Button size="sm" tone="accent" onClick={() => void submitAnswer()} disabled={busy}>
+									{t("common.continue")}
+								</Button>
+							</div>
+						)}
+					</div>
+				) : (
+					<p className="font-mono text-[10px] text-muted">
+						{busy ? t("settings.provider.loginWaiting") : t("settings.provider.loginIdle")}
+					</p>
+				)}
+				<div className="mt-4 flex justify-end gap-2">
+					<Button
+						size="sm"
+						tone="neutral"
+						onClick={() => {
+							void oauthLoginCancel().catch(() => {});
+							onCancel();
+						}}
+					>
+						{t("common.cancel")}
+					</Button>
 				</div>
 			</Card>
 		</div>
@@ -658,9 +802,12 @@ function ProviderTab({
 }) {
 	const { t } = useTranslation();
 	const [providers, setProviders] = useState<ProviderInfo[]>([]);
+	const [accountOptions, setAccountOptions] = useState<AuthLoginOption[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState("");
 	const [showAddInline, setShowAddInline] = useState(isSetupMode);
+	const [loginProvider, setLoginProvider] = useState<{ id: string; name: string } | null>(null);
+	const [authCategory, setAuthCategory] = useState<"account" | "apiKey" | null>(isSetupMode ? "apiKey" : null);
 
 	const refresh = useCallback(async () => {
 		try {
@@ -677,6 +824,12 @@ function ProviderTab({
 	useEffect(() => {
 		refresh();
 	}, [refresh]);
+
+	useEffect(() => {
+		listAuthLoginOptions()
+			.then((options) => setAccountOptions(options.filter((o) => o.kind === "account")))
+			.catch(() => setAccountOptions([]));
+	}, []);
 
 	if (loading) {
 		return (
@@ -697,11 +850,87 @@ function ProviderTab({
 	const configured = providers.filter((p) => p.has_api_key);
 	const available = providers.filter((p) => !p.has_api_key);
 
+	const oauthSignedIn = new Set(
+		providers.filter((p) => p.has_api_key && p.auth_type === "oauth").map((p) => p.id),
+	);
+
 	return (
 		<div className="space-y-6">
+			{loginProvider && (
+				<AccountLoginDialog
+					provider={loginProvider.id}
+					providerName={loginProvider.name}
+					onDone={(ok, message) => {
+						setLoginProvider(null);
+						refresh();
+						if (!ok && message) setError(message);
+						if (ok && onConfigured) void onConfigured();
+					}}
+					onCancel={() => setLoginProvider(null)}
+				/>
+			)}
+			{authCategory === null ? (
+				<Card>
+					<div className="mb-3 text-sm font-medium text-fg">{t("settings.provider.chooseCategory")}</div>
+					<div className="grid gap-3 sm:grid-cols-2">
+						{accountOptions.length > 0 && (
+							<button
+								onClick={() => setAuthCategory("account")}
+								className="rounded-lg border border-border bg-surface p-4 text-left transition-colors hover:border-accent"
+							>
+								<div className="text-sm font-medium text-fg">{t("settings.provider.accountSection")}</div>
+								<div className="mt-1 text-xs text-muted">{t("settings.provider.accountSectionHint")}</div>
+							</button>
+						)}
+						<button
+							onClick={() => setAuthCategory("apiKey")}
+							className="rounded-lg border border-border bg-surface p-4 text-left transition-colors hover:border-accent"
+						>
+							<div className="text-sm font-medium text-fg">{t("settings.provider.apiKeySection")}</div>
+							<div className="mt-1 text-xs text-muted">{t("settings.provider.apiKeySectionHint")}</div>
+						</button>
+					</div>
+				</Card>
+			) : authCategory === "account" ? (
+				<Card>
+					<div className="mb-3 flex items-center justify-between">
+						<div className="text-sm font-medium text-fg">{t("settings.provider.accountSection")}</div>
+						<Button size="sm" tone="neutral" onClick={() => setAuthCategory(null)}>
+							{t("common.back")}
+						</Button>
+					</div>
+					<div className="space-y-0">
+						{accountOptions.map((o) => (
+							<div key={o.id} className="flex items-center justify-between border-b border-border/60 py-3 last:border-0">
+								<div className="flex items-center gap-2">
+									<span className="text-sm font-medium text-fg">{o.name}</span>
+									{oauthSignedIn.has(o.id) ? (
+										<Badge tone="accent">{t("settings.provider.oauth")}</Badge>
+									) : (
+										<Badge tone="neutral">{t("settings.provider.notConfigured")}</Badge>
+									)}
+								</div>
+								<Button size="sm" tone="accent" onClick={() => setLoginProvider({ id: o.id, name: o.name })}>
+									{t("settings.provider.signIn")}
+								</Button>
+							</div>
+						))}
+					</div>
+				</Card>
+			) : (
 			<Card>
 				<div className="mb-3 flex items-center justify-between">
-					<div className="text-sm font-medium text-fg">{t("settings.provider.title")}</div>
+					<div className="text-sm font-medium text-fg">{t("settings.provider.apiKeySection")}</div>
+					<div className="flex items-center gap-2">
+						{!isSetupMode && (
+							<Button size="sm" tone="accent" iconLeft={<Plus className="h-3.5 w-3.5" />} onClick={() => setShowAddInline(true)}>
+								{t("settings.provider.addProvider")}
+							</Button>
+						)}
+						<Button size="sm" tone="neutral" onClick={() => setAuthCategory(null)}>
+							{t("common.back")}
+						</Button>
+					</div>
 					{!isSetupMode && (
 						<Button size="sm" tone="accent" iconLeft={<Plus className="h-3.5 w-3.5" />} onClick={() => setShowAddInline(true)}>
 							{t("settings.provider.addProvider")}
@@ -740,6 +969,7 @@ function ProviderTab({
 					/>
 				))}
 			</Card>
+			)}
 		</div>
 	);
 }

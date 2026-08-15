@@ -1,4 +1,4 @@
-import { getOAuthProviders } from "../../../src/core/oauth.js";
+import { getApiKeyOptions, getOAuthFlows } from "../../../src/core/oauth.js";
 import { Container, type Focusable, getKeybindings, Input, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
 import { exec } from "child_process";
 import { theme } from "../theme/theme.js";
@@ -30,18 +30,24 @@ export class LoginDialogComponent extends Container implements Focusable {
 		tui: TUI,
 		providerId: string,
 		private onComplete: (success: boolean, message?: string) => void,
+		/** "apiKey" renders an API-key entry dialog instead of an OAuth login dialog. */
+		mode: "oauth" | "apiKey" = "oauth",
 	) {
 		super();
 		this.tui = tui;
 
-		const providerInfo = getOAuthProviders().find((p) => p.id === providerId);
-		const providerName = providerInfo?.name || providerId;
+		const flow = getOAuthFlows().find((f) => f.id === providerId);
+		const providerName =
+			mode === "apiKey"
+				? getApiKeyOptions().find((o) => o.id === providerId)?.name || providerId
+				: flow?.name || providerId;
 
 		// Top border
 		this.addChild(new DynamicBorder());
 
 		// Title
-		this.addChild(new Text(theme.fg("warning", `Login to ${providerName}`), 1, 0));
+		const title = mode === "apiKey" ? `Sign in with an API key — ${providerName}` : `Login to ${providerName}`;
+		this.addChild(new Text(theme.fg("warning", title), 1, 0));
 
 		// Dynamic content area
 		this.contentContainer = new Container();

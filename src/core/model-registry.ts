@@ -4,6 +4,7 @@
 
 import {
 	type Api,
+	type OAuthAuth,
 	type AssistantMessageEventStream,
 	type BuiltinProvider,
 	type Context,
@@ -29,13 +30,7 @@ import {
 	resolveConfigValueUncached,
 	resolveHeadersOrThrow,
 } from "./resolve-config-value.js";
-import {
-	getOAuthAuthExtras,
-	getOAuthProviders,
-	type OAuthProviderInterface,
-	registerOAuthProvider,
-	resetOAuthProviders,
-} from "./oauth.js";
+import { getOAuthFlows, getOAuthRequestAuth, registerOAuthFlow, resetOAuthFlows } from "./oauth.js";
 
 const Ajv = (AjvModule as any).default || AjvModule;
 const ajv = new Ajv();
@@ -356,7 +351,7 @@ export class ModelRegistry {
 
 		// Ensure dynamic API/OAuth registrations are rebuilt from current provider state.
 		resetApiProviders();
-		resetOAuthProviders();
+		resetOAuthFlows();
 
 		this.loadModels();
 
@@ -389,12 +384,17 @@ export class ModelRegistry {
 		const builtInModels = this.loadBuiltInModels(overrides, modelOverrides);
 		let combined = this.mergeCustomModels(builtInModels, customModels);
 
-		// Let OAuth providers modify their models (e.g., update baseUrl)
-		for (const oauthProvider of this.authStorage.getOAuthProviders()) {
-			const cred = this.authStorage.get(oauthProvider.id);
-			if (cred?.type === "oauth" && oauthProvider.modifyModels) {
-				combined = oauthProvider.modifyModels(combined, cred);
-			}
+		// Filter OAuth-account-restricted models (e.g. GitHub Copilot publishes
+		// the account's available model ids on the credential). Per-credential
+		// baseUrl is applied at request time via getOAuthRequestAuth().
+		for (const oauthFlow of this.authStorage.getOAuthFlows()) {
+			const cred = this.authStorage.get(oauthFlow.id);
+			if (cred?.type !== "oauth") continue;
+			const available = Array.isArray(cred.availableModelIds)
+				? new Set<string>(cred.availableModelIds as string[])
+				: undefined;
+			if (!available) continue;
+			combined = combined.filter((m) => m.provider !== oauthFlow.id || available.has(m.id));
 		}
 
 		this.models = combined;
@@ -718,15 +718,14 @@ export class ModelRegistry {
 			const oauthCred = this.authStorage.get(model.provider);
 			if (oauthCred?.type === "oauth") {
 				try {
-					const extras = await getOAuthAuthExtras(model.provider, oauthCred);
+					const extras = await getOAuthRequestAuth(model.provider, oauthCred);
 					if (extras) {
 						baseUrl = extras.baseUrl;
-						if (extras.headers) headers = { ...headers, ...extras.headers };
+						if (extras.headers) headers = { ...headers, ...extras.headers } as Record<string, string>;
 						// Header-based flows (e.g. Kimi Coding: Authorization: Bearer)
 						// authenticate via headers only — drop the raw access-token
 						// apiKey so the request doesn't double-authenticate.
 						apiKey = extras.apiKey ?? (extras.headers ? undefined : apiKey);
-					}
 					}
 				} catch {
 					// Extra auth derivation is best-effort; the plain API key still works
@@ -828,14 +827,9 @@ export class ModelRegistry {
 	}
 
 	private applyProviderConfig(providerName: string, config: ProviderConfigInput): void {
-		// Register OAuth provider if provided
+		// Register extension OAuth flow (id = provider name)
 		if (config.oauth) {
-			// Ensure the OAuth provider ID matches the provider name
-			const oauthProvider: OAuthProviderInterface = {
-				...config.oauth,
-				id: providerName,
-			};
-			registerOAuthProvider(oauthProvider);
+			registerOAuthFlow(providerName, config.oauth);
 		}
 
 		if (config.streamSimple) {
@@ -877,13 +871,6 @@ export class ModelRegistry {
 				} as Model<Api>);
 			}
 
-			// Apply OAuth modifyModels if credentials exist (e.g., to update baseUrl)
-			if (config.oauth?.modifyModels) {
-				const cred = this.authStorage.get(providerName);
-				if (cred?.type === "oauth") {
-					this.models = config.oauth.modifyModels(this.models, cred);
-				}
-			}
 		} else if (config.baseUrl || config.headers) {
 			// Override-only: update baseUrl for existing models. Request headers are resolved per request.
 			this.models = this.models.map((m) => {
@@ -908,7 +895,7 @@ export interface ProviderConfigInput {
 	headers?: Record<string, string>;
 	authHeader?: boolean;
 	/** OAuth provider for /login support */
-	oauth?: Omit<OAuthProviderInterface, "id">;
+	oauth?: OAuthAuth;
 	models?: Array<{
 		id: string;
 		name: string;

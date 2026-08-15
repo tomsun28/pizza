@@ -13,7 +13,8 @@
     "loadingHistory": "Loading conversation...",
     "backToAgent": "Back to Agent",
     "back": "Back",
-    "forward": "Forward"
+    "forward": "Forward",
+    "continue": "Continue"
   },
   "layout": {
     "brandTagline": "Create together.",
@@ -534,7 +535,16 @@
       "testRunning": "Testing...",
       "testDone": "Test complete!",
       "testDuration": "{{ms}}ms",
-      "confirmRemove": "Remove API key for {{label}}?"
+      "confirmRemove": "Remove API key for {{label}}?",
+      "accountSection": "Sign in with an account",
+      "apiKeySection": "Sign in with an API key",
+      "signIn": "Sign in",
+      "accountLoginTitle": "Sign in — {{name}}",
+      "loginWaiting": "Waiting for the login flow…",
+      "loginIdle": "Login flow finished.",
+      "chooseCategory": "How would you like to sign in?",
+      "accountSectionHint": "Subscription accounts via OAuth (Claude, ChatGPT, Copilot…)",
+      "apiKeySectionHint": "Enter a provider API key manually"
     },
     "setup": {
       "title": "First-time setup",

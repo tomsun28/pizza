@@ -12,8 +12,9 @@
     "starting": "启动中...",
     "loadingHistory": "加载对话中...",
     "backToAgent": "返回助理",
-    "back": "后退",
-    "forward": "前进"
+    "back": "返回",
+    "forward": "前进",
+    "continue": "继续"
   },
   "layout": {
     "brandTagline": "一起创造。",
@@ -534,7 +535,16 @@
       "testRunning": "测试中...",
       "testDone": "测试完成!",
       "testDuration": "耗时 {{ms}}ms",
-      "confirmRemove": "确认移除 {{label}} 的 API 密钥?"
+      "confirmRemove": "确认移除 {{label}} 的 API 密钥?",
+      "accountSection": "使用账号登录",
+      "apiKeySection": "使用 API 密钥登录",
+      "signIn": "登录",
+      "accountLoginTitle": "登录 — {{name}}",
+      "loginWaiting": "等待登录流程…",
+      "loginIdle": "登录流程已结束。",
+      "chooseCategory": "选择登录方式",
+      "accountSectionHint": "通过 OAuth 使用订阅账号(Claude、ChatGPT、Copilot…)",
+      "apiKeySectionHint": "手动输入服务商 API 密钥"
     },
     "setup": {
       "title": "首次设置",

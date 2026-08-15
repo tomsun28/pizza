@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { registerOAuthProvider } from "../src/core/oauth.js";
+import { registerOAuthFlow } from "../src/core/oauth.js";
 import lockfile from "proper-lockfile";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.js";
@@ -301,21 +301,20 @@ describe("AuthStorage", () => {
 	describe("oauth lock compromise handling", () => {
 		test("returns undefined on compromised lock and allows a later retry", async () => {
 			const providerId = `test-oauth-provider-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-			registerOAuthProvider({
-				id: providerId,
+			registerOAuthFlow(providerId, {
 				name: "Test OAuth Provider",
 				async login() {
 					throw new Error("Not used in this test");
 				},
-				async refreshToken(credentials) {
+				async refresh(credential) {
 					return {
-						...credentials,
+						...credential,
 						access: "refreshed-access-token",
 						expires: Date.now() + 60_000,
 					};
 				},
-				getApiKey(credentials) {
-					return `Bearer ${credentials.access}`;
+				async toAuth(credential) {
+					return { apiKey: credential.access };
 				},
 			});
 
@@ -343,7 +342,7 @@ describe("AuthStorage", () => {
 			lockSpy.mockRestore();
 
 			const secondTry = await authStorage.getApiKey(providerId);
-			expect(secondTry).toBe("Bearer refreshed-access-token");
+			expect(secondTry).toBe("refreshed-access-token");
 		});
 	});
 
@@ -457,6 +456,46 @@ describe("AuthStorage", () => {
 			const apiKey = await authStorage.getApiKey("anthropic");
 
 			expect(apiKey).toBe("stored-key");
+		});
+	});
+
+	describe("API key login (Sign in with an API key)", () => {
+		test("getApiKeyOptions returns providers with interactive key entry", async () => {
+			const { getApiKeyOptions } = await import("../src/core/oauth.js");
+			const options = getApiKeyOptions();
+			expect(options.length).toBeGreaterThan(10);
+			const anthropic = options.find((o) => o.id === "anthropic");
+			expect(anthropic?.name).toBe("Anthropic API key");
+			expect(anthropic?.auth.login).toBeDefined();
+		});
+
+		test("loginApiKey stores the entered key", async () => {
+			await authStorage.loginApiKey("anthropic", {
+				prompt: async () => "sk-ant-test-key",
+				notify: () => {},
+			});
+
+			const cred = authStorage.get("anthropic");
+			expect(cred).toEqual({ type: "api_key", key: "sk-ant-test-key" });
+			expect(await authStorage.getApiKey("anthropic")).toBe("sk-ant-test-key");
+		});
+
+		test("loginApiKey rejects empty key", async () => {
+			await expect(
+				authStorage.loginApiKey("anthropic", {
+					prompt: async () => "",
+					notify: () => {},
+				}),
+			).rejects.toThrow("No API key entered");
+		});
+
+		test("loginApiKey rejects providers without key login", async () => {
+			await expect(
+				authStorage.loginApiKey("not-a-provider", {
+					prompt: async () => "x",
+					notify: () => {},
+				}),
+			).rejects.toThrow("does not support API key login");
 		});
 	});
 });
