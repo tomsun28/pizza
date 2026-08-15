@@ -1172,20 +1172,20 @@ describe("ModelRegistry", () => {
 				expect(model).toBeDefined();
 
 				const auth1 = await registry.getApiKeyAndHeaders(model!);
-				expect(auth1).toEqual({
-					ok: true,
-					apiKey: "token-1",
-					headers: { Authorization: "Bearer token-1" },
-				});
+				expect(auth1.ok).toBe(true);
+				if (auth1.ok) {
+					expect(auth1.apiKey).toBe("token-1");
+					expect(auth1.headers?.["Authorization"]).toBe("Bearer token-1");
+				}
 
 				writeFileSync(tokenFile, "token-2");
 
 				const auth2 = await registry.getApiKeyAndHeaders(model!);
-				expect(auth2).toEqual({
-					ok: true,
-					apiKey: "token-2",
-					headers: { Authorization: "Bearer token-2" },
-				});
+				expect(auth2.ok).toBe(true);
+				if (auth2.ok) {
+					expect(auth2.apiKey).toBe("token-2");
+					expect(auth2.headers?.["Authorization"]).toBe("Bearer token-2");
+				}
 			});
 
 			test("getApiKeyAndHeaders returns an error for failed authHeader resolution", async () => {

@@ -22,7 +22,7 @@ import { type Static, Type } from "@sinclair/typebox";
 import AjvModule from "ajv";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
-import { getAgentDir } from "../config.js";
+import { APP_NAME, getAgentDir, VERSION } from "../config.js";
 import type { AuthStorage } from "./auth-storage.js";
 import {
 	clearConfigValueCache,
@@ -738,6 +738,15 @@ export class ModelRegistry {
 				}
 				headers = { ...headers, Authorization: `Bearer ${apiKey}` };
 			}
+
+			// Inject pizza's own identifying headers as defaults. Anything already
+			// set by the model/provider/extension/OAuth/authHeader above takes
+			// precedence. pi-ai may still override User-Agent for certain providers
+			// (e.g. kimi-coding, codex) — that's expected.
+			headers = {
+				"User-Agent": `${APP_NAME}/${VERSION}`,
+				...headers,
+			};
 
 			return {
 				ok: true,
