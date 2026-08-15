@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Api, Context, Model, OpenAICompletionsCompat } from "@earendil-works/pi-ai/compat";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
-import { getOAuthProvider } from "@earendil-works/pi-ai/oauth";
+import { getOAuthFlow } from "../src/core/oauth.js";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { clearApiKeyCache, ModelRegistry } from "../src/core/model-registry.js";
@@ -850,20 +850,21 @@ describe("ModelRegistry", () => {
 				oauth: {
 					name: "Custom Anthropic OAuth",
 					login: async () => ({
+						type: "oauth",
 						access: "custom-access-token",
 						refresh: "custom-refresh-token",
 						expires: Date.now() + 60_000,
 					}),
-					refreshToken: async (credentials) => credentials,
-					getApiKey: (credentials) => credentials.access,
+					refresh: async (credential) => credential,
+					toAuth: async (credential) => ({ apiKey: credential.access }),
 				},
 			});
 
-			expect(getOAuthProvider("anthropic")?.name).toBe("Custom Anthropic OAuth");
+			expect(getOAuthFlow("anthropic")?.name).toBe("Custom Anthropic OAuth");
 
 			registry.unregisterProvider("anthropic");
 
-			expect(getOAuthProvider("anthropic")?.name).not.toBe("Custom Anthropic OAuth");
+			expect(getOAuthFlow("anthropic")?.name).not.toBe("Custom Anthropic OAuth");
 		});
 
 		test("unregisterProvider removes custom streamSimple override and restores built-in API stream handler", () => {
@@ -1171,20 +1172,20 @@ describe("ModelRegistry", () => {
 				expect(model).toBeDefined();
 
 				const auth1 = await registry.getApiKeyAndHeaders(model!);
-				expect(auth1).toEqual({
-					ok: true,
-					apiKey: "token-1",
-					headers: { Authorization: "Bearer token-1" },
-				});
+				expect(auth1.ok).toBe(true);
+				if (auth1.ok) {
+					expect(auth1.apiKey).toBe("token-1");
+					expect(auth1.headers?.["Authorization"]).toBe("Bearer token-1");
+				}
 
 				writeFileSync(tokenFile, "token-2");
 
 				const auth2 = await registry.getApiKeyAndHeaders(model!);
-				expect(auth2).toEqual({
-					ok: true,
-					apiKey: "token-2",
-					headers: { Authorization: "Bearer token-2" },
-				});
+				expect(auth2.ok).toBe(true);
+				if (auth2.ok) {
+					expect(auth2.apiKey).toBe("token-2");
+					expect(auth2.headers?.["Authorization"]).toBe("Bearer token-2");
+				}
 			});
 
 			test("getApiKeyAndHeaders returns an error for failed authHeader resolution", async () => {
@@ -1206,5 +1207,37 @@ describe("ModelRegistry", () => {
 				}
 			});
 		});
+	describe("pi-ai built-in models", () => {
+		test("glm-5.3 is available on zai-coding-cn", () => {
+			const registry = ModelRegistry.inMemory(authStorage);
+
+			const glm53 = registry.find("zai-coding-cn", "glm-5.3");
+			expect(glm53).toBeDefined();
+			expect(glm53!.name).toBe("GLM-5.3");
+			expect(glm53!.contextWindow).toBe(1_000_000);
+			expect(glm53!.api).toBe("openai-completions");
+		});
+
+		test("custom models.json still wins over built-ins", () => {
+			writeRawModelsJson({
+				"zai-coding-cn": {
+					models: [
+						{
+							id: "glm-5.3",
+							name: "My GLM-5.3",
+							contextWindow: 123456,
+							maxTokens: 4096,
+						},
+					],
+				},
+			});
+
+			const registry = ModelRegistry.create(authStorage, modelsJsonPath);
+			const model = registry.find("zai-coding-cn", "glm-5.3");
+			expect(model).toBeDefined();
+			expect(model!.name).toBe("My GLM-5.3");
+			expect(model!.contextWindow).toBe(123456);
+		});
+	});
 	});
 });

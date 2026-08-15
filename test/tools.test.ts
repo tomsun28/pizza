@@ -3,7 +3,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeBashWithOperations } from "../src/core/bash-executor.js";
-import { executeBuiltinCommand } from "../src/core/tools/builtin-commands.js";
+import { executeBuiltinCommand, parseTellInput } from "../src/core/tools/builtin-commands.js";
 import { createBashTool, createLocalBashOperations } from "../src/core/tools/bash.js";
 import { formatLineAnchor } from "../src/core/tools/line-anchors.js";
 import {
@@ -456,6 +456,22 @@ describe("Coding Agent Tools", () => {
 			expect(result.stdout).toContain("--edits, -e");
 			expect(result.stdout).toContain("--range, -r");
 			expect(result.stdout).toContain("Examples:");
+		});
+
+		it("parses tell send positionals without swallowing the first message word when --to is given", () => {
+			// `_tell send --to X smoke test ...` — with `--to` as a flag, ALL
+			// positionals after the action are the message ("smoke" must survive).
+			const parsed = parseTellInput(["send", "--to", "/proj/web", "smoke", "test", "delivery"], undefined);
+			expect(parsed.action).toBe("send");
+			expect(parsed.to).toBe("/proj/web");
+			expect(parsed.message).toBe("smoke test delivery");
+		});
+
+		it("parses tell send in the positional <to> <message...> form", () => {
+			const parsed = parseTellInput(["send", "/proj/web", "hello", "there"], undefined);
+			expect(parsed.action).toBe("send");
+			expect(parsed.to).toBe("/proj/web");
+			expect(parsed.message).toBe("hello there");
 		});
 
 		it("should route tell list through the cli tool when the tell option is set", async () => {

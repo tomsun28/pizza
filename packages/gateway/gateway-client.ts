@@ -15,7 +15,6 @@ import {
 	type GatewayTellResult,
 	type MessageSource,
 	GATEWAY_ASYNC_ACK_TIMEOUT,
-	GATEWAY_DEFAULT_TELL_TIMEOUT,
 } from "./protocol.js";
 
 /** Options for {@link GatewayClient}. */
@@ -25,6 +24,10 @@ export interface GatewayClientOptions {
 	/** Connect timeout (ms), default 5000. */
 	connectTimeout?: number;
 }
+
+/** The outcome of a delivered tell: a delivery ack (current gateways) or,
+ * for legacy gateways that answered synchronously, the reply itself. */
+export type TellDelivery = { messageId: string; reply?: undefined } | { reply: string; messageId?: undefined };
 
 /** A short-lived gateway client: connect → tell → disconnect. */
 export class GatewayClient {
@@ -116,63 +119,43 @@ export class GatewayClient {
 	}
 
 	/**
-	 * Send a `tell` message to another agent workspace and wait for the reply.
+	 * Deliver a `tell` message to another agent workspace. Delivery is always
+	 * asynchronous: the gateway acks as soon as the target has accepted the
+	 * message (prompted or queued as a follow-up) and resolves here with the
+	 * assigned messageId. The target agent's final reply is relayed back to the
+	 * sender automatically by the gateway as an inbound `<message>` turn.
+	 *
 	 * `from` carries the sender provenance ({@link MessageSource}); the gateway
 	 * attaches it to the delivered prompt so the receiving agent knows who
-	 * messaged it and can reply.
-	 * Resolves with the target agent final assistant text. Throws on error.
+	 * messaged it (and where to reply).
 	 */
-	async tell(
-		to: string,
-		message: string,
-		from: MessageSource,
-		timeout: number = GATEWAY_DEFAULT_TELL_TIMEOUT,
-	): Promise<string> {
+	async tell(to: string, message: string, from: MessageSource): Promise<TellDelivery> {
 		if (!this.socket) {
 			throw new Error("GatewayClient is not connected — call connect() first");
 		}
 		const id = `t_${++this.requestId}`;
 		const result = await this.sendTell(
-			{ type: "tell", id, to, message, from, timeout },
+			{ type: "tell", id, to, message, from },
 			id,
-			timeout + 5_000, // grace window beyond the gateway's own timeout
-			`tell to "${to}" timed out after ${timeout}ms`,
+			GATEWAY_ASYNC_ACK_TIMEOUT,
+			`tell to "${to}" timed out after ${GATEWAY_ASYNC_ACK_TIMEOUT}ms — the message may still have been delivered (the target agent may be busy with a long turn); do not blindly resend`,
 		);
 		if (!result.ok) {
 			throw new Error(result.error);
 		}
-		if (!("reply" in result)) {
-			// An async ack should not reach the sync tell path; stay defensive.
-			throw new Error("unexpected async delivery ack on a synchronous tell");
+		if ("messageId" in result) {
+			return { messageId: result.messageId };
 		}
-		return result.reply;
+		// Legacy gateway that still answers synchronously with the reply text.
+		return { reply: result.reply };
 	}
 
 	/**
-	 * Send a tell without waiting for the target agent to finish its turn. The
-	 * gateway acks as soon as the target has accepted the prompt and resolves
-	 * with the assigned messageId (the receiver is expected to reply on its own
-	 * via a tell back to `from`). Symmetric, non-blocking messaging.
+	 * @deprecated Delivery is always asynchronous now — identical to
+	 * {@link tell}. Kept so older callers keep compiling.
 	 */
-	async tellAsync(to: string, message: string, from: MessageSource): Promise<string> {
-		if (!this.socket) {
-			throw new Error("GatewayClient is not connected — call connect() first");
-		}
-		const id = `t_${++this.requestId}`;
-		const result = await this.sendTell(
-			{ type: "tell", id, to, message, from, async: true },
-			id,
-			GATEWAY_ASYNC_ACK_TIMEOUT,
-			`tellAsync to "${to}" timed out waiting for the delivery ack`,
-		);
-		if (!result.ok) {
-			throw new Error(result.error);
-		}
-		if (!("messageId" in result)) {
-			// A sync reply should not reach the async path; stay defensive.
-			throw new Error("unexpected synchronous reply on an async tell");
-		}
-		return result.messageId;
+	async tellAsync(to: string, message: string, from: MessageSource): Promise<TellDelivery> {
+		return this.tell(to, message, from);
 	}
 
 	/** Close the connection. Safe to call multiple times. */

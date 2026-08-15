@@ -4,6 +4,7 @@
 
 import { spawn } from "node:child_process";
 import { waitForChildProcess } from "../utils/child-process.js";
+import { getShellEnv } from "../utils/shell.js";
 
 /**
  * Options for executing shell commands.
@@ -42,6 +43,12 @@ export async function execCommand(
 			cwd,
 			shell: false,
 			stdio: ["ignore", "pipe", "pipe"],
+			// Inherit the login-shell PATH so user-installed tools (homebrew, nvm,
+			// cargo, etc.) are found even when the agent was launched from a GUI
+			// context with a minimal PATH (e.g. macOS launchd/Tauri). Without this,
+			// `npm install -g agent-browser` fails with exit 1 because `npm` is not
+			// on the inherited PATH.
+			env: getShellEnv(),
 		});
 
 		let stdout = "";

@@ -45,6 +45,10 @@ fn main() {
 			bridge::git_log,
 			bridge::git_show,
 			bridge::fetch_skills_sh,
+			bridge::oauth_login,
+			bridge::oauth_login_answer,
+			bridge::oauth_login_cancel,
+			bridge::list_auth_options,
 		])
 		.setup(|app| {
 			bridge::start_scheduler_sidecar_guard(app.handle().clone());

@@ -24,6 +24,8 @@ function isTauri(): boolean {
 	return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+
 /** Format a token count compactly (e.g. 12.3k, 1.2M). */
 function formatTokens(n: number): string {
 	if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -566,6 +568,16 @@ export function Composer({
 			setOptimisticModel(null);
 		}
 	}, []);
+
+	const currentThinking = state?.thinkingLevel ?? "off";
+	const handleThinkingChange = useCallback(async (level: string) => {
+		try {
+			await sendCommandAwait({ type: "set_thinking_level", level: level as RpcSessionState["thinkingLevel"] });
+			onRefreshState?.();
+		} catch (e) {
+			console.error("[composer] set_thinking_level failed:", e);
+		}
+	}, [onRefreshState]);
 
 	// Approval policy for the current session (safe mode). Selected inline in
 	// the composer so the user can choose per-session without visiting Settings.
@@ -1277,9 +1289,9 @@ ${insert}`;
 									title={t("composer.approvalPolicy")}
 								>
 									{safeMode ? (
-										<Shield className="h-3.5 w-3.5" />
-									) : (
 										<ShieldCheck className="h-3.5 w-3.5" />
+									) : (
+										<Shield className="h-3.5 w-3.5" />
 									)}
 									<span>{safeMode ? t("composer.approvalOn") : t("composer.approvalOff")}</span>
 									<ChevronDown className="h-3 w-3" />
@@ -1294,7 +1306,7 @@ ${insert}`;
 												!safeMode ? "text-fg" : "text-muted",
 											)}
 										>
-											<ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+											<Shield className="mt-0.5 h-3.5 w-3.5 shrink-0" />
 											<span className="min-w-0 flex-1">
 												<span className="block text-fg">{t("composer.approvalOff")}</span>
 												<span className="block text-[10px] text-muted">{t("composer.approvalOffHint")}</span>
@@ -1309,7 +1321,7 @@ ${insert}`;
 												safeMode ? "text-fg" : "text-muted",
 											)}
 										>
-											<Shield className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+											<ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
 											<span className="min-w-0 flex-1">
 												<span className="block text-fg">{t("composer.approvalOn")}</span>
 												<span className="block text-[10px] text-muted">{t("composer.approvalOnHint")}</span>
@@ -1342,7 +1354,7 @@ ${insert}`;
 									<ChevronDown className="h-3.5 w-3.5" />
 								</button>
 								{modelMenuOpen && visibleModels.length > 0 && (
-									<div className="absolute bottom-full right-0 z-20 mb-2 max-h-72 w-64 overflow-y-auto rounded-xl border border-border bg-surface p-1 shadow-lg">
+									<div className="absolute bottom-full right-0 z-20 mb-2 max-h-80 w-64 overflow-y-auto rounded-xl border border-border bg-surface p-1 shadow-lg">
 										{visibleModels.map((m) => {
 											const key = `${m.provider}:${m.id}`;
 											const selected = displayedModel
@@ -1371,9 +1383,32 @@ ${insert}`;
 												</button>
 											);
 										})}
+									{/* Thinking level — controls reasoning effort for the current model */}
+									<div className="mt-1 border-t border-border/60 pt-1">
+										<div className="px-2.5 py-1 text-[10px] font-medium uppercase tracking-wide text-muted">
+											{t("composer.thinkingLevel")}
+										</div>
+										<div className="flex flex-wrap gap-1 px-1.5 pb-1">
+											{THINKING_LEVELS.map((level) => (
+												<button
+													key={level}
+													type="button"
+													onClick={() => void handleThinkingChange(level)}
+													className={cn(
+														"rounded-md px-2 py-0.5 text-[11px] transition-colors",
+														currentThinking === level
+															? "bg-accent/15 text-accent"
+															: "text-muted hover:bg-surface-2 hover:text-fg",
+													)}
+												>
+													{level}
+												</button>
+											))}
+										</div>
 									</div>
-								)}
-								{modelMenuOpen && visibleModels.length === 0 && models.length > 0 && (
+								</div>
+							)}
+							{modelMenuOpen && visibleModels.length === 0 && models.length > 0 && (
 									<div className="absolute bottom-full right-0 z-20 mb-2 w-64 rounded-xl border border-border bg-surface p-1 shadow-lg">
 										<a
 											href="/#/settings"

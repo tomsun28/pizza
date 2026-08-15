@@ -32,7 +32,7 @@ import {
 	type GatewayRpcFrame,
 	type GatewayWorkspaceInfo,
 	type MessageSource,
-	GATEWAY_DEFAULT_TELL_TIMEOUT,
+	GATEWAY_REPLY_RELAY_TIMEOUT,
 } from "./protocol.js";
 import type { RpcCommand, RpcResponse } from "../rpc/rpc-types.js";
 
@@ -88,6 +88,8 @@ export interface GatewayServerOptions {
 	agentDir: string;
 	/** The main agent working directory — excluded from workspace name lookups. */
 	mainDir?: string;
+	/** Pizza version (from package.json), reported in `status` so clients can detect an outdated gateway after an upgrade. */
+	version?: string;
 	/**
 	 * Idle timeout (ms): agent processes with no recent activity are torn down
 	 * after this period. Default: 10 minutes. 0 disables idle eviction.
@@ -163,6 +165,7 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 	const socketPath = options.socketPath ?? gatewaySocketPath();
 	const agentDir = options.agentDir;
 	const mainDir = options.mainDir;
+	const gatewayVersion = options.version ?? "unknown";
 	const agentIdleTimeout = options.agentIdleTimeout ?? 10 * 60_000;
 	const healthCheckInterval = options.agentHealthCheckInterval ?? 60_000;
 	const healthCheckTimeout = options.agentHealthTimeout ?? 10_000;
@@ -370,15 +373,22 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
  * context. Uniform across all source kinds — only `from` varies — so the agent
  * learns one format and can read its reply address straight off the block:
  *
- *   <message from="agent:web" id="m_...">
+ *   <message from="agent:web" id="m_..." relay="auto">
  *   the message content
  *   </message>
  *
  * `from` serializes a {@link MessageSource} as `kind:id`. A generated `id`
  * tags the message for future `inReplyTo` threading. When `source` is absent
- * the block is omitted and the content is returned bare (the legacy path).
+ * the block is omitted and the content is returned bare (the legacy path). `relay="auto"` marks
+ * deliveries whose reply the gateway relays back to the sender automatically — the receiver
+ * does not need an explicit tell-back: its final assistant text is captured and delivered.
  */
-function renderInboundMessage(source: MessageSource | undefined, content: string, id: string): string {
+function renderInboundMessage(
+	source: MessageSource | undefined,
+	content: string,
+	id: string,
+	options?: { autoRelay?: boolean },
+): string {
 	if (!source) return content;
 	// Neutralize any `<message …>`/`</message>` markup the sender embedded:
 	// without this a message body can close the block early and forge whatever
@@ -386,7 +396,8 @@ function renderInboundMessage(source: MessageSource | undefined, content: string
 	// quoted, so a `"` in a cwd would break the block the same way.
 	const from = `${source.kind}:${source.id}`.replace(/"/g, "&quot;");
 	const body = content.replace(/<(\/?)message(\s[^>]*)?>/gi, (_m, slash: string, attrs = "") => `&lt;${slash}message${attrs}&gt;`);
-	return `<message from="${from}" id="${id}">\n${body}\n</message>`;
+	const relayAttr = options?.autoRelay ? ' relay="auto"' : "";
+	return `<message from="${from}" id="${id}"${relayAttr}>\n${body}\n</message>`;
 }
 
 /** Unique-per-process message id. Date.now() alone collides within a tick. */
@@ -398,15 +409,20 @@ function nextMessageId(): string {
 	// ── tell routing ──────────────────────────────────────────────────────
 
 	/**
-	 * Process a single tell: resolve destination → find/spawn agent → prompt →
-	 * reply. Concurrent tells to the SAME agent are serialized (queued) so the
-	 * single-threaded agent isn't asked to process two prompts at once.
+	 * Process a single tell: resolve destination → find/spawn agent → deliver
+	 * the message → ack. Delivery is always asynchronous: the wire response is
+	 * a delivery ack (`delivered: true` + `messageId`), never the reply itself.
+	 * When the told agent's turn settles, its final assistant text is relayed
+	 * back to the sender (if the sender is an agent workspace) as an inbound
+	 * `<message>` turn — reply reliability lives in the protocol, not in the
+	 * receiver remembering to tell back. Concurrent tells to the SAME agent
+	 * are serialized (queued) so the single-threaded agent isn't asked to
+	 * process two prompts at once.
 	 *
 	 * Returns the wire response to write back to the client.
 	 */
 	async function handleTell(request: GatewayTellRequest): Promise<GatewayResponse> {
 		const startedAt = Date.now();
-		const timeout = request.timeout ?? GATEWAY_DEFAULT_TELL_TIMEOUT;
 
 		const cwd = resolveDestination(request.to);
 		if (!cwd) {
@@ -457,88 +473,87 @@ function nextMessageId(): string {
 		}
 
 		// Wrap the message with sender provenance so the receiving agent knows who
-		// messaged it (and where to reply). Falls back to the bare message for
-		// clients that did not send `from`.
+		// messaged it (and where to reply). `relay="auto"` on the block tells the
+		// receiver that the gateway will deliver its final answer back to the
+		// sender automatically — an explicit tell-back is not needed.
+		const senderCwd =
+			request.from?.kind === "agent" ? resolveDestination(request.from.id) : null;
+		const willRelay = !request.relay && senderCwd !== null && senderCwd !== cwd;
 		const messageId = nextMessageId();
-		const delivered = renderInboundMessage(request.from, request.message, messageId);
+		const delivered = renderInboundMessage(request.from, request.message, messageId, {
+			autoRelay: willRelay,
+		});
 
-		// From here on we own the agent's turn slot in both paths. Async tells
-		// release it in the background when the turn settles; sync tells release
-		// it in `finally`.
+		// From here on we own the agent's turn slot; it is released in the
+		// background when the turn settles.
 		entry.busy = true;
 		entry.lastActivity = Date.now();
 
 		// Subscribe to the turn BEFORE prompting so a fast turn can't complete
 		// between the two calls. Attach a no-op catch immediately: the rejection
 		// is handled where the promise is consumed, and an unobserved rejection
-		// in the async path would crash the daemon.
-		const settled = entry.client.waitForIdle(timeout);
+		// would crash the daemon.
+		const settled = entry.client.waitForIdle(GATEWAY_REPLY_RELAY_TIMEOUT);
 		settled.catch(() => {});
 
-		// Delivery is separate from the turn. A refused prompt means the agent is
-		// alive but mid-turn on work the gateway does not own (a desktop user's
-		// prompt on the channel `rpc` path), so never tear it down here:
-		//   - async: hand the message to the agent's own follow-up queue and ack;
-		//     it is picked up when the running turn finishes.
-		//   - sync: fail with a clear error — a follow-up would settle behind the
-		//     other turn, so we could not tell whose reply we were reading.
+		// A refused prompt means the agent is alive but mid-turn on work the
+		// gateway does not own (a desktop user's prompt on the channel `rpc`
+		// path), so never tear it down here — hand the message to the agent's own
+		// follow-up queue; it is picked up when the running turn finishes. No
+		// auto-relay in that case (the follow-up settles behind the other turn, so
+		// the captured text could not be attributed) — the receiver replies on
+		// its own.
 		try {
 			await entry.client.prompt(delivered);
 		} catch (error) {
 			const m = error instanceof Error ? error.message : String(error);
 			releaseTurnSlot(entry);
-			if (request.async) {
-				try {
-					await entry.client.followUp(delivered);
-					emitter.emit("tell", cwd, true, Date.now() - startedAt);
-					return { type: "tell_result", id: request.id, ok: true, delivered: true, messageId };
-				} catch (followUpError) {
-					const fm = followUpError instanceof Error ? followUpError.message : String(followUpError);
-					emitter.emit("tell", cwd, false, Date.now() - startedAt);
-					return { type: "tell_result", id: request.id, ok: false, error: `async tell to ${cwd} failed: ${fm}` };
-				}
+			try {
+				await entry.client.followUp(delivered);
+				emitter.emit("tell", cwd, true, Date.now() - startedAt);
+				return { type: "tell_result", id: request.id, ok: true, delivered: true, messageId };
+			} catch (followUpError) {
+				const fm = followUpError instanceof Error ? followUpError.message : String(followUpError);
+				emitter.emit("tell", cwd, false, Date.now() - startedAt);
+				return {
+					type: "tell_result",
+					id: request.id,
+					ok: false,
+					error: `tell to ${cwd} was not accepted: ${m}; follow-up queue also refused: ${fm}`,
+				};
 			}
-			emitter.emit("tell", cwd, false, Date.now() - startedAt);
-			return {
-				type: "tell_result",
-				id: request.id,
-				ok: false,
-				error: `tell to ${cwd} was not accepted: ${m}. The agent is busy with another turn — retry, or send it asynchronously.`,
-			};
 		}
 
-		// Async path: ack the delivery now and let the turn play out in the
-		// background. The receiver replies on its own (symmetric messaging).
-		if (request.async) {
-			void settled.then(
-				() => emitter.emit("tell", cwd, true, Date.now() - startedAt),
-				() => emitter.emit("tell", cwd, false, Date.now() - startedAt),
-			).finally(() => releaseTurnSlot(entry));
-			return { type: "tell_result", id: request.id, ok: true, delivered: true, messageId };
+		// Relay the reply: once the told turn settles, capture the final
+		// assistant text and deliver it back to the sender as an inbound message.
+		// The synthesized tell carries `relay: true` so the turn it triggers is
+		// never relayed again (loop guard: A→B relay, B→A relay, stop).
+		if (willRelay && senderCwd) {
+			void settled.then(async () => {
+				let reply: string | null = null;
+				try {
+					reply = await entry.client.getLastAssistantText();
+				} catch {
+					reply = null;
+				}
+				if (!reply || !reply.trim()) return;
+				await handleTell({
+					type: "tell",
+					id: `relay_${request.id}_${messageId}`,
+					to: senderCwd,
+					message: reply,
+					from: { kind: "agent", id: entry.cwd },
+					relay: true,
+				}).catch(() => {});
+			}).catch(() => {});
 		}
 
-		// Sync path: wait for the turn and return the agent's final assistant text.
-		try {
-			await settled;
-			const reply = await entry.client.getLastAssistantText();
-			emitter.emit("tell", cwd, true, Date.now() - startedAt);
-			return { type: "tell_result", id: request.id, ok: true, reply: reply ?? "(no response)" };
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			const stderr = entry.client.getStderr?.() ?? "";
-			emitter.emit("tell", cwd, false, Date.now() - startedAt);
-			// The turn never settled (timeout/crash) — the agent may be wedged, so
-			// tear it down and let the next tell spawn a fresh one.
-			await teardownAgent(cwd, "tell failed").catch(() => {});
-			return {
-				type: "tell_result",
-				id: request.id,
-				ok: false,
-				error: `tell to ${cwd} failed: ${message}${stderr ? `\n--- stderr ---\n${stderr}` : ""}`,
-			};
-		} finally {
-			releaseTurnSlot(entry);
-		}
+		// Ack the delivery now; the turn plays out in the background.
+		void settled.then(
+			() => emitter.emit("tell", cwd, true, Date.now() - startedAt),
+			() => emitter.emit("tell", cwd, false, Date.now() - startedAt),
+		).finally(() => releaseTurnSlot(entry)).catch(() => {});
+		return { type: "tell_result", id: request.id, ok: true, delivered: true, messageId };
 	}
 
 	/**
@@ -689,6 +704,7 @@ function nextMessageId(): string {
 					type: "status_result",
 					uptime: now - startTime,
 					channels: subscribers.size,
+					version: gatewayVersion,
 					agents: Array.from(pool.values()).map((e) => ({
 						cwd: e.cwd,
 						busy: e.busy,

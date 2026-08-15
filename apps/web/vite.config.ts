@@ -23,5 +23,16 @@ export default defineConfig({
 		target: "es2022",
 		outDir: "dist",
 		emptyOutDir: true,
+		rollupOptions: {
+			output: {
+				manualChunks: {
+					react: ["react", "react-dom", "react-router-dom", "react-i18next", "i18next"],
+					xterm: ["@xterm/xterm", "@xterm/addon-fit"],
+					markdown: ["react-markdown", "remark-gfm", "highlight.js"],
+					lucide: ["lucide-react"],
+				},
+			},
+		},
+		chunkSizeWarningLimit: 700,
 	},
 });

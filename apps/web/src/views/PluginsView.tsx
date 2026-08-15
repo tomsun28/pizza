@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useLocation, useOutletContext } from "react-router-dom";
-import { PageHeader, Card, Badge, Button } from "@/components/ui";
+import { PageHeader, Card, Badge, Button, MoreMenu } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import {
 	fetchSkillsSh,
@@ -14,10 +14,18 @@ import {
 	type SkillInfo,
 	type ExtensionInfo,
 } from "@/lib/transport";
-import { ArrowLeft, ArrowRight, Puzzle, BookOpen, Server, Search, ExternalLink, Download, Check, Power, Trash2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, Puzzle, BookOpen, Radio, Settings, Plus, Search, ExternalLink, Download, Check, Power, Trash2, Hash, Send } from "lucide-react";
 import type { LayoutOutletContext } from "@/components/Layout";
+import { ChannelDialog } from "@/components/ChannelDialog";
+import {
+	listChannels,
+	deleteChannel,
+	setChannelEnabled,
+	formatLastActivity,
+	type ChannelInfo,
+} from "@/lib/channels";
 
-type PluginTab = "skills" | "extensions" | "mcp";
+type PluginTab = "skills" | "extensions" | "channels";
 
 interface TabConfig {
 	key: PluginTab;
@@ -27,7 +35,7 @@ interface TabConfig {
 const TABS: TabConfig[] = [
 	{ key: "skills", icon: BookOpen },
 	{ key: "extensions", icon: Puzzle },
-	{ key: "mcp", icon: Server },
+	{ key: "channels", icon: Radio },
 ];
 
 function InstalledSkillCard({ skill }: { skill: SkillInfo }) {
@@ -221,19 +229,6 @@ function SkillsTab() {
 	);
 }
 
-function ComingSoonTab({ icon: Icon, title, description }: { icon: typeof BookOpen; title: string; description: string }) {
-	return (
-		<Card>
-			<div className="py-8 text-center">
-				<Icon className="mx-auto mb-3 h-10 w-10 text-muted/30" />
-				<p className="font-mono text-sm text-muted">{title}</p>
-				<p className="mt-2 font-mono text-xs text-muted/60">{description}</p>
-			</div>
-		</Card>
-	);
-}
-
-
 function ExtensionCard({
 	ext,
 	onToggle,
@@ -257,8 +252,8 @@ function ExtensionCard({
 	const showToggle = ext.canToggle && !notInstalledInstallable;
 	const showEnabledBadge = !notInstalledInstallable;
 	return (
-		<Card className="transition-colors hover:border-accent/40">
-			<div className="flex items-start justify-between gap-3">
+		<Card className="@container transition-colors hover:border-accent/40">
+			<div className="flex flex-col gap-3 @sm:flex-row @sm:items-start @sm:justify-between">
 				<div className="min-w-0 flex-1">
 					<div className="flex items-center gap-2">
 						<Puzzle className="h-4 w-4 shrink-0 text-accent" />
@@ -292,38 +287,31 @@ function ExtensionCard({
 						)}
 					</div>
 				</div>
-				<div className="flex shrink-0 flex-col items-end gap-2">
-					{ext.installable && (
-						<Button
-							size="sm"
-							tone={ext.installed ? "neutral" : "accent"}
-							loading={busy}
-							disabled={busy}
-							onClick={() => (ext.installed ? onUninstall(ext.id) : onInstall(ext.id))}
-							title={ext.installed ? t("plugins.extensions.uninstall") : t("plugins.extensions.install")}
-							iconLeft={ext.installed ? <Trash2 className="h-3.5 w-3.5" /> : <Download className="h-3.5 w-3.5" />}
-						>
-							{busy
-								? ext.installed
-									? t("plugins.extensions.uninstalling")
-									: t("plugins.extensions.installing")
-								: ext.installed
-									? t("plugins.extensions.uninstall")
-									: t("plugins.extensions.install")}
-						</Button>
-					)}
-					{showToggle && (
-						<Button
-							size="sm"
-							tone={ext.enabled ? "danger" : "accent"}
-							disabled={busy}
-							onClick={() => onToggle(ext.id, !ext.enabled)}
-							title={ext.enabled ? t("plugins.extensions.disable") : t("plugins.extensions.enable")}
-							iconLeft={<Power className="h-3.5 w-3.5" />}
-						>
-							{ext.enabled ? t("plugins.extensions.disable") : t("plugins.extensions.enable")}
-						</Button>
-					)}
+				<div className="flex shrink-0 items-center gap-2">
+					<MoreMenu
+						disabled={busy}
+						title={t("plugins.extensions.actions")}
+						items={[
+							...(ext.installable
+								? [{
+										icon: ext.installed ? Trash2 : Download,
+										label: busy
+											? (ext.installed ? t("plugins.extensions.uninstalling") : t("plugins.extensions.installing"))
+											: (ext.installed ? t("plugins.extensions.uninstall") : t("plugins.extensions.install")),
+										disabled: busy,
+										onClick: () => (ext.installed ? onUninstall(ext.id) : onInstall(ext.id)),
+									}]
+								: []),
+							...(showToggle
+								? [{
+										icon: Power,
+										label: ext.enabled ? t("plugins.extensions.disable") : t("plugins.extensions.enable"),
+										disabled: busy,
+										onClick: () => onToggle(ext.id, !ext.enabled),
+									}]
+								: []),
+						]}
+					/>
 				</div>
 			</div>
 		</Card>
@@ -459,6 +447,240 @@ function ExtensionsTab() {
 	);
 }
 
+/** Per-type icon + accent tint for the channel card header. */
+function channelIcon(type: ChannelInfo["type"]) {
+	switch (type) {
+		case "discord":
+		case "slack":
+			return Hash;
+		case "telegram":
+			return Send;
+		case "webhook":
+			return Radio;
+		case "lark":
+		default:
+			return BookOpen;
+	}
+}
+
+function ChannelCard({
+	channel,
+	onToggle,
+	onConfigure,
+	onDelete,
+	busyId,
+}: {
+	channel: ChannelInfo;
+	onToggle: (id: string, enabled: boolean) => void;
+	onConfigure: (ch: ChannelInfo) => void;
+	onDelete: (id: string) => void;
+	busyId: string | null;
+}) {
+	const { t } = useTranslation();
+	const Icon = channelIcon(channel.type);
+	const busy = busyId === channel.id;
+	const statusTone =
+		channel.status === "connected" ? "success" : channel.status === "error" ? "danger" : "neutral";
+	const statusKey = channel.enabled ? channel.status : "disconnected";
+	const wsName = channel.workspace ? channel.workspace.replace(/\/+$/, "").split("/").pop() ?? channel.workspace : "";
+	return (
+		<Card className="@container transition-colors hover:border-accent/40">
+			<div className="flex flex-col gap-3 @sm:flex-row @sm:items-start @sm:justify-between">
+				<div className="min-w-0 flex-1">
+					<div className="flex items-center gap-2">
+						<Icon className="h-4 w-4 shrink-0 text-accent" />
+						<span className="truncate text-sm font-medium text-fg">{channel.name}</span>
+						<code className="font-mono text-[10px] text-muted">{t(`channels.types.${channel.type}`)}</code>
+					</div>
+					{(channel.server || channel.channel) && (
+						<p className="mt-1.5 truncate font-mono text-xs text-muted">
+							{[channel.server, channel.channel].filter(Boolean).join(" / ")}
+						</p>
+					)}
+					<div className="mt-3 flex flex-wrap items-center gap-2">
+						<Badge tone={statusTone}>{t(`channels.status.${statusKey}`)}</Badge>
+						{wsName ? (
+							<Badge tone="neutral">{t("channels.bind", { workspace: wsName })}</Badge>
+						) : (
+							<Badge tone="warning">{t("channels.bindNone")}</Badge>
+						)}
+						<span className="text-[10px] text-muted">
+							{formatLastActivity(channel.lastMessageAt, {
+								ago: (s) => t("channels.recent", { time: s }),
+								never: t("channels.recentNever"),
+							})}
+						</span>
+						{channel.lastError && channel.status === "error" && (
+							<span className="text-[10px] text-danger">{channel.lastError}</span>
+						)}
+					</div>
+				</div>
+				<div className="flex shrink-0 items-center gap-2">
+					<MoreMenu
+						disabled={busy}
+						title={t("channels.actions")}
+						items={[
+							{
+								icon: Power,
+								label: channel.enabled ? t("channels.disable") : t("channels.enable"),
+								disabled: busy,
+								onClick: () => onToggle(channel.id, !channel.enabled),
+							},
+							{
+								icon: Settings,
+								label: t("channels.configure"),
+								disabled: busy,
+								onClick: () => onConfigure(channel),
+							},
+							{ divider: true },
+							{
+								icon: Trash2,
+								label: t("channels.delete"),
+								danger: true,
+								disabled: busy,
+								onClick: () => onDelete(channel.id),
+							},
+						]}
+					/>
+				</div>
+			</div>
+		</Card>
+	);
+}
+
+function ChannelsTab() {
+	const { t } = useTranslation();
+	const [channels, setChannels] = useState<ChannelInfo[]>([]);
+	const [loading, setLoading] = useState(true);
+	const [error, setError] = useState("");
+	const [busyId, setBusyId] = useState<string | null>(null);
+	const [dialogOpen, setDialogOpen] = useState(false);
+	const [editing, setEditing] = useState<ChannelInfo | null>(null);
+
+	const refresh = useCallback(async () => {
+		try {
+			setLoading(true);
+			setError("");
+			setChannels(await listChannels());
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		} finally {
+			setLoading(false);
+		}
+	}, []);
+
+	useEffect(() => {
+		refresh();
+	}, [refresh]);
+
+	const upsert = useCallback((ch: ChannelInfo) => {
+		setChannels((prev) => {
+			const idx = prev.findIndex((c) => c.id === ch.id);
+			if (idx === -1) return [...prev, ch];
+			const next = [...prev];
+			next[idx] = ch;
+			return next;
+		});
+	}, []);
+
+	const handleToggle = useCallback(
+		async (id: string, enabled: boolean) => {
+			setBusyId(id);
+			try {
+				const updated = await setChannelEnabled(id, enabled);
+				upsert(updated);
+			} catch (e) {
+				setError(e instanceof Error ? e.message : String(e));
+			} finally {
+				setBusyId(null);
+			}
+		},
+		[upsert],
+	);
+
+	const handleDelete = useCallback(
+		async (id: string) => {
+			const ch = channels.find((c) => c.id === id);
+			if (!ch || !confirm(t("channels.confirmDelete", { name: ch.name }))) return;
+			setBusyId(id);
+			try {
+				await deleteChannel(id);
+				setChannels((prev) => prev.filter((c) => c.id !== id));
+			} catch (e) {
+				setError(e instanceof Error ? e.message : String(e));
+			} finally {
+				setBusyId(null);
+			}
+		},
+		[channels, t],
+	);
+
+	const handleConfigure = useCallback((ch: ChannelInfo) => {
+		setEditing(ch);
+		setDialogOpen(true);
+	}, []);
+
+	const handleAdd = useCallback(() => {
+		setEditing(null);
+		setDialogOpen(true);
+	}, []);
+
+	if (loading) {
+		return (
+			<Card>
+				<div className="text-sm text-muted">{t("channels.loading")}</div>
+			</Card>
+		);
+	}
+
+	if (error) {
+		return (
+			<Card>
+				<div className="text-sm text-danger">{t("channels.error", { error })}</div>
+			</Card>
+		);
+	}
+
+	return (
+		<div className="space-y-4">
+			<ChannelDialog
+				open={dialogOpen}
+				onClose={() => setDialogOpen(false)}
+				existing={editing}
+				onSaved={upsert}
+			/>
+			<div className="flex items-center justify-end">
+				<Button size="sm" tone="accent" iconLeft={<Plus className="h-3.5 w-3.5" />} onClick={handleAdd}>
+					{t("channels.add")}
+				</Button>
+			</div>
+
+			{channels.length === 0 ? (
+				<Card>
+					<div className="py-6 text-center">
+						<Radio className="mx-auto mb-2 h-8 w-8 text-muted/40" />
+						<p className="font-mono text-xs text-muted">{t("channels.empty")}</p>
+						<p className="mt-1 font-mono text-[10px] text-muted">{t("channels.emptyHint")}</p>
+					</div>
+				</Card>
+			) : (
+				<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+					{channels.map((ch) => (
+						<ChannelCard
+							key={ch.id}
+							channel={ch}
+							onToggle={handleToggle}
+							onConfigure={handleConfigure}
+							onDelete={handleDelete}
+							busyId={busyId}
+						/>
+					))}
+				</div>
+			)}
+		</div>
+	);
+}
+
 export default function PluginsView() {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
@@ -531,13 +753,7 @@ export default function PluginsView() {
 
 					{tab === "skills" && <SkillsTab />}
 					{tab === "extensions" && <ExtensionsTab />}
-					{tab === "mcp" && (
-						<ComingSoonTab
-							icon={Server}
-							title={t("plugins.mcp.comingSoon")}
-							description={t("plugins.mcp.comingSoonHint")}
-						/>
-					)}
+					{tab === "channels" && <ChannelsTab />}
 				</div>
 			</div>
 		</div>

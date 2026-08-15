@@ -63,53 +63,78 @@ export class SqliteEventStore implements EventStore, SessionStore {
 			if (existing) return existing;
 		}
 
-		const event = this._normalizeEvent(partial);
-
 		// AGENT_MESSAGE_CHUNK events are streaming-only: notify subscribers for
 		// live UI rendering but do NOT persist. The complete message content is
 		// captured by the subsequent AGENT_MESSAGE_END event (whose payload.content
 		// holds the full LLM response), so persisting chunks is pure redundancy.
 		// Historical replay / context rebuild / compaction all read END, never CHUNK.
 		if (partial.type === "AGENT_MESSAGE_CHUNK") {
+			const event = this._normalizeEvent(partial);
 			this._notify(event);
 			return event;
 		}
 
-		this._insert(event);
-		const inserted = this.get(event.event_id) ?? event;
-		this._notify(inserted);
-		this._touchMetaOnMessage(event.type);
-		return inserted;
+		let inserted: EventBase;
+		if (partial.sequence === undefined) {
+			// Auto-assigned sequence: compute atomically inside a write transaction
+			// (BEGIN IMMEDIATE) to eliminate cross-process races on the unique
+			// (workspace_id, sequence) index.
+			inserted = this._appendAutoSequence(partial);
+		} else {
+			// Explicit sequence: insert directly. A duplicate sequence throws
+			// UNIQUE constraint failed (intentional for import/replay misuse).
+			const event = this._normalizeEvent(partial);
+			this._insert(event);
+			inserted = event;
+		}
+
+		const stored = this.get(inserted.event_id) ?? inserted;
+		this._notify(stored);
+		this._touchMetaOnMessage(stored.type);
+		return stored;
 	}
 
 	appendBatch(partials: EventAppendInput[]): EventBase[] {
 		const events: EventBase[] = [];
 		const newEvents: EventBase[] = [];
-		let nextSequence = this.head_sequence + 1;
-		for (const partial of partials) {
-			if (partial.idempotency_key) {
-				const existing = this._getByIdempotencyKey(partial.idempotency_key);
-				if (existing) {
-					events.push(existing);
+		for (let attempt = 0; ; attempt++) {
+			events.length = 0;
+			newEvents.length = 0;
+
+			try {
+				this.db.exec("begin immediate");
+				// Compute the starting sequence from the DB max inside the write
+				// transaction to eliminate cross-process sequence races.
+				let nextSequence = this._dbMaxSequence() + 1;
+				for (const partial of partials) {
+					if (partial.idempotency_key) {
+						const existing = this._getByIdempotencyKey(partial.idempotency_key);
+						if (existing) {
+							events.push(existing);
+							continue;
+						}
+					}
+					const sequence = partial.sequence ?? nextSequence;
+					nextSequence = Math.max(nextSequence, sequence + 1);
+					const event = this._normalizeEvent({ ...partial, sequence });
+					events.push(event);
+					newEvents.push(event);
+				}
+
+				for (const event of newEvents) {
+					this._insert(event);
+				}
+				this._nextSequence = nextSequence;
+				this.db.exec("commit");
+				break;
+			} catch (error) {
+				try { this.db.exec("rollback"); } catch { /* no active transaction */ }
+				// Retry on write-lock contention (another process holds the lock).
+				if (error instanceof Error && /database is locked/.test(error.message) && attempt < 5) {
 					continue;
 				}
+				throw error;
 			}
-			const sequence = partial.sequence ?? nextSequence;
-			nextSequence = Math.max(nextSequence, sequence + 1);
-			const event = this._normalizeEvent({ ...partial, sequence });
-			events.push(event);
-			newEvents.push(event);
-		}
-
-		this.db.exec("begin");
-		try {
-			for (const event of newEvents) {
-				this._insert(event);
-			}
-			this.db.exec("commit");
-		} catch (error) {
-			this.db.exec("rollback");
-			throw error;
 		}
 
 		for (const event of newEvents) {
@@ -337,6 +362,35 @@ export class SqliteEventStore implements EventStore, SessionStore {
 			event.schema_version,
 			event.idempotency_key ?? null,
 		);
+	}
+
+	/**
+	 * Append an event with an auto-assigned sequence, using `BEGIN IMMEDIATE`
+	 * to acquire the write lock before computing `max(sequence) + 1` from the
+	 * database. This makes the sequence allocation atomic across processes —
+	 * no other writer can interleave between the max read and the insert, so
+	 * the `uniq_events_workspace_sequence` constraint can never be violated
+	 * for auto-assigned sequences. Retries on `database is locked` (SQLITE_BUSY)
+	 * when another process holds the write lock beyond the busy_timeout.
+	 */
+	private _appendAutoSequence(partial: EventAppendInput): EventBase {
+		for (let attempt = 0; ; attempt++) {
+			try {
+				this.db.exec("begin immediate");
+				const sequence = this._dbMaxSequence() + 1;
+				const event = this._normalizeEvent({ ...partial, sequence });
+				this._insert(event);
+				this._nextSequence = sequence + 1;
+				this.db.exec("commit");
+				return event;
+			} catch (error) {
+				try { this.db.exec("rollback"); } catch { /* no active transaction */ }
+				if (error instanceof Error && /database is locked/.test(error.message) && attempt < 5) {
+					continue;
+				}
+				throw error;
+			}
+		}
 	}
 
 	private _dbMaxSequence(): number {

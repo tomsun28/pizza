@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, ChevronDown } from "lucide-react";
+import { Check, ChevronDown, EllipsisVertical } from "lucide-react";
 import {
 	PixelAlert,
 	PixelBadge as PxlBadge,
@@ -8,6 +8,7 @@ import {
 	PixelEmptyState as PxlEmptyState,
 	PixelModal as PxlModal,
 	PixelSpinner as PxlSpinner,
+	useEscape,
 	type Tone,
 } from "@pxlkit/ui-kit";
 import { cn } from "@/lib/utils";
@@ -244,17 +245,87 @@ export function Modal({
 	title,
 	children,
 	footer,
+	size = "lg",
+	backdrop = true,
 }: {
 	open: boolean;
 	onClose: () => void;
 	title: string;
 	children: ReactNode;
 	footer?: ReactNode;
+	size?: "sm" | "md" | "lg" | "xl" | "full";
+	backdrop?: boolean;
 }) {
+	if (!backdrop) {
+		return (
+			<FloatingDialog open={open} onClose={onClose} title={title} footer={footer} size={size}>
+				{children}
+			</FloatingDialog>
+		);
+	}
 	return (
-		<PxlModal open={open} onClose={onClose} title={title} footer={footer} size="lg">
+		<PxlModal open={open} onClose={onClose} title={title} footer={footer} size={size}>
 			{children}
 		</PxlModal>
+	);
+}
+
+/** Lightweight floating dialog — no full-screen backdrop scrim. Renders as a
+ *  small positioned card with a subtle shadow, so the page behind stays
+ *  visible and interactive. Closes on Escape or click-outside. */
+function FloatingDialog({
+	open,
+	onClose,
+	title,
+	children,
+	footer,
+	size = "md",
+}: {
+	open: boolean;
+	onClose: () => void;
+	title: string;
+	children: ReactNode;
+	footer?: ReactNode;
+	size?: "sm" | "md" | "lg" | "xl" | "full";
+}) {
+	useEscape(onClose, open);
+	if (!open) return null;
+
+	const maxW =
+		size === "sm" ? "max-w-sm" :
+		size === "lg" ? "max-w-2xl" :
+		size === "xl" ? "max-w-4xl" :
+		size === "full" ? "max-w-[95vw]" :
+		"max-w-md";
+
+	return (
+		<div className="fixed inset-0 z-[80] flex items-start justify-center p-4 pt-[15vh]" onClick={onClose}>
+			<div
+				className={cn(
+					"relative w-full rounded-lg border border-border bg-surface shadow-2xl",
+					maxW,
+				)}
+				onClick={(e) => e.stopPropagation()}
+			>
+				<div className="flex items-center justify-between border-b border-border px-4 py-3">
+					<h4 className="text-sm font-semibold text-fg">{title}</h4>
+					<button
+						type="button"
+						onClick={onClose}
+						aria-label="Close"
+						className="flex h-6 w-6 items-center justify-center rounded-md border border-border text-muted transition-colors hover:bg-surface-2 hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+					>
+						✕
+					</button>
+				</div>
+				<div className="px-4 py-4 text-sm text-muted">{children}</div>
+				{footer && (
+					<div className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
+						{footer}
+					</div>
+				)}
+			</div>
+		</div>
 	);
 }
 
@@ -414,6 +485,56 @@ function ContextMenuRow({
 				)}
 			</span>
 		</button>
+	);
+}
+
+/**
+ * "More" (⋯) trigger button that opens a {@link ContextMenu} anchored to the
+ * button's position. Collapses a row of action buttons into a single compact
+ * icon — the menu items are supplied by the caller.
+ */
+export function MoreMenu({
+	items,
+	disabled,
+	title,
+}: {
+	items: ContextMenuItem[];
+	disabled?: boolean;
+	title?: string;
+}) {
+	const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+
+	useEffect(() => {
+		if (!pos) return;
+		const onDown = () => setPos(null);
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key === "Escape") setPos(null);
+		};
+		window.addEventListener("mousedown", onDown);
+		window.addEventListener("keydown", onKey);
+		return () => {
+			window.removeEventListener("mousedown", onDown);
+			window.removeEventListener("keydown", onKey);
+		};
+	}, [pos]);
+
+	return (
+		<>
+			<button
+				type="button"
+				disabled={disabled}
+				title={title}
+				onClick={(e) => {
+					e.stopPropagation();
+					const rect = e.currentTarget.getBoundingClientRect();
+					setPos({ x: rect.right, y: rect.bottom });
+				}}
+				className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border text-muted transition-colors hover:bg-surface-2 hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40"
+			>
+				<EllipsisVertical className="h-3.5 w-3.5" />
+			</button>
+			{pos && <ContextMenu x={pos.x} y={pos.y} items={items} onDismiss={() => setPos(null)} />}
+		</>
 	);
 }
 

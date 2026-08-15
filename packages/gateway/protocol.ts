@@ -53,12 +53,13 @@ export interface MessageSource {
 }
 
 /**
- * `tell` — send a message to the agent for workspace `to` and wait for its
- * reply. The gateway resolves `to` (a cwd or workspace name) to a workspace
- * cwd, finds-or-spawns the agent, prompts it, and returns the agent's final
- * assistant text. This is synchronous from the client's perspective: the
- * gateway holds the connection open and emits one {@link GatewayTellResult}
- * back.
+ * `tell` — deliver a message to the agent for workspace `to`. The gateway
+ * resolves `to` (a cwd or workspace name) to a workspace cwd, finds-or-spawns
+ * the agent, and delivers the message. Delivery is asynchronous from the
+ * client's perspective: the gateway acks a `tell_result` carrying
+ * `delivered: true` + a `messageId` as soon as the target has accepted the
+ * message, and the target agent's final reply is relayed back to the sender
+ * automatically as an inbound `<message>` turn (see the relay flag below).
  */
 export interface GatewayTellRequest extends GatewayMessageBase {
 	type: "tell";
@@ -72,24 +73,32 @@ export interface GatewayTellRequest extends GatewayMessageBase {
 	/** The message text to deliver to the target agent as its prompt. */
 	message: string;
 	/**
-	 * Optional timeout in ms (default 120000). Ignored when `async` is set
-	 * (async delivers return immediately).
+	 * @deprecated Delivery is always asynchronous now; this field is accepted
+	 * for backwards compatibility and ignored.
 	 */
 	timeout?: number;
 	/**
-	 * Deliver without waiting for the target agent to finish its turn. The gateway
-	 * acks with a `tell_result` carrying `delivered: true` + a `messageId` as soon
-	 * as the target has *accepted* the message, instead of blocking until the
-	 * reply is ready. The receiver is then expected to reply on its own with a
-	 * (possibly async) tell back to the sender (symmetric messaging).
+	 * @deprecated Delivery is always asynchronous now — the gateway acks with a
+	 * `tell_result` carrying `delivered: true` + a `messageId` as soon as the
+	 * target has *accepted* the message, instead of blocking until the reply is
+	 * ready. When the target's turn settles, the gateway captures its final
+	 * assistant text and relays it back to the sender (if the sender is an
+	 * agent workspace) as an inbound `<message from="agent:<cwd>">` turn.
 	 *
 	 * Note the ack means "accepted", not "instant": tells to one agent are
-	 * serialized, so an async tell queued behind another tell is acked only once
+	 * serialized, so a tell queued behind another tell is acked only once
 	 * the agent takes it. If the agent is mid-turn on work the gateway does not
 	 * own (a desktop user's prompt), the message is handed to the agent's
-	 * follow-up queue and acked right away.
+	 * follow-up queue and acked right away (no auto-relay in that case — the
+	 * receiver replies on its own).
 	 */
 	async?: boolean;
+	/**
+	 * Internal (gateway use only): marks a synthesized relay-of-reply tell so
+	 * the gateway does not relay the turn it triggers (loop guard). Never set
+	 * by clients.
+	 */
+	relay?: boolean;
 	/**
 		 * Sender provenance. The gateway attaches this to the delivered prompt so
 		 * the receiving agent knows who messaged it (and can reply). Optional for
@@ -128,14 +137,15 @@ export type GatewayTellResult =
 			type: "tell_result";
 			id: string;
 			ok: true;
-			/** The target agent's final assistant text. */
+			/** Legacy: a synchronous reply. Current gateways never return this
+			 * shape (delivery is always async); kept for old-server compat. */
 			reply: string;
-	  })
+		  })
 	| (GatewayMessageBase & {
 			type: "tell_result";
 			id: string;
 			ok: true;
-			/** Async delivery ack: the prompt was queued; the receiver will reply on its own. */
+			/** Delivery ack: the prompt was accepted (prompted or queued as a follow-up). The reply arrives separately as an auto-relayed message turn when possible. */
 			delivered: true;
 			/** Correlates with a future `inReplyTo` on the reply message. */
 			messageId: string;
@@ -160,6 +170,8 @@ export interface GatewayStatusResult extends GatewayMessageBase {
 	uptime: number;
 	/** Number of subscribed channels. */
 	channels: number;
+	/** Pizza version of the gateway process (from package.json). */
+	version: string;
 	/** One entry per agent in the pool. */
 	agents: Array<{
 		cwd: string;
@@ -214,6 +226,14 @@ export const GATEWAY_DEFAULT_TELL_TIMEOUT = 120_000;
  * this has to allow for a full turn, not just a round trip.
  */
 export const GATEWAY_ASYNC_ACK_TIMEOUT = GATEWAY_DEFAULT_TELL_TIMEOUT;
+
+/**
+ * How long the gateway waits for a told agent's turn to settle before relaying
+ * its reply back to the sender. Generous on purpose: real work turns can run
+ * long, and a timeout here only means the reply is not auto-relayed (it never
+ * surfaces as a delivery failure).
+ */
+export const GATEWAY_REPLY_RELAY_TIMEOUT = 10 * 60_000;
 
 /** Protocol version — bump on breaking wire changes. */
 export const GATEWAY_PROTOCOL_VERSION = 1;

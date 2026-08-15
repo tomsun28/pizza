@@ -4,26 +4,25 @@
 
 import {
 	type Api,
+	type OAuthAuth,
 	type AssistantMessageEventStream,
+	type BuiltinProvider,
 	type Context,
 	getModels,
 	getProviders,
-	type KnownProvider,
 	type Model,
-	type OAuthProviderInterface,
 	type OpenAICompletionsCompat,
 	type OpenAIResponsesCompat,
 	registerApiProvider,
 	resetApiProviders,
 	type SimpleStreamOptions,
 } from "@earendil-works/pi-ai/compat";
-import { registerOAuthProvider, resetOAuthProviders } from "@earendil-works/pi-ai/oauth";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { type Static, Type } from "@sinclair/typebox";
 import AjvModule from "ajv";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
-import { getAgentDir } from "../config.js";
+import { APP_NAME, getAgentDir, VERSION } from "../config.js";
 import type { AuthStorage } from "./auth-storage.js";
 import {
 	clearConfigValueCache,
@@ -31,6 +30,7 @@ import {
 	resolveConfigValueUncached,
 	resolveHeadersOrThrow,
 } from "./resolve-config-value.js";
+import { getOAuthFlows, getOAuthRequestAuth, registerOAuthFlow, resetOAuthFlows } from "./oauth.js";
 
 const Ajv = (AjvModule as any).default || AjvModule;
 const ajv = new Ajv();
@@ -230,7 +230,9 @@ export type ResolvedRequestAuth =
 			ok: true;
 			apiKey?: string;
 			headers?: Record<string, string>;
-	  }
+			/** Per-credential baseUrl override (e.g., GitHub Copilot enterprise endpoints) */
+			baseUrl?: string;
+		  }
 	| {
 			ok: false;
 			error: string;
@@ -349,7 +351,7 @@ export class ModelRegistry {
 
 		// Ensure dynamic API/OAuth registrations are rebuilt from current provider state.
 		resetApiProviders();
-		resetOAuthProviders();
+		resetOAuthFlows();
 
 		this.loadModels();
 
@@ -382,12 +384,17 @@ export class ModelRegistry {
 		const builtInModels = this.loadBuiltInModels(overrides, modelOverrides);
 		let combined = this.mergeCustomModels(builtInModels, customModels);
 
-		// Let OAuth providers modify their models (e.g., update baseUrl)
-		for (const oauthProvider of this.authStorage.getOAuthProviders()) {
-			const cred = this.authStorage.get(oauthProvider.id);
-			if (cred?.type === "oauth" && oauthProvider.modifyModels) {
-				combined = oauthProvider.modifyModels(combined, cred);
-			}
+		// Filter OAuth-account-restricted models (e.g. GitHub Copilot publishes
+		// the account's available model ids on the credential). Per-credential
+		// baseUrl is applied at request time via getOAuthRequestAuth().
+		for (const oauthFlow of this.authStorage.getOAuthFlows()) {
+			const cred = this.authStorage.get(oauthFlow.id);
+			if (cred?.type !== "oauth") continue;
+			const available = Array.isArray(cred.availableModelIds)
+				? new Set<string>(cred.availableModelIds as string[])
+				: undefined;
+			if (!available) continue;
+			combined = combined.filter((m) => m.provider !== oauthFlow.id || available.has(m.id));
 		}
 
 		this.models = combined;
@@ -399,7 +406,8 @@ export class ModelRegistry {
 		modelOverrides: Map<string, Map<string, ModelOverride>>,
 	): Model<Api>[] {
 		return getProviders().flatMap((provider) => {
-			const models = getModels(provider as KnownProvider) as Model<Api>[];
+			const models = getModels(provider as BuiltinProvider) as Model<Api>[];
+
 			const providerOverride = overrides.get(provider);
 			const perModelOverrides = modelOverrides.get(provider);
 
@@ -554,7 +562,7 @@ export class ModelRegistry {
 		const getBuiltInDefaults = (providerName: string): { api: string; baseUrl: string } | undefined => {
 			if (!builtInProviders.has(providerName)) return undefined;
 			if (builtInDefaultsCache.has(providerName)) return builtInDefaultsCache.get(providerName);
-			const builtIn = getModels(providerName as KnownProvider) as Model<Api>[];
+			const builtIn = getModels(providerName as BuiltinProvider) as Model<Api>[];
 			if (builtIn.length === 0) return undefined;
 			const defaults = { api: builtIn[0].api, baseUrl: builtIn[0].baseUrl };
 			builtInDefaultsCache.set(providerName, defaults);
@@ -687,7 +695,7 @@ export class ModelRegistry {
 		try {
 			const providerConfig = this.providerRequestConfigs.get(model.provider);
 			const apiKeyFromAuthStorage = await this.authStorage.getApiKey(model.provider, { includeFallback: false });
-			const apiKey =
+			let apiKey =
 				apiKeyFromAuthStorage ??
 				(providerConfig?.apiKey
 					? resolveConfigValueOrThrow(providerConfig.apiKey, `API key for provider "${model.provider}"`)
@@ -704,6 +712,26 @@ export class ModelRegistry {
 					? { ...model.headers, ...providerHeaders, ...modelHeaders }
 					: undefined;
 
+			// OAuth providers may derive a per-credential baseUrl (e.g. GitHub
+			// Copilot enterprise) from the stored token.
+			let baseUrl: string | undefined;
+			const oauthCred = this.authStorage.get(model.provider);
+			if (oauthCred?.type === "oauth") {
+				try {
+					const extras = await getOAuthRequestAuth(model.provider, oauthCred);
+					if (extras) {
+						baseUrl = extras.baseUrl;
+						if (extras.headers) headers = { ...headers, ...extras.headers } as Record<string, string>;
+						// Header-based flows (e.g. Kimi Coding: Authorization: Bearer)
+						// authenticate via headers only — drop the raw access-token
+						// apiKey so the request doesn't double-authenticate.
+						apiKey = extras.apiKey ?? (extras.headers ? undefined : apiKey);
+					}
+				} catch {
+					// Extra auth derivation is best-effort; the plain API key still works
+				}
+			}
+
 			if (providerConfig?.authHeader) {
 				if (!apiKey) {
 					return { ok: false, error: `No API key found for "${model.provider}"` };
@@ -711,10 +739,20 @@ export class ModelRegistry {
 				headers = { ...headers, Authorization: `Bearer ${apiKey}` };
 			}
 
+			// Inject pizza's own identifying headers as defaults. Anything already
+			// set by the model/provider/extension/OAuth/authHeader above takes
+			// precedence. pi-ai may still override User-Agent for certain providers
+			// (e.g. kimi-coding, codex) — that's expected.
+			headers = {
+				"User-Agent": `${APP_NAME}/${VERSION}`,
+				...headers,
+			};
+
 			return {
 				ok: true,
 				apiKey,
 				headers: headers && Object.keys(headers).length > 0 ? headers : undefined,
+				baseUrl,
 			};
 		} catch (error) {
 			return {
@@ -798,14 +836,9 @@ export class ModelRegistry {
 	}
 
 	private applyProviderConfig(providerName: string, config: ProviderConfigInput): void {
-		// Register OAuth provider if provided
+		// Register extension OAuth flow (id = provider name)
 		if (config.oauth) {
-			// Ensure the OAuth provider ID matches the provider name
-			const oauthProvider: OAuthProviderInterface = {
-				...config.oauth,
-				id: providerName,
-			};
-			registerOAuthProvider(oauthProvider);
+			registerOAuthFlow(providerName, config.oauth);
 		}
 
 		if (config.streamSimple) {
@@ -847,13 +880,6 @@ export class ModelRegistry {
 				} as Model<Api>);
 			}
 
-			// Apply OAuth modifyModels if credentials exist (e.g., to update baseUrl)
-			if (config.oauth?.modifyModels) {
-				const cred = this.authStorage.get(providerName);
-				if (cred?.type === "oauth") {
-					this.models = config.oauth.modifyModels(this.models, cred);
-				}
-			}
 		} else if (config.baseUrl || config.headers) {
 			// Override-only: update baseUrl for existing models. Request headers are resolved per request.
 			this.models = this.models.map((m) => {
@@ -878,7 +904,7 @@ export interface ProviderConfigInput {
 	headers?: Record<string, string>;
 	authHeader?: boolean;
 	/** OAuth provider for /login support */
-	oauth?: Omit<OAuthProviderInterface, "id">;
+	oauth?: OAuthAuth;
 	models?: Array<{
 		id: string;
 		name: string;
