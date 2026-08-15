@@ -655,7 +655,7 @@ export async function main(args: string[], options?: MainOptions) {
 		}
 
 		printTimings();
-		await runRpcModeWithFacade(created.facade, { setSchedulerEngine: created.setSchedulerEngine });
+		await runRpcModeWithFacade(created.facade, { setSchedulerEngine: created.setSchedulerEngine, setLlmClient: created.setLlmClient });
 		return;
 	}
 

@@ -471,6 +471,12 @@ export interface RunRpcModeOptions {
 	 * after the facade exists; handed back via the facade-factory escape hatch.
 	 */
 	setSchedulerEngine?: (engine: SchedulerEngine | undefined) => void;
+	/**
+	 * Build and inject an LLM client into the runtime. Used by reload_providers
+	 * when the facade was created without a model (first-run setup mode) and a
+	 * real model has just been configured. Returns true if a client was built.
+	 */
+	setLlmClient?: () => boolean;
 }
 
 export async function runRpcModeWithFacade(
@@ -1116,6 +1122,26 @@ export async function runRpcModeWithFacade(
 			if (registry?.authStorage) {
 				registry.authStorage.reload();
 				registry.refresh();
+			}
+			// If the facade is still using the placeholder model (provider="none",
+			// set at startup when no API key was configured), try to resolve a real
+			// model now that credentials have been reloaded. This is critical for
+			// gateway mode where restart_sidecar can't respawn the agent process —
+			// without this, get_state keeps returning model=undefined and the GUI
+			// bounces the user back to the setup page forever.
+			const currentModel = facade.model;
+			if (currentModel.provider === "none" && registry) {
+				const available = registry.getAvailable();
+				if (available.length > 0) {
+					facade.setModel(available[0]);
+					// The runtime's llmClient was left as null at startup (no model
+					// → no client). Build and inject one now so the reactor can
+					// actually call the provider on the first prompt — without this
+					// the user configures a key, gets past the setup page, and then
+					// hits "Cannot read properties of undefined (reading 'complete')"
+					// on their first message.
+					options?.setLlmClient?.();
+				}
 			}
 			return success(id, "reload_providers", {
 				providers: registry?.authStorage?.list() ?? [],

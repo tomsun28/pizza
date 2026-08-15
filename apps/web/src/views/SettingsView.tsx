@@ -775,7 +775,7 @@ function ProviderTab({
 	const [error, setError] = useState("");
 	const [showAddInline, setShowAddInline] = useState(isSetupMode);
 	const [loginProvider, setLoginProvider] = useState<{ id: string; name: string } | null>(null);
-	const [authCategory, setAuthCategory] = useState<"account" | "apiKey" | null>(isSetupMode ? "apiKey" : null);
+	const [authCategory, setAuthCategory] = useState<"account" | "apiKey" | null>(null);
 
 	const refresh = useCallback(async () => {
 		try {
