@@ -931,11 +931,6 @@ function ProviderTab({
 							{t("common.back")}
 						</Button>
 					</div>
-					{!isSetupMode && (
-						<Button size="sm" tone="accent" iconLeft={<Plus className="h-3.5 w-3.5" />} onClick={() => setShowAddInline(true)}>
-							{t("settings.provider.addProvider")}
-						</Button>
-					)}
 				</div>
 
 				{showAddInline && (

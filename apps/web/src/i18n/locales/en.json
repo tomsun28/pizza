@@ -42,7 +42,7 @@
     "timeHoursAgo": "{{count}}h ago",
     "timeDaysAgo": "{{count}}d ago",
     "plugins": "Plugins",
-    "pluginsSubtitle": "Skills · Extensions"
+    "pluginsSubtitle": "Skills · Channels"
   },
   "agent": {
     "newSession": "New Session",

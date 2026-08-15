@@ -42,7 +42,7 @@
     "timeHoursAgo": "{{count}}小时前",
     "timeDaysAgo": "{{count}}天前",
     "plugins": "插件",
-    "pluginsSubtitle": "技能 · 扩展"
+    "pluginsSubtitle": "技能 · 频道"
   },
   "agent": {
     "newSession": "新会话",

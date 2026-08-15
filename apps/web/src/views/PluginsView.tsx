@@ -14,7 +14,7 @@ import {
 	type SkillInfo,
 	type ExtensionInfo,
 } from "@/lib/transport";
-import { ArrowLeft, ArrowRight, Puzzle, BookOpen, Server, Radio, Settings, Plus, Search, ExternalLink, Download, Check, Power, Trash2, Hash, Send } from "lucide-react";
+import { ArrowLeft, ArrowRight, Puzzle, BookOpen, Radio, Settings, Plus, Search, ExternalLink, Download, Check, Power, Trash2, Hash, Send } from "lucide-react";
 import type { LayoutOutletContext } from "@/components/Layout";
 import { ChannelDialog } from "@/components/ChannelDialog";
 import {
@@ -25,7 +25,7 @@ import {
 	type ChannelInfo,
 } from "@/lib/channels";
 
-type PluginTab = "skills" | "extensions" | "channels" | "mcp";
+type PluginTab = "skills" | "extensions" | "channels";
 
 interface TabConfig {
 	key: PluginTab;
@@ -36,7 +36,6 @@ const TABS: TabConfig[] = [
 	{ key: "skills", icon: BookOpen },
 	{ key: "extensions", icon: Puzzle },
 	{ key: "channels", icon: Radio },
-	{ key: "mcp", icon: Server },
 ];
 
 function InstalledSkillCard({ skill }: { skill: SkillInfo }) {
@@ -229,19 +228,6 @@ function SkillsTab() {
 		</div>
 	);
 }
-
-function ComingSoonTab({ icon: Icon, title, description }: { icon: typeof BookOpen; title: string; description: string }) {
-	return (
-		<Card>
-			<div className="py-8 text-center">
-				<Icon className="mx-auto mb-3 h-10 w-10 text-muted/30" />
-				<p className="font-mono text-sm text-muted">{title}</p>
-				<p className="mt-2 font-mono text-xs text-muted/60">{description}</p>
-			</div>
-		</Card>
-	);
-}
-
 
 function ExtensionCard({
 	ext,
@@ -768,13 +754,6 @@ export default function PluginsView() {
 					{tab === "skills" && <SkillsTab />}
 					{tab === "extensions" && <ExtensionsTab />}
 					{tab === "channels" && <ChannelsTab />}
-					{tab === "mcp" && (
-						<ComingSoonTab
-							icon={Server}
-							title={t("plugins.mcp.comingSoon")}
-							description={t("plugins.mcp.comingSoonHint")}
-						/>
-					)}
 				</div>
 			</div>
 		</div>
