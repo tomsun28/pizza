@@ -14,14 +14,18 @@
  * The gateway is auto-started on demand (like ssh-agent) — the caller never
  * needs to manage it manually.
  *
- * Synchronous from the caller's perspective: `_tell` blocks until the target
- * agent finishes processing and replies.
+ * Delivery is asynchronous: `_tell` returns a delivery ack (messageId)
+ * immediately and never blocks on the target's turn. The target agent's final
+ * reply is relayed back automatically by the gateway as an incoming
+ * `<message from="agent:<cwd>">` turn — reply reliability lives in the
+ * protocol, not in the receiver remembering to tell back.
  */
 
 import { type Static, Type } from "@sinclair/typebox";
 import { Text } from "@earendil-works/pi-tui";
 import { defineTool, type ToolDefinition } from "../extensions/types.js";
 import { GatewayClient, ensureGateway, gatewaySocketPath, type MessageSource } from "../../../packages/gateway/index.js";
+import { VERSION } from "../../config.js";
 
 /** Supported `tell` subcommands. */
 export const TELL_ACTIONS = ["send", "list"] as const;
@@ -32,13 +36,13 @@ export type TellAction = (typeof TELL_ACTIONS)[number];
  * parsed in `parseTellInput` (builtin-commands.ts):
  *
  *   tell send <to> <message>
- *   tell send --to <cwd|name> --message "..." [--timeout 60000]
+ *   tell send --to <cwd|name> --message "..." [--async] [--timeout N]   (both flags deprecated no-ops)
  *   tell list
  */
 const tellSchema = Type.Object({
 	action: Type.Union([Type.Literal("send"), Type.Literal("list")], {
 		description:
-			"send: deliver a message to another agent's workspace and return its reply. " +
+			"send: deliver a message to another agent's workspace (async — returns a delivery ack; the reply arrives later as an incoming <message> turn). " +
 			"list: show known workspaces you can tell to.",
 	}),
 	to: Type.Optional(
@@ -56,15 +60,13 @@ const tellSchema = Type.Object({
 	),
 	timeout: Type.Optional(
 		Type.Number({
-			description: "Timeout in milliseconds for the reply (default 120000).",
+			description: "@deprecated Ignored — delivery is always asynchronous now.",
 		}),
 	),
 	asyncSend: Type.Optional(
 		Type.Boolean({
 			description:
-				"Deliver without blocking for the reply. The target agent acks delivery and is expected to " +
-				"reply on its own via a tell back to you (symmetric messaging). Use this to send to pooled agents " +
-				"when you do not want to wait. Replies arrive later as new turns.",
+"@deprecated No-op — delivery is always asynchronous now.",
 		}),
 	),
 });
@@ -121,18 +123,21 @@ export function createTellToolDefinition(
 		name: "tell",
 		label: "tell",
 		description:
-			"Send a message to another agent's workspace and get its reply (agent-to-agent messaging via the gateway). " +
+			"Send a message to another agent's workspace (agent-to-agent messaging via the gateway). " +
+			"Delivery is asynchronous: send returns a delivery ack (messageId) immediately and does NOT wait for " +
+			"the reply — the gateway automatically relays the target agent's final answer back to you as an " +
+			'incoming <message from="agent:<cwd>"> turn. ' +
 			"The gateway keeps target agents alive — repeated tells to the same workspace are conversational and " +
 			"the agent remembers the context. " +
 			"Use `list` to discover target workspaces, then `send` with `--to` (a workspace name or path) and `--message`.",
 		promptSnippet: "_tell: send a message to another workspace's agent via the gateway and get its reply (conversational, reuses the agent)",
 		promptGuidelines: [
-			"Use _tell to send a message to another agent's workspace and get a reply. The target agent stays alive in the gateway pool, so repeated tells are conversational — it remembers prior messages.",
+			"Use _tell to send a message to another agent's workspace. The target agent stays alive in the gateway pool, so repeated tells are conversational — it remembers prior messages.",
 			"Before telling an unfamiliar workspace, call `_tell list` to see which workspaces are known. The `to` argument is either a workspace name (last path component) or a project path (cwd).",
-			"_tell blocks until the target agent replies. It is better than reading another codebase inline because the target agent accumulates context across messages — use it for conversations or multiple exchanges across workspaces.",
+			"_tell send is asynchronous: it returns a delivery ack (messageId) immediately and does NOT wait for the reply. Do not resend because no reply came back within the same turn — the target's answer arrives later as an incoming <message from=\"agent:<id>\"> turn. End your turn (or continue other work) and watch for it.",
 			"Prefer _tell over reading another project inline: the target agent runs in its own workspace and only its reply enters this context, keeping other projects' details out.",
-			"Add --async to send without blocking: the message is delivered and you continue immediately. The target agent then replies on its own later as a new turn (a <message from=\"agent:<id>\"> block). Use --async when you do not need the answer right away or want to fire several tells.",
-			"Messages from other agents arrive as <message from=\"agent:<id>\">...</message> blocks in your context. To reply to the sender, use `_tell send --to <id> ...` (the <id> is the sender workspace path or name, taken from the from field). Replies are how pooled agents hold an async conversation.",
+			"The gateway relays replies automatically: when a told agent finishes its turn, its final answer is delivered back to you as a <message from=\"agent:<id>\" relay=\"auto\"> block. You can fire several tells and collect replies as they arrive.",
+			"Messages from other agents arrive as <message from=\"agent:<id>\">...</message> blocks in your context. When the block carries relay=\"auto\", just write your final answer as a normal response — the gateway captures and relays it back to the sender; no explicit tell-back is needed. Without relay=\"auto\" (e.g. the message was queued behind a busy turn), reply with `_tell send --to <id> ...` (the <id> is the sender workspace path or name, taken from the from field).",
 		],
 		parameters: tellSchema,
 		renderShell: "self",
@@ -156,11 +161,10 @@ export function createTellToolDefinition(
 				);
 			}
 
-			const timeout = params.timeout ?? 120_000;
 
 			let socketPath: string;
 			try {
-				socketPath = await ensureGateway(agentDir);
+				socketPath = await ensureGateway(agentDir, undefined, VERSION);
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				return textResult(`Failed to start gateway: ${message}`);
@@ -175,18 +179,15 @@ export function createTellToolDefinition(
 				}
 
 				const from: MessageSource = { kind: "agent", id: mainDir ?? "(unknown)" };
-				if (params.asyncSend) {
-					const messageId = await client.tellAsync(params.to, params.message, from);
+				const delivery = await client.tell(params.to, params.message, from);
+				if (delivery.messageId) {
 					return textResult(
-						`Delivered (async) to ${params.to}. messageId=${messageId}. ` +
-							`The target agent will reply on its own via a tell back to you; watch for incoming <message from=...> turns.`,
+						`Delivered to ${params.to}. messageId=${delivery.messageId}. ` +
+							`The gateway will relay the target agent's reply back to you automatically as an incoming <message from="agent:${params.to}"> turn — do not resend; end your turn or continue other work and watch for it.`,
 					);
 				}
-				const reply = await client.tell(params.to, params.message, from, timeout);
-				if (signal?.aborted) {
-					// Still return the reply; the caller can decide what to do.
-				}
-				return textResult(reply);
+				// Legacy gateway answered synchronously with the reply text.
+				return textResult(delivery.reply ?? "(no response)");
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				return textResult(`_tell to ${params.to} failed: ${message}`);

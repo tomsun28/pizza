@@ -46,6 +46,7 @@ import { initTheme, stopThemeWatcher } from "../packages/tui/theme/theme.js";
 import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.js";
 import { handleBuiltinCommand } from "./builtin-cli.js";
 import { handleGatewayCommand } from "./gateway-cli.js";
+import { handleAuthCommand } from "./auth-cli.js";
 import { isLocalPath } from "./utils/paths.js";
 
 /**
@@ -436,6 +437,10 @@ export async function main(args: string[], options?: MainOptions) {
 		return;
 	}
 
+	if (await handleAuthCommand(args)) {
+		return;
+	}
+
 	const parsed = parseArgs(args);
 	if (parsed.diagnostics.length > 0) {
 		for (const d of parsed.diagnostics) {
@@ -465,7 +470,7 @@ export async function main(args: string[], options?: MainOptions) {
 		// run as the main agent (no --main flag → no main lock); it just
 		// passes --main through to the per-workspace agent it spawns.
 		const mainDir = (parsed.main || parsed.mainDir) ? getMainDir(parsed.mainDir) : undefined;
-		const server = createGatewayServer({ socketPath, agentDir, mainDir });
+		const server = createGatewayServer({ socketPath, agentDir, mainDir, version: VERSION });
 		server.on("listening", (sock: string) => {
 			console.error(chalk.green(`🍕 Gateway listening on ${sock}`));
 		});

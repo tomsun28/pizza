@@ -11,7 +11,8 @@ import {
 	updateScheduledTask,
 } from "@/lib/transport";
 import { MiniSwitch, Spinner } from "@/components/ui";
-import { ScheduleForm, describeSchedule, formatNextRun } from "@/components/ScheduleDialog";
+import { ScheduleForm } from "@/components/ScheduleDialog";
+import { describeSchedule, formatNextRun } from "@/components/schedule-utils";
 import { resolveScheduleScope } from "@/lib/schedule-scope";
 import { cn } from "@/lib/utils";
 

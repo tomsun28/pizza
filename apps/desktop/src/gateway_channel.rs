@@ -363,11 +363,55 @@ impl GatewayChannel {
 
 /// Spawn (or reuse) the gateway daemon: `pizza --mode gateway`. Detached, like
 /// the TS ensureGateway. Returns once the socket/pipe responds to a ping.
-pub fn ensure_gateway(socket_path: &PathBuf, pizza_cmd: (&str, &[String])) -> Result<(), String> {
+///
+/// If `expected_version` is provided and a gateway is already running, its
+/// reported version is compared: a mismatch (e.g. the user just upgraded and
+/// the old daemon is still alive) triggers a graceful shutdown + fresh spawn
+/// so upgrading requires no manual `pizza gateway restart`. Busy agents are
+/// given up to 30s to finish their turn before the shutdown is sent.
+pub fn ensure_gateway(
+	socket_path: &PathBuf,
+	pizza_cmd: (&str, &[String]),
+	expected_version: Option<&str>,
+) -> Result<(), String> {
 	use std::process::{Command, Stdio};
 	// Fast path: ping an existing gateway.
 	if gateway_ready(socket_path) {
-		return Ok(());
+		// Version check: if the caller knows its version and the running
+		// gateway reports a different one, it's a stale daemon from before
+		// an upgrade — replace it.
+		if let Some(expected) = expected_version {
+			if let Some(status) = query_gateway_status(socket_path) {
+				if status.version != expected {
+					// Wait for busy agents to finish so we don't kill a mid-turn task.
+					let drain_deadline =
+						std::time::Instant::now() + std::time::Duration::from_secs(30);
+					while status_has_busy_agents(&status)
+						&& std::time::Instant::now() < drain_deadline
+					{
+						std::thread::sleep(std::time::Duration::from_secs(1));
+					}
+					// Graceful shutdown, then clean any residual socket file.
+					let stopped = shutdown_gateway(socket_path);
+					if !stopped {
+						clean_stale_socket(socket_path);
+					}
+					// Fall through to spawn a fresh gateway.
+				} else {
+					return Ok(());
+				}
+			} else {
+				// Status query failed but ping succeeded — the gateway is
+				// likely an old version that doesn't report `version` in
+				// status. Treat it as outdated and replace it.
+				let stopped = shutdown_gateway(socket_path);
+				if !stopped {
+					clean_stale_socket(socket_path);
+				}
+			}
+		} else {
+			return Ok(());
+		}
 	}
 	let env_pizza = std::env::var("PIZZA_BIN").ok();
 	// Resolve the main agent directory so the gateway can pass --main to
@@ -436,6 +480,100 @@ pub fn ensure_gateway(socket_path: &PathBuf, pizza_cmd: (&str, &[String])) -> Re
 		"Gateway failed to start within 15s (socket: {})",
 		socket_path.display()
 	))
+}
+
+/// Parsed `status_result` from the gateway — just the fields we need for the
+/// version check and busy-agent drain.
+struct GatewayStatus {
+	version: String,
+	agents: Vec<bool>, // busy flags
+}
+
+/// Send `{"type":"status"}` to the gateway and parse the response. Returns
+/// None if the gateway is unreachable or the response is malformed. Runs on a
+/// background thread with a 3s deadline so a hung gateway can't stall the
+/// caller (same pattern as `ping_gateway`).
+fn query_gateway_status(socket_path: &PathBuf) -> Option<GatewayStatus> {
+	let path = socket_path.clone();
+	let (tx, rx) = std::sync::mpsc::channel();
+	thread::spawn(move || {
+		let result = (|| -> Result<GatewayStatus, String> {
+			let mut stream = open_gateway_stream(&path)?;
+			let payload =
+				serde_json::to_string(&json!({ "type": "status" })).map_err(|e| e.to_string())?;
+			stream
+				.write_all(payload.as_bytes())
+				.map_err(|e| e.to_string())?;
+			stream.write_all(b"\n").map_err(|e| e.to_string())?;
+			stream.flush().map_err(|e| e.to_string())?;
+			let mut reader = BufReader::new(stream);
+			let mut line = String::new();
+			reader.read_line(&mut line).map_err(|e| e.to_string())?;
+			let parsed: Value = serde_json::from_str(line.trim()).map_err(|e| e.to_string())?;
+			if parsed.get("type").and_then(|t| t.as_str()) != Some("status_result") {
+				return Err("not a status_result".into());
+			}
+			let version = parsed
+				.get("version")
+				.and_then(|v| v.as_str())
+				.unwrap_or("")
+				.to_string();
+			let agents = parsed
+				.get("agents")
+				.and_then(|a| a.as_array())
+				.map(|arr| {
+					arr.iter()
+						.map(|a| a.get("busy").and_then(|b| b.as_bool()).unwrap_or(false))
+						.collect()
+				})
+				.unwrap_or_default();
+			Ok(GatewayStatus { version, agents })
+		})();
+		let _ = tx.send(result);
+	});
+	match rx.recv_timeout(std::time::Duration::from_secs(3)) {
+		Ok(Ok(status)) => Some(status),
+		_ => None,
+	}
+}
+
+/// True if any agent in the status is currently busy (mid-turn).
+fn status_has_busy_agents(status: &GatewayStatus) -> bool {
+	status.agents.iter().any(|&busy| busy)
+}
+
+/// Send `{"type":"shutdown"}` to the gateway and wait for it to stop.
+/// Returns true if the gateway stopped within 10s.
+fn shutdown_gateway(socket_path: &PathBuf) -> bool {
+	// Send shutdown (best-effort — the gateway may close the connection
+	// before replying, which is fine). We don't read the response.
+	if let Ok(mut stream) = open_gateway_stream(socket_path) {
+		let payload = serde_json::to_string(&json!({ "type": "shutdown" }));
+		if let Ok(payload) = payload {
+			let _ = stream.write_all(payload.as_bytes());
+			let _ = stream.write_all(b"\n");
+			let _ = stream.flush();
+		}
+	}
+	// Wait for the socket to disappear (Unix) or ping to fail (all platforms).
+	let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+	while std::time::Instant::now() < deadline {
+		std::thread::sleep(std::time::Duration::from_millis(200));
+		if !gateway_ready(socket_path) {
+			return true;
+		}
+	}
+	false
+}
+
+/// Remove a stale socket file (Unix only — Windows named pipes have no file).
+fn clean_stale_socket(socket_path: &PathBuf) {
+	#[cfg(unix)]
+	{
+		if socket_path.exists() {
+			let _ = std::fs::remove_file(socket_path);
+		}
+	}
 }
 
 /// True if the gateway is listening and answers a ping. On Unix the socket
@@ -550,6 +688,7 @@ mod _unsupported_stub {
 	pub fn ensure_gateway(
 		_socket_path: &PathBuf,
 		_pizza_cmd: (&str, &[String]),
+		_expected_version: Option<&str>,
 	) -> Result<(), String> {
 		Err("gateway channel is not implemented on this platform".into())
 	}

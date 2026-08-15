@@ -155,6 +155,61 @@ describe("SqliteEventStore", () => {
 		expect(received).toEqual([userEvent]);
 	});
 
+	it("should recover when a second process appended to the same workspace db (sequence race)", () => {
+		const dbFile = join(testDir, "race-events.sqlite");
+		const storeA = new SqliteEventStore(workspaceId, dbFile, "runtime_a");
+		const storeB = new SqliteEventStore(workspaceId, dbFile, "runtime_b");
+		stores.push(storeA, storeB);
+
+		// Both processes seed _nextSequence from the same db state...
+		storeA.append({ actor_id: "a", type: "USER_MESSAGE", payload: { n: 1 } });
+		// ...then B commits a sequence A has already reserved.
+		storeB.append({ actor_id: "b", type: "USER_MESSAGE", payload: { n: 2 } });
+
+		// A's next append collides with B's committed sequence and must recover
+		// instead of throwing UNIQUE constraint failed.
+		const recovered = storeA.append({ actor_id: "a", type: "USER_MESSAGE", payload: { n: 3 } });
+
+		const all = storeA.query({});
+		expect(all.length).toBe(3);
+		const sequences = all.map((e) => e.sequence);
+		expect(new Set(sequences).size).toBe(sequences.length);
+		expect(recovered.sequence).toBeGreaterThan(storeB.head_sequence);
+	});
+
+	it("should recover an appendBatch from a cross-process sequence race", () => {
+		const dbFile = join(testDir, "race-batch.sqlite");
+		const storeA = new SqliteEventStore(workspaceId, dbFile, "runtime_a");
+		const storeB = new SqliteEventStore(workspaceId, dbFile, "runtime_b");
+		stores.push(storeA, storeB);
+
+		storeA.append({ actor_id: "a", type: "USER_MESSAGE", payload: {} });
+		storeB.appendBatch([
+			{ actor_id: "b", type: "USER_MESSAGE", payload: {} },
+			{ actor_id: "b", type: "AGENT_MESSAGE_START", payload: {} },
+		]);
+
+		const batch = storeA.appendBatch([
+			{ actor_id: "a", type: "USER_MESSAGE", payload: {} },
+			{ actor_id: "a", type: "AGENT_MESSAGE_START", payload: {} },
+		]);
+
+		const all = storeA.query({});
+		expect(all.length).toBe(5);
+		const sequences = all.map((e) => e.sequence);
+		expect(new Set(sequences).size).toBe(sequences.length);
+		expect(batch.every((e) => e.sequence > storeB.head_sequence)).toBe(true);
+	});
+
+	it("should still throw on explicit duplicate sequence (import/replay misuse)", () => {
+		const store = createStore(workspaceId, "explicit-seq.sqlite");
+		store.append({ actor_id: "user", type: "USER_MESSAGE", payload: {}, sequence: 10 });
+
+		expect(() =>
+			store.append({ actor_id: "user", type: "USER_MESSAGE", payload: {}, sequence: 10 }),
+		).toThrow(/UNIQUE constraint failed/);
+	});
+
 });
 
 describe("deriveWorkspaceId", () => {

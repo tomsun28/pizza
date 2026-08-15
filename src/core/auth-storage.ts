@@ -6,13 +6,8 @@
  * try to refresh tokens simultaneously.
  */
 
-import {
-	getEnvApiKey,
-	type OAuthCredentials,
-	type OAuthLoginCallbacks,
-	type OAuthProviderId,
-} from "@earendil-works/pi-ai/compat";
-import { getOAuthApiKey, getOAuthProvider, getOAuthProviders } from "@earendil-works/pi-ai/oauth";
+import { getEnvApiKey, type AuthInteraction, type OAuthCredentials } from "@earendil-works/pi-ai/compat";
+import { getApiKeyOptions, getOAuthFlow, getOAuthFlows } from "./oauth.js";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
@@ -330,7 +325,7 @@ export class AuthStorage {
 	}
 
 	/**
-	 * Get all credentials (for passing to getOAuthApiKey).
+	 * Get all stored credentials.
 	 */
 	getAll(): AuthStorageData {
 		return { ...this.data };
@@ -345,14 +340,38 @@ export class AuthStorage {
 	/**
 	 * Login to an OAuth provider.
 	 */
-	async login(providerId: OAuthProviderId, callbacks: OAuthLoginCallbacks): Promise<void> {
-		const provider = getOAuthProvider(providerId);
-		if (!provider) {
+	async login(providerId: string, interaction: AuthInteraction): Promise<void> {
+		const flow = getOAuthFlow(providerId);
+		if (!flow) {
 			throw new Error(`Unknown OAuth provider: ${providerId}`);
 		}
 
-		const credentials = await provider.login(callbacks);
+		// pi-ai's OAuthAuth.login requires a non-optional signal
+		const credential = await flow.oauth.login({
+			...interaction,
+			signal: interaction.signal ?? new AbortController().signal,
+		});
+		const { type: _type, ...credentials } = credential;
 		this.set(providerId, { type: "oauth", ...credentials });
+	}
+
+	/**
+	 * Login with a manually entered API key ("Sign in with an API key").
+	 */
+	async loginApiKey(providerId: string, interaction: AuthInteraction): Promise<void> {
+		const option = getApiKeyOptions().find((o) => o.id === providerId);
+		if (!option?.auth.login) {
+			throw new Error(`Provider does not support API key login: ${providerId}`);
+		}
+
+		const credential = await option.auth.login({
+			...interaction,
+			signal: interaction.signal ?? new AbortController().signal,
+		});
+		if (typeof credential.key !== "string" || credential.key.length === 0) {
+			throw new Error("No API key entered");
+		}
+		this.set(providerId, { type: "api_key", key: credential.key });
 	}
 
 	/**
@@ -367,10 +386,10 @@ export class AuthStorage {
 	 * Multiple Pizza instances may try to refresh simultaneously when tokens expire.
 	 */
 	private async refreshOAuthTokenWithLock(
-		providerId: OAuthProviderId,
+		providerId: string,
 	): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
-		const provider = getOAuthProvider(providerId);
-		if (!provider) {
+		const flow = getOAuthFlow(providerId);
+		if (!flow) {
 			return null;
 		}
 
@@ -385,20 +404,12 @@ export class AuthStorage {
 			}
 
 			if (Date.now() < cred.expires) {
-				return { result: { apiKey: provider.getApiKey(cred), newCredentials: cred } };
+				return { result: { apiKey: cred.access, newCredentials: cred } };
 			}
 
-			const oauthCreds: Record<string, OAuthCredentials> = {};
-			for (const [key, value] of Object.entries(currentData)) {
-				if (value.type === "oauth") {
-					oauthCreds[key] = value;
-				}
-			}
-
-			const refreshed = await getOAuthApiKey(providerId, oauthCreds);
-			if (!refreshed) {
-				return { result: null };
-			}
+			const refreshedCred = await flow.oauth.refresh(cred, new AbortController().signal);
+			const { type: _type, ...newCredentials } = refreshedCred;
+			const refreshed = { apiKey: newCredentials.access, newCredentials };
 
 			const merged: AuthStorageData = {
 				...currentData,
@@ -435,8 +446,7 @@ export class AuthStorage {
 		}
 
 		if (cred?.type === "oauth") {
-			const provider = getOAuthProvider(providerId);
-			if (!provider) {
+			if (!getOAuthFlow(providerId)) {
 				// Unknown OAuth provider, can't get API key
 				return undefined;
 			}
@@ -459,7 +469,7 @@ export class AuthStorage {
 
 					if (updatedCred?.type === "oauth" && Date.now() < updatedCred.expires) {
 						// Another instance refreshed successfully, use those credentials
-						return provider.getApiKey(updatedCred);
+						return updatedCred.access;
 					}
 
 					// Refresh truly failed - return undefined so model discovery skips this provider
@@ -468,7 +478,7 @@ export class AuthStorage {
 				}
 			} else {
 				// Token not expired, use current access token
-				return provider.getApiKey(cred);
+				return cred.access;
 			}
 		}
 
@@ -485,9 +495,9 @@ export class AuthStorage {
 	}
 
 	/**
-	 * Get all registered OAuth providers
+	 * Get all registered OAuth flows (built-in + extension-registered)
 	 */
-	getOAuthProviders() {
-		return getOAuthProviders();
+	getOAuthFlows() {
+		return getOAuthFlows();
 	}
 }

@@ -1,23 +1,30 @@
 import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useLocation, useOutletContext } from "react-router-dom";
-import { Save } from "lucide-react";
 import { PageHeader, Card, Badge, Button } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { PixelSelect, PixelCombobox } from "@pxlkit/ui-kit";
 import {
 	listProviders,
 	setProviderApiKey,
+	type AuthLoginEvent,
+	type AuthLoginOption,
+	listAuthLoginOptions,
+	oauthLogin,
+	oauthLoginAnswer,
+	oauthLoginCancel,
+	onAuthLoginEvent,
 	removeProviderApiKey,
 	saveCustomProvider,
 	testCustomProvider,
 	removeCustomProvider,
+	getSchedulerPolicy,
+	setSchedulerPolicy,
 	type CustomProviderInput,
 	type CustomProviderTestResult,
 	type ProviderInfo,
 } from "@/lib/transport";
 import type { RpcSessionState } from "@/lib/types";
-import { sendCommandAwait } from "@/lib/transport";
 import { Key, Trash2, Eye, EyeOff, Plus, ArrowLeft, ArrowRight } from "lucide-react";
 import type { LayoutOutletContext } from "@/components/Layout";
 import {
@@ -73,43 +80,46 @@ type CustomProviderTestState =
 	| { status: "success"; result: CustomProviderTestResult }
 	| { status: "error"; result?: CustomProviderTestResult; error?: string };
 
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
-
-const THINKING_OPTIONS = THINKING_LEVELS.map((level) => ({ value: level, label: level }));
-
-function GeneralTab({ state }: { state: RpcSessionState | null }) {
+function GeneralTab() {
 	const { t, i18n } = useTranslation();
-	const [thinkingLevel, setThinkingLevel] = useState<string>(state?.thinkingLevel ?? "off");
 	// Scheduler defaults — applied to new tasks. Loaded once on mount.
 	const [schedulerPolicy, setSchedulerPolicyState] = useState<import("@/lib/types").SchedulerPolicy>({
 		concurrency: "skip",
 		timeoutMinutes: 0,
 		defaultSessionTarget: { kind: "pinned" },
 	});
+	const schedulerLoadedRef = useRef(false);
 	useEffect(() => {
-		import("@/lib/transport").then(({ getSchedulerPolicy }) => {
-			getSchedulerPolicy()
-				.then((policy) => setSchedulerPolicyState({
+		getSchedulerPolicy()
+			.then((policy) => {
+				setSchedulerPolicyState({
 					...policy,
 					defaultSessionTarget: policy.defaultSessionTarget.kind === "current"
 						? { kind: "pinned" }
 						: policy.defaultSessionTarget,
-				}))
-				.catch(() => {});
-		});
+				});
+				schedulerLoadedRef.current = true;
+			})
+			.catch(() => {});
 	}, []);
+
+	// Auto-save scheduler policy on every change (consistent with thinking/language
+	// which also apply immediately). Skips the initial load to avoid clobbering
+	// server-side defaults before we've fetched them.
+	const updateScheduler = useCallback(async (next: import("@/lib/types").SchedulerPolicy) => {
+		setSchedulerPolicyState(next);
+		if (!schedulerLoadedRef.current) return;
+		try {
+			const saved = await setSchedulerPolicy(next);
+			setSchedulerPolicyState(saved);
+		} catch (e) {
+			console.error("[settings] setSchedulerPolicy failed:", e);
+		}
+	}, []);
+
 	const [language, setLanguage] = useState<AppLanguage>(
 		(SUPPORTED_LANGUAGES.includes(i18n.language as AppLanguage) ? i18n.language : DEFAULT_LANGUAGE) as AppLanguage,
 	);
-
-	const handleThinkingChange = useCallback(async (level: string) => {
-		setThinkingLevel(level);
-		try {
-			await sendCommandAwait({ type: "set_thinking_level", level: level as RpcSessionState["thinkingLevel"] });
-		} catch (e) {
-			console.error("[settings] set_thinking_level failed:", e);
-		}
-	}, []);
 
 	const handleLanguageChange = useCallback((value: string) => {
 		const lang = (SUPPORTED_LANGUAGES.includes(value as AppLanguage) ? value : DEFAULT_LANGUAGE) as AppLanguage;
@@ -126,27 +136,6 @@ function GeneralTab({ state }: { state: RpcSessionState | null }) {
 	return (
 		<div className="space-y-6">
 			<Card>
-				<div className="mb-2 text-sm font-medium text-fg">{t("settings.general.model")}</div>
-				<Row label={t("settings.general.currentProvider")}>
-					<span className="font-mono">{state?.model?.provider ?? "—"}</span>
-				</Row>
-				<Row label={t("settings.general.currentModel")}>
-					<span className="font-mono">{state?.model?.id ?? "—"}</span>
-				</Row>
-				<Row label={t("settings.general.thinkingLevel")}>
-					<div className="w-32">
-						<PixelSelect
-							value={thinkingLevel}
-							options={THINKING_OPTIONS}
-							onChange={handleThinkingChange}
-							size="sm"
-							tone="cyan"
-						/>
-					</div>
-				</Row>
-			</Card>
-
-			<Card>
 				<div className="mb-2 text-sm font-medium text-fg">{t("settings.general.language")}</div>
 				<Row label={t("settings.general.languageDescription")}>
 					<div className="w-40">
@@ -162,21 +151,7 @@ function GeneralTab({ state }: { state: RpcSessionState | null }) {
 			</Card>
 
 			<Card>
-				<div className="mb-2 flex items-center justify-between">
-					<span className="text-sm font-medium text-fg">{t("settings.scheduler.title")}</span>
-					<Button
-						size="sm"
-						tone="accent"
-						iconLeft={<Save className="h-3.5 w-3.5" />}
-						onClick={async () => {
-							const { setSchedulerPolicy } = await import("@/lib/transport");
-							const saved = await setSchedulerPolicy(schedulerPolicy);
-							setSchedulerPolicyState(saved);
-						}}
-					>
-						{t("common.save")}
-					</Button>
-				</div>
+				<div className="mb-2 text-sm font-medium text-fg">{t("settings.scheduler.title")}</div>
 				<div className="mb-1 text-xs text-muted">{t("settings.scheduler.subtitle")}</div>
 				<div className="space-y-3">
 					<div>
@@ -186,7 +161,7 @@ function GeneralTab({ state }: { state: RpcSessionState | null }) {
 								<button
 									key={k}
 									type="button"
-									onClick={() => setSchedulerPolicyState({
+									onClick={() => updateScheduler({
 										...schedulerPolicy,
 										defaultSessionTarget: k === "pinned"
 											? { kind: "pinned" }
@@ -211,7 +186,7 @@ function GeneralTab({ state }: { state: RpcSessionState | null }) {
 								<button
 									key={p}
 									type="button"
-									onClick={() => setSchedulerPolicyState({ ...schedulerPolicy, concurrency: p })}
+									onClick={() => updateScheduler({ ...schedulerPolicy, concurrency: p })}
 									className={cn(
 										"flex w-full items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left text-sm transition-colors",
 										schedulerPolicy.concurrency === p
@@ -232,12 +207,149 @@ function GeneralTab({ state }: { state: RpcSessionState | null }) {
 								min={0}
 								max={1440}
 								value={schedulerPolicy.timeoutMinutes}
-								onChange={(e) => setSchedulerPolicyState({ ...schedulerPolicy, timeoutMinutes: Math.max(0, Number(e.target.value || 0)) })}
+								onChange={(e) => updateScheduler({ ...schedulerPolicy, timeoutMinutes: Math.max(0, Number(e.target.value || 0)) })}
 								className="h-8 w-24 rounded-md border border-border bg-surface px-2 text-sm text-fg outline-none focus:border-accent"
 							/>
 							<span className="text-xs text-muted">{t("schedule.minute")} (0 = {t("schedule.timeoutNoLimit")})</span>
 						</div>
 					</div>
+				</div>
+			</Card>
+		</div>
+	);
+}
+
+/**
+ * "Sign in with an account" dialog — drives the CLI OAuth flow
+ * (`pizza auth login --mode jsonl`) via bridge events.
+ */
+function AccountLoginDialog({
+	provider,
+	providerName,
+	onDone,
+	onCancel,
+}: {
+	provider: string;
+	providerName: string;
+	onDone: (ok: boolean, message?: string) => void;
+	onCancel: () => void;
+}) {
+	const { t } = useTranslation();
+	const [status, setStatus] = useState("");
+	const [authUrl, setAuthUrl] = useState("");
+	const [instructions, setInstructions] = useState("");
+	const [prompt, setPrompt] = useState<AuthLoginEvent | null>(null);
+	const [answer, setAnswer] = useState("");
+	const [busy, setBusy] = useState(true);
+
+	useEffect(() => {
+		const dispose = onAuthLoginEvent((event) => {
+			if (event.type === "prompt") {
+				setPrompt(event);
+				setAnswer("");
+				setBusy(false);
+			} else if (event.type === "event") {
+				const e = event.event;
+				if (e.type === "auth_url" && e.url) {
+					setAuthUrl(e.url);
+					if (e.instructions) setInstructions(e.instructions);
+				} else if (e.type === "device_code" && e.verificationUri) {
+					setAuthUrl(e.verificationUri);
+					setInstructions(`Enter code: ${e.userCode ?? ""}`);
+				} else if (e.message) {
+					setStatus(e.message);
+				}
+			} else if (event.type === "done") {
+				setBusy(false);
+				onDone(event.ok, event.error);
+			}
+		});
+		void oauthLogin(provider).catch((e) => {
+			setBusy(false);
+			onDone(false, e instanceof Error ? e.message : String(e));
+		});
+		return dispose;
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [provider]);
+
+	const submitAnswer = useCallback(async () => {
+		if (!prompt || prompt.type !== "prompt") return;
+		const value = answer.trim();
+		if (!value) return;
+		setBusy(true);
+		setPrompt(null);
+		try {
+			await oauthLoginAnswer(value);
+		} catch (e) {
+			setBusy(false);
+			onDone(false, e instanceof Error ? e.message : String(e));
+		}
+	}, [answer, prompt, onDone]);
+
+	return (
+		<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+			<Card className="w-full max-w-lg">
+				<div className="mb-3 text-sm font-medium text-fg">
+					{t("settings.provider.accountLoginTitle", { name: providerName })}
+				</div>
+				{authUrl && (
+					<div className="mb-3 space-y-1">
+						<a href={authUrl} target="_blank" rel="noreferrer" className="break-all text-xs text-accent underline">
+							{authUrl}
+						</a>
+						{instructions && <p className="font-mono text-[10px] text-muted">{instructions}</p>}
+					</div>
+				)}
+				{status && <p className="mb-3 font-mono text-[10px] text-muted">{status}</p>}
+				{prompt?.type === "prompt" ? (
+					<div className="space-y-2">
+						{prompt.prompt.options ? (
+							<div className="space-y-1">
+								{prompt.prompt.options.map((o) => (
+									<button
+										key={o.id}
+										onClick={() => {
+											setAnswer(o.id);
+											setTimeout(() => void submitAnswer(), 0);
+										}}
+										className="block w-full rounded-md border border-border bg-surface px-3 py-1.5 text-left text-xs text-fg hover:border-accent"
+									>
+										{o.label}
+									</button>
+								))}
+							</div>
+						) : (
+							<div className="flex items-center gap-2">
+								<input
+									autoFocus
+									value={answer}
+									onChange={(e) => setAnswer(e.target.value)}
+									placeholder={prompt.prompt.placeholder ?? prompt.prompt.message}
+									className="flex-1 rounded-md border border-border bg-surface px-3 py-1.5 font-mono text-xs text-fg placeholder:text-muted focus:border-accent focus:outline-none"
+									onKeyDown={(e) => e.key === "Enter" && void submitAnswer()}
+								/>
+								<Button size="sm" tone="accent" onClick={() => void submitAnswer()} disabled={busy}>
+									{t("common.continue")}
+								</Button>
+							</div>
+						)}
+					</div>
+				) : (
+					<p className="font-mono text-[10px] text-muted">
+						{busy ? t("settings.provider.loginWaiting") : t("settings.provider.loginIdle")}
+					</p>
+				)}
+				<div className="mt-4 flex justify-end gap-2">
+					<Button
+						size="sm"
+						tone="neutral"
+						onClick={() => {
+							void oauthLoginCancel().catch(() => {});
+							onCancel();
+						}}
+					>
+						{t("common.cancel")}
+					</Button>
 				</div>
 			</Card>
 		</div>
@@ -658,9 +770,12 @@ function ProviderTab({
 }) {
 	const { t } = useTranslation();
 	const [providers, setProviders] = useState<ProviderInfo[]>([]);
+	const [accountOptions, setAccountOptions] = useState<AuthLoginOption[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState("");
 	const [showAddInline, setShowAddInline] = useState(isSetupMode);
+	const [loginProvider, setLoginProvider] = useState<{ id: string; name: string } | null>(null);
+	const [authCategory, setAuthCategory] = useState<"account" | "apiKey" | null>(isSetupMode ? "apiKey" : null);
 
 	const refresh = useCallback(async () => {
 		try {
@@ -677,6 +792,12 @@ function ProviderTab({
 	useEffect(() => {
 		refresh();
 	}, [refresh]);
+
+	useEffect(() => {
+		listAuthLoginOptions()
+			.then((options) => setAccountOptions(options.filter((o) => o.kind === "account")))
+			.catch(() => setAccountOptions([]));
+	}, []);
 
 	if (loading) {
 		return (
@@ -697,16 +818,87 @@ function ProviderTab({
 	const configured = providers.filter((p) => p.has_api_key);
 	const available = providers.filter((p) => !p.has_api_key);
 
+	const oauthSignedIn = new Set(
+		providers.filter((p) => p.has_api_key && p.auth_type === "oauth").map((p) => p.id),
+	);
+
 	return (
 		<div className="space-y-6">
+			{loginProvider && (
+				<AccountLoginDialog
+					provider={loginProvider.id}
+					providerName={loginProvider.name}
+					onDone={(ok, message) => {
+						setLoginProvider(null);
+						refresh();
+						if (!ok && message) setError(message);
+						if (ok && onConfigured) void onConfigured();
+					}}
+					onCancel={() => setLoginProvider(null)}
+				/>
+			)}
+			{authCategory === null ? (
+				<Card>
+					<div className="mb-3 text-sm font-medium text-fg">{t("settings.provider.chooseCategory")}</div>
+					<div className="grid gap-3 sm:grid-cols-2">
+						{accountOptions.length > 0 && (
+							<button
+								onClick={() => setAuthCategory("account")}
+								className="rounded-lg border border-border bg-surface p-4 text-left transition-colors hover:border-accent"
+							>
+								<div className="text-sm font-medium text-fg">{t("settings.provider.accountSection")}</div>
+								<div className="mt-1 text-xs text-muted">{t("settings.provider.accountSectionHint")}</div>
+							</button>
+						)}
+						<button
+							onClick={() => setAuthCategory("apiKey")}
+							className="rounded-lg border border-border bg-surface p-4 text-left transition-colors hover:border-accent"
+						>
+							<div className="text-sm font-medium text-fg">{t("settings.provider.apiKeySection")}</div>
+							<div className="mt-1 text-xs text-muted">{t("settings.provider.apiKeySectionHint")}</div>
+						</button>
+					</div>
+				</Card>
+			) : authCategory === "account" ? (
+				<Card>
+					<div className="mb-3 flex items-center justify-between">
+						<div className="text-sm font-medium text-fg">{t("settings.provider.accountSection")}</div>
+						<Button size="sm" tone="neutral" onClick={() => setAuthCategory(null)}>
+							{t("common.back")}
+						</Button>
+					</div>
+					<div className="space-y-0">
+						{accountOptions.map((o) => (
+							<div key={o.id} className="flex items-center justify-between border-b border-border/60 py-3 last:border-0">
+								<div className="flex items-center gap-2">
+									<span className="text-sm font-medium text-fg">{o.name}</span>
+									{oauthSignedIn.has(o.id) ? (
+										<Badge tone="accent">{t("settings.provider.oauth")}</Badge>
+									) : (
+										<Badge tone="neutral">{t("settings.provider.notConfigured")}</Badge>
+									)}
+								</div>
+								<Button size="sm" tone="accent" onClick={() => setLoginProvider({ id: o.id, name: o.name })}>
+									{t("settings.provider.signIn")}
+								</Button>
+							</div>
+						))}
+					</div>
+				</Card>
+			) : (
 			<Card>
 				<div className="mb-3 flex items-center justify-between">
-					<div className="text-sm font-medium text-fg">{t("settings.provider.title")}</div>
-					{!isSetupMode && (
-						<Button size="sm" tone="accent" iconLeft={<Plus className="h-3.5 w-3.5" />} onClick={() => setShowAddInline(true)}>
-							{t("settings.provider.addProvider")}
+					<div className="text-sm font-medium text-fg">{t("settings.provider.apiKeySection")}</div>
+					<div className="flex items-center gap-2">
+						{!isSetupMode && (
+							<Button size="sm" tone="accent" iconLeft={<Plus className="h-3.5 w-3.5" />} onClick={() => setShowAddInline(true)}>
+								{t("settings.provider.addProvider")}
+							</Button>
+						)}
+						<Button size="sm" tone="neutral" onClick={() => setAuthCategory(null)}>
+							{t("common.back")}
 						</Button>
-					)}
+					</div>
 				</div>
 
 				{showAddInline && (
@@ -740,6 +932,7 @@ function ProviderTab({
 					/>
 				))}
 			</Card>
+			)}
 		</div>
 	);
 }
@@ -893,7 +1086,7 @@ export default function SettingsView({
 					</div>
 
 					{tab === "general" ? (
-						<GeneralTab state={state} />
+						<GeneralTab />
 					) : (
 						<ProviderTab isSetupMode={isSetupMode} onConfigured={handleConfigured} />
 					)}

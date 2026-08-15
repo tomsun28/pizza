@@ -259,6 +259,14 @@ pub struct BridgeState {
 	/// before respawning a sidecar whose exit it observed, so the
 	/// user-initiated restart doesn't get clobbered by a race.
 	restarting: Mutex<HashSet<String>>,
+	/// Active OAuth login child (`pizza auth login --mode jsonl`), if any.
+	oauth_login: Mutex<Option<OAuthLoginChild>>,
+}
+
+/// A running `pizza auth login --mode jsonl` child plus its stdin writer.
+struct OAuthLoginChild {
+	child: std::process::Child,
+	stdin: std::process::ChildStdin,
 }
 
 impl Default for BridgeState {
@@ -268,6 +276,7 @@ impl Default for BridgeState {
 			sidecars: Mutex::new(HashMap::new()),
 			active: Mutex::new(HashMap::new()),
 			restarting: Mutex::new(HashSet::new()),
+			oauth_login: Mutex::new(None),
 		}
 	}
 }
@@ -1511,6 +1520,7 @@ async fn init_sidecar_via_gateway(
 		gateway_channel::ensure_gateway(
 			&socket_for_blocking,
 			(&program_for_blocking, &args_for_blocking),
+			Some(env!("CARGO_PKG_VERSION")),
 		)
 	})
 	.await
@@ -3610,4 +3620,145 @@ mod tests {
 		assert_eq!(b[2].name, "origin/main");
 		assert!(b[2].is_remote);
 	}
+}
+
+// ============================================================================
+// OAuth login (Sign in with an account)
+//
+// Runs `pizza auth login --provider X --mode jsonl` and forwards its JSONL
+// lines to the window as `auth_login_event`. The frontend answers prompts by
+// invoking `oauth_login_answer` with the entered string.
+// ============================================================================
+
+/// Start an OAuth account login. Fails if another login is already running.
+#[tauri::command]
+pub async fn oauth_login(
+	app: AppHandle,
+	state: tauri::State<'_, BridgeState>,
+	provider: String,
+) -> Result<(), String> {
+	{
+		let mut guard = state.oauth_login.lock().unwrap();
+		if let Some(existing) = guard.as_mut() {
+			// Try to reap a finished previous login so a fresh one can start.
+			match existing.child.try_wait() {
+				Ok(Some(_)) => *guard = None,
+				_ => return Err("A login is already in progress".into()),
+			}
+		}
+	}
+
+	let (program, mut base_args) = resolve_pizza_command_binary(&app);
+	// resolve_pizza_command appends --mode rpc for the agent sidecar; strip it
+	// and use the auth subcommand instead.
+	base_args.retain(|a| a != "rpc" && a != "--mode");
+	let mut cmd = std::process::Command::new(&program);
+	cmd.args(base_args)
+		.args(["auth", "login", "--provider", &provider, "--mode", "jsonl"])
+		.stdin(std::process::Stdio::piped())
+		.stdout(std::process::Stdio::piped())
+		.stderr(std::process::Stdio::null());
+
+	let mut child = cmd
+		.spawn()
+		.map_err(|e| format!("failed to spawn pizza: {e}"))?;
+	let stdin = child.stdin.take().ok_or("no stdin on login child")?;
+	let stdout = child.stdout.take().ok_or("no stdout on login child")?;
+
+	*state.oauth_login.lock().unwrap() = Some(OAuthLoginChild { child, stdin });
+
+	std::thread::spawn(move || {
+		use std::io::BufRead;
+		let reader = std::io::BufReader::new(stdout);
+		for line in reader.lines() {
+			let Ok(line) = line else { break };
+			let parsed: Option<serde_json::Value> = serde_json::from_str(&line).ok();
+			if let Some(value) = parsed {
+				let done = value.get("type").and_then(|t| t.as_str()) == Some("done");
+				let _ = app.emit("auth_login_event", value);
+				if done {
+					break;
+				}
+			}
+		}
+		// Ensure the child is reaped and the slot freed.
+		if let Some(state) = app.try_state::<BridgeState>() {
+			if let Ok(mut guard) = state.oauth_login.lock() {
+				*guard = None;
+			}
+		}
+	});
+
+	Ok(())
+}
+
+/// Answer the current login prompt (writes one JSONL answer line to stdin).
+#[tauri::command]
+pub async fn oauth_login_answer(
+	state: tauri::State<'_, BridgeState>,
+	answer: String,
+) -> Result<(), String> {
+	let mut guard = state.oauth_login.lock().unwrap();
+	let child = guard.as_mut().ok_or("no login in progress")?;
+	use std::io::Write;
+	let line = serde_json::json!({ "answer": answer }).to_string();
+	writeln!(child.stdin, "{line}").map_err(|e| format!("failed to write answer: {e}"))
+}
+
+/// Abort the current login, if any.
+#[tauri::command]
+pub async fn oauth_login_cancel(state: tauri::State<'_, BridgeState>) -> Result<(), String> {
+	let mut guard = state.oauth_login.lock().unwrap();
+	if let Some(child) = guard.as_mut() {
+		let _ = child.child.kill();
+	}
+	*guard = None;
+	Ok(())
+}
+
+/// Resolve just the pizza binary + base args (no --mode rpc suffix).
+fn resolve_pizza_command_binary(app: &AppHandle) -> (String, Vec<String>) {
+	let (program, args) = resolve_pizza_command(app);
+	(program, args)
+}
+
+/// Login option entries for the GUI ("Sign in with an account" / "API key").
+#[derive(Serialize, Clone)]
+pub struct AuthLoginOption {
+	pub id: String,
+	pub name: String,
+	pub kind: String, // "account" | "apiKey"
+}
+
+/// `pizza auth list --json` — both login categories.
+#[tauri::command]
+pub async fn list_auth_options(app: AppHandle) -> Result<Vec<AuthLoginOption>, String> {
+	let (program, mut base_args) = resolve_pizza_command_binary(&app);
+	base_args.retain(|a| a != "rpc" && a != "--mode");
+	let output = std::process::Command::new(&program)
+		.args(base_args)
+		.args(["auth", "list", "--json"])
+		.stderr(std::process::Stdio::null())
+		.output()
+		.map_err(|e| format!("failed to spawn pizza: {e}"))?;
+	let stdout = String::from_utf8_lossy(&output.stdout);
+	let parsed: serde_json::Value =
+		serde_json::from_str(stdout.trim()).map_err(|e| format!("bad auth list output: {e}"))?;
+	let mut options = Vec::new();
+	for key in ["account", "apiKey"] {
+		if let Some(entries) = parsed.get(key).and_then(|v| v.as_array()) {
+			for entry in entries {
+				let id = entry.get("id").and_then(|v| v.as_str()).unwrap_or_default();
+				let name = entry.get("name").and_then(|v| v.as_str()).unwrap_or(id);
+				if !id.is_empty() {
+					options.push(AuthLoginOption {
+						id: id.to_string(),
+						name: name.to_string(),
+						kind: key.to_string(),
+					});
+				}
+			}
+		}
+	}
+	Ok(options)
 }

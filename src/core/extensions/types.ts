@@ -22,8 +22,7 @@ import type {
 	Context,
 	ImageContent,
 	Model,
-	OAuthCredentials,
-	OAuthLoginCallbacks,
+	OAuthAuth,
 	SimpleStreamOptions,
 	TextContent,
 	ToolResultMessage,
@@ -1256,9 +1255,9 @@ export interface ExtensionAPI {
 	 *   models: [...],
 	 *   oauth: {
 	 *     name: "Corporate AI (SSO)",
-	 *     async login(callbacks) { ... },
-	 *     async refreshToken(credentials) { ... },
-	 *     getApiKey(credentials) { return credentials.access; }
+	 *     async login(interaction) { ... },
+	 *     async refresh(credential, signal) { ... },
+	 *     async toAuth(credential) { return { apiKey: credential.access }; }
 	 *   }
 	 * });
 	 */
@@ -1303,19 +1302,8 @@ export interface ProviderConfig {
 	authHeader?: boolean;
 	/** Models to register. If provided, replaces all existing models for this provider. */
 	models?: ProviderModelConfig[];
-	/** OAuth provider for /login support. The `id` is set automatically from the provider name. */
-	oauth?: {
-		/** Display name for the provider in login UI. */
-		name: string;
-		/** Run the login flow, return credentials to persist. */
-		login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials>;
-		/** Refresh expired credentials, return updated credentials to persist. */
-		refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials>;
-		/** Convert credentials to API key string for the provider. */
-		getApiKey(credentials: OAuthCredentials): string;
-		/** Optional: modify models for this provider (e.g., update baseUrl based on credentials). */
-		modifyModels?(models: Model<Api>[], credentials: OAuthCredentials): Model<Api>[];
-	};
+	/** OAuth flow for /login support (pi-ai `OAuthAuth`). The provider id is the registered name. */
+	oauth?: OAuthAuth;
 }
 
 /** Configuration for a model within a provider. */

@@ -17,7 +17,13 @@ const logPath = process.env.PIZZA_PTY_LOG === "0" ? null : "/tmp/pizza-pty.log";
  */
 
 import { EventEmitter } from "node:events";
-import { read, writeSync, openSync, appendFileSync } from "node:fs";
+import { existsSync, read, writeSync, openSync, appendFileSync } from "node:fs";
+import path from "node:path";
+import { createRequire } from "node:module";
+
+// In ESM, `require` is not defined. Use `createRequire` to load native `.node`
+// addons by absolute path (the only way to load a native addon from ESM).
+const require_ = createRequire(import.meta.url);
 
 // Diagnostics: write to /tmp/pizza-pty.log so failures in the packaged app
 // (where stdout/stderr are invisible) are diagnosable. Set PIZZA_PTY_LOG=0 to disable.
@@ -65,15 +71,15 @@ export function resolveNativeDir(platform: string, arch: string): string {
 	const tag = `${parts[0]}-${parts[1]}`;
 	// In a bun --compile binary, process.execPath is the binary itself.
 	const binDir = process.execPath
-		? (require("node:path").dirname(process.execPath) as string)
+		? path.dirname(process.execPath)
 		: process.cwd();
-	return require("node:path").join(binDir, "prebuilds", tag);
+	return path.join(binDir, "prebuilds", tag);
 }
 
 /** Load the pty.node native addon from an absolute path. */
 export function loadPtyNative(nativeDir: string): PtyNative {
-	const file = require("node:path").join(nativeDir, "pty.node");
-	return require(file) as PtyNative;
+	const file = path.join(nativeDir, "pty.node");
+	return require_(file) as PtyNative;
 }
 
 class WriteStream {
@@ -136,8 +142,8 @@ export function spawnMinimalPty(file: string, args: string[], opt: SpawnOptions)
 		log(`spawnMinimalPty: loadPtyNative FAILED: ${e instanceof Error ? e.message : String(e)}`);
 		throw e;
 	}
-	const helper = require("node:path").join(opt.nativeDir, "spawn-helper");
-	log(`spawnMinimalPty: helper=${helper} exists=${require("node:fs").existsSync(helper)}`);
+	const helper = path.join(opt.nativeDir, "spawn-helper");
+	log(`spawnMinimalPty: helper=${helper} exists=${existsSync(helper)}`);
 	const emitter = new EventEmitter();
 	const encoding: BufferEncoding | null =
 		opt.encoding === undefined ? "utf8" : (opt.encoding as BufferEncoding | null);

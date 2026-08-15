@@ -405,7 +405,7 @@ type TellAction = (typeof TELL_ACTIONS)[number];
  * and the rest is joined into the message. `--to` / `--message` flags override
  * the positionals. A heredoc (when present) supplies the message for `send`.
  */
-function parseTellInput(args: string[], heredoc?: string): {
+export function parseTellInput(args: string[], heredoc?: string): {
 	action: TellAction;
 	to?: string;
 	message?: string;
@@ -450,14 +450,26 @@ function parseTellInput(args: string[], heredoc?: string): {
 
 	// For `send`, the remaining positionals are <to> <message...>.
 	if (action === "send") {
+		// Positional form: `tell send <to> <message...>`. When `--to` was given
+		// as a flag, every positional after the action belongs to the message —
+		// slicing off the first one would silently swallow its first word.
 		const rest = positional.slice(1);
+		let toFromPositional = false;
 		if (to === undefined && rest.length > 0) {
 			to = rest[0];
+			toFromPositional = true;
 		}
 		if (message === undefined) {
-			if (rest.length > 1) {
-				message = rest.slice(1).join(" ");
-			} else if (heredoc !== undefined) {
+			if (toFromPositional) {
+				// `<to>` came from a positional; the message starts after it.
+				if (rest.length > 1) {
+					message = rest.slice(1).join(" ");
+				}
+			} else if (rest.length > 0) {
+				// `--to` flag form: ALL positionals are the message.
+				message = rest.join(" ");
+			}
+			if (message === undefined && heredoc !== undefined) {
 				message = heredoc;
 			}
 		}
