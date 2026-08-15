@@ -26,6 +26,9 @@ Pizza’s shell comes from Pi -> Pizza. Thanks to Pi for open sourcing.
 - **Git log-like branch tree memory**
   Sessions can fork from any earlier message. Rewind, branch, compare. Restart your life anytime, anywhere.
 
+- **Agents collaborate with agents — free passage between workspaces**
+  Any agent can talk and collaborate with another workspace's agent via `tell`. The conversation is continuous — the other side gets the job done in its own workspace, and other projects' details never leak into your context.
+
 ## Quick Start
 
 ### Desktop
