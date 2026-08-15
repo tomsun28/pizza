@@ -26,13 +26,20 @@ Pizza 的表壳来源于 Pi -> Pizza, 感谢 Pi 的开源。
 - **Git Log 一样的分支树记忆**
   会话可以从任意一条历史消息分叉。回退、分支、对比。随时随地重开人生。  
 
+- **Agent 之间自由通行协作**
+  任意 agent 都能通过 `tell` 与另一个工作区的 agent 相互交流协作。对话是连续的 —— 对方会在自己的工作区里把事办了，其它项目的细节不会泄漏进你的上下文。
+
 ## 快速开始
 
 ### 桌面应用
 
 从 [GitHub Releases](https://github.com/tomsun28/pizza/releases) 下载对应平台的安装包（macOS / Linux / Windows），安装后打开即可使用。
 
-> **macOS 用户**：由于应用未经签名，打开时可能会提示"Pizza.app 已损坏，无法打开。"请在终端执行 `xattr -cr /Applications/Pizza.app` 即可解决。
+**对 macOS 用户**：由于应用未经签名，打开时可能会提示"Pizza.app 已损坏，无法打开。"请在终端执行以下命令即可解决：
+
+```bash
+xattr -cr /Applications/Pizza.app
+```
 
 ### CLI
 

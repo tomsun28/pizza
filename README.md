@@ -26,13 +26,20 @@ Pizza’s shell comes from Pi -> Pizza. Thanks to Pi for open sourcing.
 - **Git log-like branch tree memory**
   Sessions can fork from any earlier message. Rewind, branch, compare. Restart your life anytime, anywhere.
 
+- **Agents collaborate with agents — free passage between workspaces**
+  Any agent can talk and collaborate with another workspace's agent via `tell`. The conversation is continuous — the other side gets the job done in its own workspace, and other projects' details never leak into your context.
+
 ## Quick Start
 
 ### Desktop
 
 Download the installer for your platform (macOS / Linux / Windows) from [GitHub Releases](https://github.com/tomsun28/pizza/releases), install and launch.
 
-> **macOS users**: Since the app is unsigned, you may see "Pizza.app is damaged and can't be opened. Run `xattr -cr /Applications/Pizza.app` in Terminal to fix this.
+**For macOS users**: Since the app is unsigned, you may see "Pizza.app is damaged and can't be opened. Run the following command in Terminal to fix this:
+
+```bash
+xattr -cr /Applications/Pizza.app
+```
 
 ### CLI
 
