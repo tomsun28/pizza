@@ -1504,10 +1504,25 @@ async fn init_sidecar_via_gateway(
 			tauri::async_runtime::spawn_blocking(move || ch.rpc(&cwd_for_blocking, frame))
 				.await
 				.map_err(|e| format!("blocking task failed: {e}"))?;
-		if let Ok(resp) = resp_result {
-			emit_frame_to_windows(&app, &cwd, resp);
-		}
-		return Ok(serde_json::json!({}).to_string());
+		// Return the actual state JSON so callers (especially restart_sidecar)
+		// get a real payload instead of {}. In gateway mode restart_sidecar
+		// can't respawn the agent process, so this re-fetched state — which
+		// reflects any reload_providers-driven model changes — is the only
+		// way the frontend learns that a model is now configured.
+		let state_json = match resp_result {
+			Ok(resp) => {
+				emit_frame_to_windows(&app, &cwd, resp.clone());
+				resp.to_string()
+			}
+			Err(e) => {
+				log_file(&format!(
+					"init_sidecar_via_gateway: re-attach get_state failed: {}",
+					e
+				));
+				serde_json::json!({}).to_string()
+			}
+		};
+		return Ok(state_json);
 	}
 
 	let socket = gateway_channel::gateway_socket_path()

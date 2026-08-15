@@ -481,6 +481,99 @@ describe("runRpcModeWithFacade", () => {
 		facade.dispose();
 	});
 
+	it("reload_providers resolves a placeholder model after a key is added (desktop first-run setup)", async () => {
+		// Reproduces the desktop first-run bug: the sidecar starts with no API
+		// key configured, so the facade is initialized with the placeholder
+		// model (provider="none", id="none"). The user configures a key via the
+		// Settings UI; the bridge writes auth.json and broadcasts
+		// reload_providers. Without resolving a real model here, get_state keeps
+		// returning model=undefined and the GUI bounces the user back to the
+		// setup page forever (especially in gateway mode where the agent process
+		// can't be restarted).
+		const dir = makeTempDir();
+		const authJsonPath = join(dir, "auth.json");
+		const modelsJsonPath = join(dir, "models.json");
+		// No auth.json at startup → no models available → placeholder model.
+		writeFileSync(
+			modelsJsonPath,
+			JSON.stringify({
+				providers: {
+					openai: {
+						baseUrl: "https://api.openai.com/v1",
+						api: "openai-responses",
+						apiKey: "openai", // auth-only override on a built-in provider
+					},
+				},
+			}),
+		);
+
+		const authStorage = AuthStorage.create(authJsonPath);
+		const modelRegistry = RealModelRegistry.create(authStorage, modelsJsonPath);
+
+		// Build a facade with the placeholder model, matching the production
+		// startup path in session-facade-factory when findInitialModel returns
+		// no model (toModelConfig(model ?? ({ provider: "none", id: "none" }))).
+		const cwd = makeTempDir();
+		const store = new SqliteEventStore(`rpc-placeholder-${Date.now()}`, join(cwd, "events.sqlite"));
+		const sessionManager = new SessionManager(store, store);
+		sessionManager.createSession("user_explicit", "Initial");
+		const runtime = new EventSourcedRuntime({
+			cwd,
+			agentDir: cwd,
+			store,
+			sessionManager,
+			toolRegistry: emptyRegistry,
+			llmClient: { async complete() { return makeTextResponse("ok"); } },
+			systemPrompt: "placeholder test",
+			model: { provider: "none", model_id: "none" },
+			tools: [],
+		});
+		const facade = new SessionFacade({
+			runtime,
+			settingsManager: SettingsManager.inMemory({}),
+			modelRegistry,
+			disposers: [() => store.close()],
+		});
+		void runRpcModeWithFacade(facade);
+		await vi.waitFor(() => expect(rpcIo.lineHandler).toBeDefined());
+
+		// Before reload: get_state returns model=undefined (placeholder).
+		rpcIo.lineHandler!(JSON.stringify({ id: "state-1", type: "get_state" }));
+		await vi.waitFor(() => {
+			const stateResp = parseOutputLines().find((l) => l.id === "state-1");
+			expect(stateResp).toBeDefined();
+			expect((stateResp as { data?: { model?: unknown } }).data?.model).toBeUndefined();
+		});
+
+		// User configures a key via the Settings UI; bridge writes auth.json.
+		writeFileSync(authJsonPath, JSON.stringify({ openai: { type: "api_key", key: "sk-test-key" } }, null, 2));
+		rpcIo.lineHandler!(JSON.stringify({ id: "reload-1", type: "reload_providers" }));
+		await vi.waitFor(() => {
+			expect(parseOutputLines()).toContainEqual(
+				expect.objectContaining({
+					id: "reload-1",
+					type: "response",
+					command: "reload_providers",
+					success: true,
+					data: { providers: ["openai"] },
+				}),
+			);
+		});
+
+		// After reload: get_state returns a real model — the facade picked one
+		// up from the now-available registry.
+		rpcIo.lineHandler!(JSON.stringify({ id: "state-2", type: "get_state" }));
+		await vi.waitFor(() => {
+			const stateResp = parseOutputLines().find((l) => l.id === "state-2");
+			expect(stateResp).toBeDefined();
+			const model = (stateResp as { data?: { model?: { provider?: string; id?: string } } }).data?.model;
+			expect(model).toBeDefined();
+			expect(model?.provider).toBe("openai");
+		});
+
+		facade.dispose();
+	});
+
 	it("get_extensions returns extensions (empty when no resource loader)", async () => {
 		const facade = createFacade();
 		void runRpcModeWithFacade(facade);

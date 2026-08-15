@@ -326,6 +326,16 @@ export class EventSourcedRuntime {
 		});
 	}
 
+	/**
+	 * Replace the LLM client at runtime. Used when the facade was created
+	 * without a model (first-run setup mode, llmClient=undefined) and a real
+	 * model is later configured via reload_providers — without this the reactor
+	 * would call into a null client and crash on the first prompt.
+	 */
+	setLlmClient(llmClient: LLMClient): void {
+		this.config.llmClient = llmClient;
+	}
+
 	getModel(): ModelConfig {
 		return { ...this.config.model };
 	}

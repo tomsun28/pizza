@@ -34,7 +34,7 @@ import { ModelRegistry } from "./model-registry.js";
 import { findInitialModel } from "./model-resolver.js";
 import { SessionManager as ProjectionSessionManager } from "./projection/session-manager.js";
 import { DefaultResourceLoader, type ResourceLoader } from "./resource-loader.js";
-import type { ToolDefinition as RuntimeToolDefinition } from "./runtime/llm-types.js";
+import type { LLMClient, ToolDefinition as RuntimeToolDefinition } from "./runtime/llm-types.js";
 import { buildLlmClientFromStreamFn, toModelConfig } from "./runtime/ai-client.js";
 import { DefaultRetryPolicy } from "./runtime/policies.js";
 import { EventSourcedRuntime } from "./runtime/runtime.js";
@@ -125,6 +125,15 @@ export interface CreateSessionFacadeResult {
 	 * is what powers the agent-facing `_cron` built-in cli command.
 	 */
 	setSchedulerEngine?: (engine: SchedulerEngine | undefined) => void;
+	/**
+	 * Build and inject an LLM client after creation. Used when the facade was
+	 * created without a model (first-run setup mode) and a real model is later
+	 * configured via reload_providers — the runtime's llmClient starts as null
+	 * and needs to be replaced before the first prompt or the reactor crashes.
+	 * Returns true if a client was built and injected (i.e. a model is now
+	 * available); false if there is still no model.
+	 */
+	setLlmClient?: () => boolean;
 }
 
 function isBuiltInToolName(name: string): name is ToolName {
@@ -702,48 +711,52 @@ export async function createSessionFacade(
 	);
 
 	// ── LLM client (AI stream function -> reactor LLMClient) ───────────────
-	const llmClient = model
-		? buildLlmClientFromStreamFn(getModelLive, async (m, context, opts) => {
-				const auth = await modelRegistry.getApiKeyAndHeaders(m);
-				if (!auth.ok) {
-					throw new Error(auth.error);
+	// Built as a function so it can be (re)created when a model becomes
+	// available after startup (first-run setup: the sidecar boots with no API
+	// key → no model → llmClient is null; reload_providers later resolves a
+	// real model and calls setLlmClient to inject a freshly-built client).
+	const buildLlmClient = (): LLMClient =>
+		buildLlmClientFromStreamFn(getModelLive, async (m, context, opts) => {
+			const auth = await modelRegistry.getApiKeyAndHeaders(m);
+			if (!auth.ok) {
+				throw new Error(auth.error);
+			}
+			return streamSimple(
+				// OAuth providers may carry a per-credential baseUrl (e.g. GitHub Copilot)
+				auth.baseUrl ? { ...m, baseUrl: auth.baseUrl } : m,
+				context,
+				{
+					...opts,
+					apiKey: auth.apiKey,
+					headers: auth.headers ?? opts?.headers,
+				},
+			);
+		}, {
+			thinkingBudgets: settingsManager.getThinkingBudgets(),
+			transport: settingsManager.getTransport(),
+			// Read the live thinking level from the runtime, which is the single
+			// source of truth. Both `/thinking` (facade.thinkingLevel setter) and
+			// the extensions setThinkingLevel() API end up calling
+			// runtime.setThinkingLevel(), so this captures every update path.
+			getThinkingLevel: () => runtime?.getThinkingLevel(),
+			onPayload: async (payload: unknown) => {
+				if (!extensionRunner.hasHandlers("before_provider_request")) {
+					return payload;
 				}
-				return streamSimple(
-					// OAuth providers may carry a per-credential baseUrl (e.g. GitHub Copilot)
-					auth.baseUrl ? { ...m, baseUrl: auth.baseUrl } : m,
-					context,
-					{
-						...opts,
-						apiKey: auth.apiKey,
-						headers: auth.headers ?? opts?.headers,
-					},
-				);
-			}, {
-				thinkingBudgets: settingsManager.getThinkingBudgets(),
-				transport: settingsManager.getTransport(),
-				// Read the live thinking level from the runtime, which is the single
-				// source of truth. Both `/thinking` (facade.thinkingLevel setter) and
-				// the extensions setThinkingLevel() API end up calling
-				// runtime.setThinkingLevel(), so this captures every update path.
-				getThinkingLevel: () => runtime?.getThinkingLevel(),
-				onPayload: async (payload: unknown) => {
-					if (!extensionRunner.hasHandlers("before_provider_request")) {
-						return payload;
-					}
-					return extensionRunner.emitBeforeProviderRequest(payload);
-				},
-				onResponse: async (response: { status: number; headers: Record<string, string> }) => {
-					if (!extensionRunner.hasHandlers("after_provider_response")) {
-						return;
-					}
-					await extensionRunner.emit({
-						type: "after_provider_response",
-						status: response.status,
-						headers: response.headers,
-					});
-				},
-			})
-		: undefined;
+				return extensionRunner.emitBeforeProviderRequest(payload);
+			},
+			onResponse: async (response: { status: number; headers: Record<string, string> }) => {
+				if (!extensionRunner.hasHandlers("after_provider_response")) {
+					return;
+				}
+				await extensionRunner.emit({
+					type: "after_provider_response",
+					status: response.status,
+					headers: response.headers,
+				});
+			},
+		});
+	const llmClient = model ? buildLlmClient() : undefined;
 
 	// ── Runtime ────────────────────────────────────────────────────────────
 	runtime = new EventSourcedRuntime({
@@ -799,6 +812,13 @@ export async function createSessionFacade(
 		/** Let rpc mode inject the SchedulerEngine once it is created. */
 		setSchedulerEngine: (engine: SchedulerEngine | undefined) => {
 			schedulerEngineSlot = engine;
+		},
+		/** Build + inject an LLM client once a model becomes available. */
+		setLlmClient: () => {
+			const liveModel = getModelLive();
+			if (!liveModel) return false;
+			runtime?.setLlmClient(buildLlmClient());
+			return true;
 		},
 	};
 }
