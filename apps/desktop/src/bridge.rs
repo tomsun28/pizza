@@ -3622,7 +3622,6 @@ mod tests {
 	}
 }
 
-
 // ============================================================================
 // OAuth login (Sign in with an account)
 //
@@ -3660,7 +3659,9 @@ pub async fn oauth_login(
 		.stdout(std::process::Stdio::piped())
 		.stderr(std::process::Stdio::null());
 
-	let mut child = cmd.spawn().map_err(|e| format!("failed to spawn pizza: {e}"))?;
+	let mut child = cmd
+		.spawn()
+		.map_err(|e| format!("failed to spawn pizza: {e}"))?;
 	let stdin = child.stdin.take().ok_or("no stdin on login child")?;
 	let stdout = child.stdout.take().ok_or("no stdout on login child")?;
 
@@ -3720,7 +3721,6 @@ fn resolve_pizza_command_binary(app: &AppHandle) -> (String, Vec<String>) {
 	let (program, args) = resolve_pizza_command(app);
 	(program, args)
 }
-
 
 /// Login option entries for the GUI ("Sign in with an account" / "API key").
 #[derive(Serialize, Clone)]

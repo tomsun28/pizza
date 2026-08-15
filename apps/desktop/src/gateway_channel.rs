@@ -499,8 +499,8 @@ fn query_gateway_status(socket_path: &PathBuf) -> Option<GatewayStatus> {
 	thread::spawn(move || {
 		let result = (|| -> Result<GatewayStatus, String> {
 			let mut stream = open_gateway_stream(&path)?;
-			let payload = serde_json::to_string(&json!({ "type": "status" }))
-				.map_err(|e| e.to_string())?;
+			let payload =
+				serde_json::to_string(&json!({ "type": "status" })).map_err(|e| e.to_string())?;
 			stream
 				.write_all(payload.as_bytes())
 				.map_err(|e| e.to_string())?;
