@@ -18,6 +18,8 @@ import {
 	saveCustomProvider,
 	testCustomProvider,
 	removeCustomProvider,
+	getSchedulerPolicy,
+	setSchedulerPolicy,
 	type CustomProviderInput,
 	type CustomProviderTestResult,
 	type ProviderInfo,
@@ -88,19 +90,17 @@ function GeneralTab() {
 	});
 	const schedulerLoadedRef = useRef(false);
 	useEffect(() => {
-		import("@/lib/transport").then(({ getSchedulerPolicy }) => {
-			getSchedulerPolicy()
-				.then((policy) => {
-					setSchedulerPolicyState({
-						...policy,
-						defaultSessionTarget: policy.defaultSessionTarget.kind === "current"
-							? { kind: "pinned" }
-							: policy.defaultSessionTarget,
-					});
-					schedulerLoadedRef.current = true;
-				})
-				.catch(() => {});
-		});
+		getSchedulerPolicy()
+			.then((policy) => {
+				setSchedulerPolicyState({
+					...policy,
+					defaultSessionTarget: policy.defaultSessionTarget.kind === "current"
+						? { kind: "pinned" }
+						: policy.defaultSessionTarget,
+				});
+				schedulerLoadedRef.current = true;
+			})
+			.catch(() => {});
 	}, []);
 
 	// Auto-save scheduler policy on every change (consistent with thinking/language
@@ -110,7 +110,6 @@ function GeneralTab() {
 		setSchedulerPolicyState(next);
 		if (!schedulerLoadedRef.current) return;
 		try {
-			const { setSchedulerPolicy } = await import("@/lib/transport");
 			const saved = await setSchedulerPolicy(next);
 			setSchedulerPolicyState(saved);
 		} catch (e) {

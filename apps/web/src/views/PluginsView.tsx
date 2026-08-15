@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useLocation, useOutletContext } from "react-router-dom";
-import { PageHeader, Card, Badge, Button, MoreMenu, type ContextMenuItem } from "@/components/ui";
+import { PageHeader, Card, Badge, Button, MoreMenu } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import {
 	fetchSkillsSh,

@@ -94,8 +94,3 @@ export function TimePointChips({
 		</div>
 	);
 }
-
-/** Format an HH:MM time for display. */
-export function formatTimeOfDay(t: TimeOfDay): string {
-	return `${String(t.hour).padStart(2, "0")}:${String(t.minute).padStart(2, "0")}`;
-}

@@ -25,8 +25,6 @@ const VISUAL_MODES: ScheduleMode[] = [
 	"monthly",
 ];
 
-export const ALL_MODES: ScheduleMode[] = [...VISUAL_MODES, "cron"];
-
 /**
  * Single-select dropdown for picking a schedule mode. Renders the current
  * label as the trigger button, and expands a popup menu with all options.
