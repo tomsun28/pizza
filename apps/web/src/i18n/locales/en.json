@@ -64,6 +64,7 @@
     "attachImage": "Attach image",
     "noModelsAvailable": "No models available",
     "selectModel": "Select model",
+    "thinkingLevel": "Thinking",
     "configureApiKey": "Configure API key in Settings →",
     "stopDictation": "Stop dictation",
     "voiceInput": "Voice input",
@@ -472,10 +473,6 @@
       "provider": "Provider"
     },
     "general": {
-      "model": "Model",
-      "currentProvider": "Current Provider",
-      "currentModel": "Current Model",
-      "thinkingLevel": "Thinking Level",
       "compaction": "Compaction",
       "autoCompaction": "Auto Compaction",
       "status": "Status",

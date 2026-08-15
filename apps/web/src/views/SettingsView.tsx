@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useLocation, useOutletContext } from "react-router-dom";
-import { Save } from "lucide-react";
 import { PageHeader, Card, Badge, Button } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { PixelSelect, PixelCombobox } from "@pxlkit/ui-kit";
@@ -24,7 +23,6 @@ import {
 	type ProviderInfo,
 } from "@/lib/transport";
 import type { RpcSessionState } from "@/lib/types";
-import { sendCommandAwait } from "@/lib/transport";
 import { Key, Trash2, Eye, EyeOff, Plus, ArrowLeft, ArrowRight } from "lucide-react";
 import type { LayoutOutletContext } from "@/components/Layout";
 import {
@@ -80,43 +78,49 @@ type CustomProviderTestState =
 	| { status: "success"; result: CustomProviderTestResult }
 	| { status: "error"; result?: CustomProviderTestResult; error?: string };
 
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
-
-const THINKING_OPTIONS = THINKING_LEVELS.map((level) => ({ value: level, label: level }));
-
-function GeneralTab({ state }: { state: RpcSessionState | null }) {
+function GeneralTab() {
 	const { t, i18n } = useTranslation();
-	const [thinkingLevel, setThinkingLevel] = useState<string>(state?.thinkingLevel ?? "off");
 	// Scheduler defaults — applied to new tasks. Loaded once on mount.
 	const [schedulerPolicy, setSchedulerPolicyState] = useState<import("@/lib/types").SchedulerPolicy>({
 		concurrency: "skip",
 		timeoutMinutes: 0,
 		defaultSessionTarget: { kind: "pinned" },
 	});
+	const schedulerLoadedRef = useRef(false);
 	useEffect(() => {
 		import("@/lib/transport").then(({ getSchedulerPolicy }) => {
 			getSchedulerPolicy()
-				.then((policy) => setSchedulerPolicyState({
-					...policy,
-					defaultSessionTarget: policy.defaultSessionTarget.kind === "current"
-						? { kind: "pinned" }
-						: policy.defaultSessionTarget,
-				}))
+				.then((policy) => {
+					setSchedulerPolicyState({
+						...policy,
+						defaultSessionTarget: policy.defaultSessionTarget.kind === "current"
+							? { kind: "pinned" }
+							: policy.defaultSessionTarget,
+					});
+					schedulerLoadedRef.current = true;
+				})
 				.catch(() => {});
 		});
 	}, []);
+
+	// Auto-save scheduler policy on every change (consistent with thinking/language
+	// which also apply immediately). Skips the initial load to avoid clobbering
+	// server-side defaults before we've fetched them.
+	const updateScheduler = useCallback(async (next: import("@/lib/types").SchedulerPolicy) => {
+		setSchedulerPolicyState(next);
+		if (!schedulerLoadedRef.current) return;
+		try {
+			const { setSchedulerPolicy } = await import("@/lib/transport");
+			const saved = await setSchedulerPolicy(next);
+			setSchedulerPolicyState(saved);
+		} catch (e) {
+			console.error("[settings] setSchedulerPolicy failed:", e);
+		}
+	}, []);
+
 	const [language, setLanguage] = useState<AppLanguage>(
 		(SUPPORTED_LANGUAGES.includes(i18n.language as AppLanguage) ? i18n.language : DEFAULT_LANGUAGE) as AppLanguage,
 	);
-
-	const handleThinkingChange = useCallback(async (level: string) => {
-		setThinkingLevel(level);
-		try {
-			await sendCommandAwait({ type: "set_thinking_level", level: level as RpcSessionState["thinkingLevel"] });
-		} catch (e) {
-			console.error("[settings] set_thinking_level failed:", e);
-		}
-	}, []);
 
 	const handleLanguageChange = useCallback((value: string) => {
 		const lang = (SUPPORTED_LANGUAGES.includes(value as AppLanguage) ? value : DEFAULT_LANGUAGE) as AppLanguage;
@@ -133,27 +137,6 @@ function GeneralTab({ state }: { state: RpcSessionState | null }) {
 	return (
 		<div className="space-y-6">
 			<Card>
-				<div className="mb-2 text-sm font-medium text-fg">{t("settings.general.model")}</div>
-				<Row label={t("settings.general.currentProvider")}>
-					<span className="font-mono">{state?.model?.provider ?? "—"}</span>
-				</Row>
-				<Row label={t("settings.general.currentModel")}>
-					<span className="font-mono">{state?.model?.id ?? "—"}</span>
-				</Row>
-				<Row label={t("settings.general.thinkingLevel")}>
-					<div className="w-32">
-						<PixelSelect
-							value={thinkingLevel}
-							options={THINKING_OPTIONS}
-							onChange={handleThinkingChange}
-							size="sm"
-							tone="cyan"
-						/>
-					</div>
-				</Row>
-			</Card>
-
-			<Card>
 				<div className="mb-2 text-sm font-medium text-fg">{t("settings.general.language")}</div>
 				<Row label={t("settings.general.languageDescription")}>
 					<div className="w-40">
@@ -169,21 +152,7 @@ function GeneralTab({ state }: { state: RpcSessionState | null }) {
 			</Card>
 
 			<Card>
-				<div className="mb-2 flex items-center justify-between">
-					<span className="text-sm font-medium text-fg">{t("settings.scheduler.title")}</span>
-					<Button
-						size="sm"
-						tone="accent"
-						iconLeft={<Save className="h-3.5 w-3.5" />}
-						onClick={async () => {
-							const { setSchedulerPolicy } = await import("@/lib/transport");
-							const saved = await setSchedulerPolicy(schedulerPolicy);
-							setSchedulerPolicyState(saved);
-						}}
-					>
-						{t("common.save")}
-					</Button>
-				</div>
+				<div className="mb-2 text-sm font-medium text-fg">{t("settings.scheduler.title")}</div>
 				<div className="mb-1 text-xs text-muted">{t("settings.scheduler.subtitle")}</div>
 				<div className="space-y-3">
 					<div>
@@ -193,7 +162,7 @@ function GeneralTab({ state }: { state: RpcSessionState | null }) {
 								<button
 									key={k}
 									type="button"
-									onClick={() => setSchedulerPolicyState({
+									onClick={() => updateScheduler({
 										...schedulerPolicy,
 										defaultSessionTarget: k === "pinned"
 											? { kind: "pinned" }
@@ -218,7 +187,7 @@ function GeneralTab({ state }: { state: RpcSessionState | null }) {
 								<button
 									key={p}
 									type="button"
-									onClick={() => setSchedulerPolicyState({ ...schedulerPolicy, concurrency: p })}
+									onClick={() => updateScheduler({ ...schedulerPolicy, concurrency: p })}
 									className={cn(
 										"flex w-full items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left text-sm transition-colors",
 										schedulerPolicy.concurrency === p
@@ -239,7 +208,7 @@ function GeneralTab({ state }: { state: RpcSessionState | null }) {
 								min={0}
 								max={1440}
 								value={schedulerPolicy.timeoutMinutes}
-								onChange={(e) => setSchedulerPolicyState({ ...schedulerPolicy, timeoutMinutes: Math.max(0, Number(e.target.value || 0)) })}
+								onChange={(e) => updateScheduler({ ...schedulerPolicy, timeoutMinutes: Math.max(0, Number(e.target.value || 0)) })}
 								className="h-8 w-24 rounded-md border border-border bg-surface px-2 text-sm text-fg outline-none focus:border-accent"
 							/>
 							<span className="text-xs text-muted">{t("schedule.minute")} (0 = {t("schedule.timeoutNoLimit")})</span>
@@ -1118,7 +1087,7 @@ export default function SettingsView({
 					</div>
 
 					{tab === "general" ? (
-						<GeneralTab state={state} />
+						<GeneralTab />
 					) : (
 						<ProviderTab isSetupMode={isSetupMode} onConfigured={handleConfigured} />
 					)}

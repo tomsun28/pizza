@@ -64,6 +64,7 @@
     "attachImage": "添加图片",
     "noModelsAvailable": "无可用模型",
     "selectModel": "选择模型",
+    "thinkingLevel": "思考",
     "configureApiKey": "在设置中配置 API 密钥 →",
     "stopDictation": "停止听写",
     "voiceInput": "语音输入",
@@ -472,10 +473,6 @@
       "provider": "服务商"
     },
     "general": {
-      "model": "模型",
-      "currentProvider": "当前服务商",
-      "currentModel": "当前模型",
-      "thinkingLevel": "思考级别",
       "compaction": "上下文压缩",
       "autoCompaction": "自动压缩",
       "status": "状态",
