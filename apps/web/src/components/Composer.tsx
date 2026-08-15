@@ -1289,9 +1289,9 @@ ${insert}`;
 									title={t("composer.approvalPolicy")}
 								>
 									{safeMode ? (
-										<Shield className="h-3.5 w-3.5" />
-									) : (
 										<ShieldCheck className="h-3.5 w-3.5" />
+									) : (
+										<Shield className="h-3.5 w-3.5" />
 									)}
 									<span>{safeMode ? t("composer.approvalOn") : t("composer.approvalOff")}</span>
 									<ChevronDown className="h-3 w-3" />
@@ -1306,7 +1306,7 @@ ${insert}`;
 												!safeMode ? "text-fg" : "text-muted",
 											)}
 										>
-											<ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+											<Shield className="mt-0.5 h-3.5 w-3.5 shrink-0" />
 											<span className="min-w-0 flex-1">
 												<span className="block text-fg">{t("composer.approvalOff")}</span>
 												<span className="block text-[10px] text-muted">{t("composer.approvalOffHint")}</span>
@@ -1321,7 +1321,7 @@ ${insert}`;
 												safeMode ? "text-fg" : "text-muted",
 											)}
 										>
-											<Shield className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+											<ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
 											<span className="min-w-0 flex-1">
 												<span className="block text-fg">{t("composer.approvalOn")}</span>
 												<span className="block text-[10px] text-muted">{t("composer.approvalOnHint")}</span>

@@ -520,8 +520,8 @@ export function createBashToolDefinition(
 	return {
 		name: "cli",
 		label: "cli",
-		description: `Execute a CLI command in the current working directory. Built-in commands are prefixed with an underscore and handled internally (they never fall back to the shell): _read, _write, _edit, _session_split, _history_tree, _skill, _tell, and _cron. The underscore prefix avoids collisions with real shell commands (e.g. bash's own read/write builtins). IMPORTANT: built-in commands do NOT support shell operators — no pipes (|), redirects (> <), chaining (; & &&), command substitution, or newlines; issue each as a single pure command. To use a pipeline or redirection, run a plain shell command instead (grep, find, ls, cat, sed, git, npm, etc.). For _edit/_write, a value containing quotes, multiple spaces, or newlines must go through a verbatim channel — _edit with --edits JSON (e.g. --edits '[{"op":"replace","range":"12#ab","new":"line1\nline2"}]'), _write with --content or a <<EOF heredoc, or wrap the whole value in quotes. Do NOT pass such a value as bare positional tokens — its inner quotes/spaces get silently mangled. Output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB.`,
-		promptSnippet: "Execute CLI commands: built-ins are prefixed with _ (_read/_write/_edit/_session_split/_history_tree/_skill/_tell/_cron) and are pure single commands with NO shell operators; use shell commands (grep, find, ls, cat, git, npm) for pipes/redirections",
+		description: `Execute a CLI command in the current working directory. Underscore commands are prefixed with _ and handled internally (they never fall back to the shell): _read, _write, _edit, _session_split, _history_tree, _skill, _tell, and _cron. The underscore prefix avoids collisions with real shell commands (e.g. bash's own read/write builtins). IMPORTANT: underscore commands do NOT support shell operators — no pipes (|), redirects (> <), chaining (; & &&), command substitution, or newlines; issue each as a single pure command. To use a pipeline or redirection, run a plain shell command instead (grep, find, ls, cat, sed, git, npm, etc.). For _edit/_write, a value containing quotes, multiple spaces, or newlines must go through a verbatim channel — _edit with --edits JSON (e.g. --edits '[{"op":"replace","range":"12#ab","new":"line1\nline2"}]'), _write with --content or a <<EOF heredoc, or wrap the whole value in quotes. Do NOT pass such a value as bare positional tokens — its inner quotes/spaces get silently mangled. Output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB.`,
+		promptSnippet: "Execute CLI commands: underscore commands are prefixed with _ (_read/_write/_edit/_session_split/_history_tree/_skill/_tell/_cron) and are pure single commands with NO shell operators; use shell commands (grep, find, ls, cat, git, npm) for pipes/redirections",
 		parameters: bashSchema,
 		async execute(
 			toolCallId,
@@ -557,7 +557,7 @@ export function createBashToolDefinition(
 								type: "text",
 								text:
 									firstWord +
-									" is a built-in cli command and does not support shell operators " +
+									" is an underscore command and does not support shell operators " +
 									"(|, >, <, ;, &, &&, command substitution, or newlines)." +
 									(["_edit", "edit", "_write", "write"].includes(firstWord)
 										? " For multi-line or special-character content, pass it through a channel that "
@@ -790,7 +790,7 @@ export function createBashToolDefinition(
 						if (chainedBuiltin) {
 							outputText +=
 								"\n\n" +
-								`(${chainedBuiltin} is a Pizza built-in cli command. It cannot be ` +
+								`(${chainedBuiltin} is a Pizza underscore command. It cannot be ` +
 								`chained after shell operators like &&, ||, ;, or | — the shell ran it ` +
 								`as an unknown command. Reissue it as a single pure command, e.g. ` +
 								`cli("${chainedBuiltin} <args>").)`;

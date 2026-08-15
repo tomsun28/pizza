@@ -353,7 +353,7 @@
   },
   "plugins": {
     "title": "Plugins",
-    "description": "Manage skills, extensions, MCP, and integrations",
+    "description": "Manage skills, extensions, and channels",
     "loading": "Loading...",
     "error": "Error: {{error}}",
     "refresh": "Refresh",

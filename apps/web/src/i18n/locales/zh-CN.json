@@ -353,7 +353,7 @@
   },
   "plugins": {
     "title": "插件",
-    "description": "管理技能、扩展、MCP 和集成",
+    "description": "管理技能、扩展和频道",
     "loading": "加载中...",
     "error": "错误:{{error}}",
     "refresh": "刷新",

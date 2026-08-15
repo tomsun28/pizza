@@ -4,6 +4,8 @@
 
 import { existsSync } from "fs";
 import { execSync } from "child_process";
+import * as os from "node:os";
+import { getShellConfig } from "../utils/shell.js";
 import { type Skill } from "./skills.js";
 
 /**
@@ -51,9 +53,17 @@ function buildEnvironmentSection(cwd: string): string {
 	const resolvedCwd = cwd.replace(/\\/g, "/");
 	const isGit = isGitRepository(cwd);
 	const platform = process.platform;
-	const shell = process.env.SHELL || process.env.COMSPEC || "unknown";
-	const osVersion = process.version;
-	const nodeVersion = process.versions.node;
+	// Report the shell Pizza actually uses (bash, even on Windows where it
+	// comes from Git Bash/Cygwin), not $SHELL/$COMSPEC which may be unset or
+	// point at cmd.exe and mislead the model about available syntax.
+	let shell: string;
+	try {
+		shell = getShellConfig().shell;
+	} catch {
+		shell = process.env.SHELL || "unknown";
+	}
+	const osVersion = os.release();
+	const nodeVersion = process.version;
 
 	return `
 ## Environment
@@ -70,7 +80,7 @@ You are being called in the following environment:
 export interface BuildSystemPromptOptions {
 	/** Custom system prompt (replaces default). */
 	customPrompt?: string;
-	/** Tools to include in prompt. Default: [bash] */
+	/** Tools to include in prompt. Default: [cli] */
 	selectedTools?: string[];
 	/** Optional one-line tool snippets keyed by tool name. */
 	toolSnippets?: Record<string, string>;
@@ -178,7 +188,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 
 		// Append skills hint — the full skills list is no longer injected into
 		// the prompt. Instead, the LLM discovers and loads skills on demand via
-		// the `_skill` built-in command (routed through the `cli` tool).
+		// the `_skill` underscore command (routed through the `cli` tool).
 		const customPromptHasCli = !selectedTools || selectedTools.includes("cli") || selectedTools.includes("bash");
 		if (customPromptHasCli && skills.length > 0) {
 			prompt += formatSkillsHint(skills);
@@ -196,11 +206,11 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 
 	// Build tools list - only cli is exposed via function calls.
 	// read/write/edit are handled internally by the cli tool;
-	// grep/find/ls and other commands are passed to the system shell as-is.
+	// grep/find/ls and other commands are passed to bash as-is.
 	const tools = selectedTools || (toolSnippets ? Object.keys(toolSnippets) : ["cli"]);
 	const toolSnippetsMap: Record<string, string> = {
 		cli: "Execute CLI commands",
-		bash: "Execute shell commands",
+		bash: "Execute bash commands",
 		...toolSnippets,
 	};
 	const visibleTools = tools.filter((name) => !!toolSnippetsMap[name]);
@@ -222,11 +232,12 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 
 	const hasCli = tools.includes("cli") || tools.includes("bash");
 
-	// File exploration guidelines
-	if (hasCli) {
-		addGuideline("The cli tool has exactly these built-in commands (underscore-prefixed, handled internally, never sent to the shell): _read, _write, _edit, _session_split, _history_tree, _tell, and _skill. Everything else — including grep, find, ls, cat, sed, git, npm — is a native shell command run through the same cli tool.");
-		addGuideline("Built-in commands are NOT a shell: never use pipes (|), redirects (> <), chaining (; & &&), command substitution, or newlines with them. A built-in only works as the FIRST word of its own single cli() call — buried after &&/||/;/| it is passed to the shell, which has no such command. Issue each built-in as its own separate call; do not prefix it with cd && since the working directory is already set. For pipelines, redirections, or globs, use a plain shell command instead (grep, find, ls, cat, sed, git, npm, etc.).");
-	}
+	// Always include these first — short, behavioral guidelines that apply
+	// to every response. Tool-specific detail lives in the sections below.
+	addGuideline("Be concise in your responses");
+	addGuideline("Show file paths clearly when working with files");
+	addGuideline("Keep reasoning tight: think only as much as the task needs, then act — avoid over-analyzing simple requests");
+	addGuideline("Prefer relative paths; the working directory is fixed at the workspace root for every command. Avoid accessing files outside the workspace unless the user explicitly asks");
 
 	for (const guideline of promptGuidelines ?? []) {
 		const normalized = guideline.trim();
@@ -235,18 +246,21 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		}
 	}
 
-	// Always include these
-	addGuideline("Be concise in your responses");
-	addGuideline("Show file paths clearly when working with files");
-	addGuideline("Keep reasoning tight: think only as much as the task needs, then act — avoid over-analyzing simple requests");
+	// Tool-specific guidelines — kept short here; full detail is in the
+	// Underscore Commands / Bash Commands sections below.
+	if (hasCli) {
+		addGuideline("The cli tool handles two kinds of commands: (1) underscore commands (_read, _write, _edit, _session_split, _history_tree, _tell, _skill) — handled internally, no shell, no pipes/redirects/chaining; (2) bash commands (grep, find, ls, cat, git, npm, ...) — passed to bash with full bash syntax. See the sections below for which to use and how");
+	}
 
 	const guidelines = guidelinesList.map((g) => `- ${g}`).join("\n");
 
-	// Built-in Commands section for the default system prompt
+	// Underscore Commands section for the default system prompt
 	const builtinCommandsSection = [
-		"## Built-in Commands (executed internally by the cli tool)",
+		"## Underscore Commands (handled internally, never sent to the shell)",
 		"",
-		"The cli tool recognizes only the following Pizza built-in commands and executes them internally (no shell fork):",
+		"These Pizza-specific commands are prefixed with _ and executed inside the cli tool —",
+		"no shell fork, no shell parsing. Each must be the FIRST word of its own single cli()",
+		"call; buried after &&/||/;/| it falls through to the shell, which has no such command.",
 		"",
 		"  _read <path> [offset] [limit]                Read file content with 2-hex line anchors",
 		"  _write <path> <content>                       Write content to file",
@@ -257,20 +271,36 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		"  _tell <action> [to] [message]                 Send a message to another workspace's agent and get its reply",
 		"  _skill <action> [--name <name>] [--file <f>]   Discover and load Agent Skills: list, load, read",
 		"",
-		"IMPORTANT: built-in commands are pure single commands. They do NOT support shell operators",
-		"(no pipes |, redirects > <, chaining ; & &&, command substitution, or newlines). A built-in",
-		"command is ALWAYS handled internally and never falls back to the shell — do not pipe or",
-		"redirect it. grep, find, ls, git, npm, and all other commands are passed to the system shell,",
-		"which handles native pipes, redirects, globs, command grouping, &&, and ;. If grep/find/ls",
-		"are missing from PATH, Pizza injects temporary per-process shims for only those missing commands.",
+		"IMPORTANT: underscore commands do NOT support shell operators — no pipes (|),",
+		"redirects (> <), chaining (; & &&), command substitution, or newlines. Issue each as",
+		"its own separate call; do not prefix it with cd && since the working directory is",
+		"already set. For pipelines, redirections, or globs, use a bash command instead.",
+		"",
 		"PASSING VALUES WITH QUOTES / SPACES / NEWLINES:",
 		"- _edit / _write arguments are shell-tokenized. A value written as bare positional",
 		"  text has its inner \" or ' silently consumed as shell quoting and DROPPED. NEVER write",
 		"  e.g. _write f secret(\"x\",\"y\") or _edit f replace 12#ab call(\"x\") as bare tokens.",
 		"- Instead use a verbatim channel: _edit --edits JSON, _write --content, or a <<EOF heredoc.",
 		"  These preserve quotes, spaces, and newlines exactly.",
+	].join("\n");
+
+	// Bash Commands section — the second kind of command the cli tool handles.
+	const shellCommandsSection = [
+		"## Bash Commands (passed to bash, full bash syntax allowed)",
 		"",
-		"Examples:",
+		"Anything that is NOT an underscore command is a bash command: grep, find, ls, cat,",
+		"sed, git, npm, cargo, make, curl, etc. These are passed to bash as-is and support the",
+		"full bash syntax — pipes (|), redirects (> >> <), chaining (&& || ; &), command",
+		"substitution ($() ``), globs (* ?), and newlines. Use bash commands when you need",
+		"any of these. If grep/find/ls are missing from PATH, Pizza injects temporary",
+		"per-process shims for only those missing commands.",
+	].join("\n");
+
+	// Examples split by command kind so the distinction is unambiguous.
+	const examplesSection = [
+		"## Examples",
+		"",
+		"Underscore commands (single, pure, no shell operators):",
 		'- cli("_read src/main.ts") - Read a file; text lines include <line>#<2-hex-hash> anchors',
 		'- cli("_read src/main.ts 10 50") - Read lines 10-59 (offset=10, limit=50)',
 		'- cli("_write output.txt Hello World") - Write to a file',
@@ -283,9 +313,12 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		'- cli("_session_split --reason topic_change --name \"Fix auth\"") - Split and name the new session',
 		'- cli("_history_tree list") - Show the session history tree',
 		'- cli("_history_tree jump sess_0042") - Return to a previous session and continue there',
-		'- cli("grep -rn \"foo\" . | head") - Search with native shell pipeline',
-		'- cli("find . -name \"*.py\" -maxdepth 2 | wc -l") - Find with native shell pipeline',
-		'- cli("ls -lah *.py") - List files with shell glob expansion',
+		"",
+		"Bash commands (full bash syntax — pipes, redirects, chaining, globs):",
+		'- cli("grep -rn \"foo\" . | head") - Search with a pipeline',
+		'- cli("find . -name \"*.py\" -maxdepth 2 | wc -l") - Find and count with a pipeline',
+		'- cli("ls -lah *.py") - List files with glob expansion',
+		'- cli("npm test 2>&1 | tail -20") - Run tests and show last 20 lines',
 	].join("\n");
 
 	let prompt = mainAgentPrefix + [
@@ -294,7 +327,15 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		"Available tools:",
 		toolsList,
 		"",
+		"The cli tool handles two kinds of commands:",
+		"1. Underscore commands (_read, _write, _edit, ...) — handled internally, no shell, no pipes/redirects/chaining",
+		"2. Bash commands (grep, find, ls, git, npm, ...) — passed to bash with full bash syntax",
+		"",
 		builtinCommandsSection,
+		"",
+		shellCommandsSection,
+		"",
+		examplesSection,
 		"",
 		"In addition to the tools above, you may have access to other custom tools depending on the project.",
 		"",
@@ -320,7 +361,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 
 	// Append skills hint — the full skills list is no longer injected into
 	// the prompt. Instead, the LLM discovers and loads skills on demand via
-	// the `_skill` built-in command (routed through the `cli` tool).
+	// the `_skill` underscore command (routed through the `cli` tool).
 	if (hasCli && skills.length > 0) {
 		prompt += formatSkillsHint(skills);
 	}
