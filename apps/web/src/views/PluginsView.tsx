@@ -6,15 +6,18 @@ import { cn } from "@/lib/utils";
 import {
 	fetchSkillsSh,
 	getSkills,
+	setSkillEnabled,
+	deleteSkill,
 	getExtensions,
 	setExtensionEnabled,
 	installExtension,
 	uninstallExtension,
+	openExternal,
 	type SkillsShSkill,
 	type SkillInfo,
 	type ExtensionInfo,
 } from "@/lib/transport";
-import { ArrowLeft, ArrowRight, Puzzle, BookOpen, Radio, Settings, Plus, Search, ExternalLink, Download, Check, Power, Trash2, Hash, Send } from "lucide-react";
+import { ArrowLeft, ArrowRight, Puzzle, BookOpen, Radio, Settings, Plus, Search, ExternalLink, Download, Power, Trash2, Hash, Send } from "lucide-react";
 import type { LayoutOutletContext } from "@/components/Layout";
 import { ChannelDialog } from "@/components/ChannelDialog";
 import {
@@ -38,25 +41,68 @@ const TABS: TabConfig[] = [
 	{ key: "channels", icon: Radio },
 ];
 
-function InstalledSkillCard({ skill }: { skill: SkillInfo }) {
+function InstalledSkillCard({
+	skill,
+	onToggle,
+	onDelete,
+	busyName,
+}: {
+	skill: SkillInfo;
+	onToggle: (name: string, enabled: boolean) => void;
+	onDelete: (name: string) => void;
+	busyName: string | null;
+}) {
 	const { t } = useTranslation();
+	const busy = busyName === skill.name;
 	return (
-		<Card className="transition-colors hover:border-accent/40">
-			<div className="flex items-start justify-between gap-3">
-				<div className="min-w-0 flex-1">
+		<Card className="@container transition-colors hover:border-accent/40">
+			<div className="flex flex-col gap-3 @sm:flex-row @sm:items-start @sm:justify-between">
+				<div className={cn("min-w-0 flex-1 transition-opacity", !skill.enabled && "opacity-60")}>
 					<div className="flex items-center gap-2">
-						<BookOpen className="h-4 w-4 shrink-0 text-accent" />
+					<BookOpen className={cn("h-4 w-4 shrink-0", skill.enabled ? "text-accent" : "text-muted")} />
 						<span className="truncate text-sm font-medium text-fg">{skill.name}</span>
 					</div>
 					{skill.description && (
 						<p className="mt-2 line-clamp-2 text-xs text-muted">{skill.description}</p>
 					)}
-					<div className="mt-3 flex items-center gap-2">
-						<Badge tone="success">{t("plugins.skills.installed")}</Badge>
+					<div className="mt-3 flex flex-wrap items-center gap-2">
+						{skill.enabled ? (
+							<Badge tone="success">{t("plugins.skills.enabled")}</Badge>
+						) : (
+							<Badge tone="neutral">{t("plugins.skills.disabled")}</Badge>
+						)}
+						<Badge tone="neutral">{t(`plugins.skills.sources.${skill.builtin ? "builtin" : skill.source}`, skill.source)}</Badge>
 						<code className="font-mono text-[10px] text-muted">{skill.command}</code>
 					</div>
 				</div>
-				<Check className="h-4 w-4 shrink-0 text-success" />
+				<div className="flex shrink-0 items-center gap-2">
+					<MoreMenu
+						disabled={busy}
+						title={t("plugins.skills.actions")}
+						items={[
+							{
+								icon: Power,
+								label: skill.enabled ? t("plugins.skills.disable") : t("plugins.skills.enable"),
+								disabled: busy,
+								onClick: () => onToggle(skill.name, !skill.enabled),
+							},
+							// Only user/project skills live as files the user authored;
+							// built-in (registry) and package skills are not deletable here.
+							...(!skill.builtin && (skill.source === "user" || skill.source === "project")
+								? [
+										{ divider: true as const },
+										{
+											icon: Trash2,
+											label: t("plugins.skills.delete"),
+											danger: true,
+											disabled: busy,
+											onClick: () => onDelete(skill.name),
+										},
+								  ]
+								: []),
+						]}
+					/>
+				</div>
 			</div>
 		</Card>
 	);
@@ -64,44 +110,34 @@ function InstalledSkillCard({ skill }: { skill: SkillInfo }) {
 
 function DirectorySkillCard({ skill, installed }: { skill: SkillsShSkill; installed: boolean }) {
 	const { t } = useTranslation();
+	const view = () => openExternal(skill.url);
+	const install = () => openExternal(skill.installUrl ?? skill.url);
 	return (
-		<Card className="transition-colors hover:border-accent/40">
-			<div className="flex items-start justify-between gap-3">
+		<Card className="@container transition-colors hover:border-accent/40">
+			<div className="flex flex-col gap-3 @sm:flex-row @sm:items-start @sm:justify-between">
 				<div className="min-w-0 flex-1">
 					<div className="flex items-center gap-2">
 						<BookOpen className="h-4 w-4 shrink-0 text-accent" />
 						<span className="truncate text-sm font-medium text-fg">{skill.name}</span>
 					</div>
 					<p className="mt-2 line-clamp-1 text-xs text-muted">{skill.source}</p>
-					<div className="mt-3 flex items-center gap-2">
+					<div className="mt-3 flex flex-wrap items-center gap-2">
 						{installed ? (
 							<Badge tone="success">{t("plugins.skills.installed")}</Badge>
 						) : (
 							<Badge tone="accent">{t("plugins.skills.type")}</Badge>
 						)}
-						<a
-							href={skill.url}
-							target="_blank"
-							rel="noopener noreferrer"
-							className="inline-flex items-center gap-1 text-[10px] text-muted transition-colors hover:text-accent"
-						>
-							<ExternalLink className="h-3 w-3" />
-							{t("plugins.skills.view")}
-						</a>
 					</div>
 				</div>
-				{!installed && (
-					<a
-						href={skill.url}
-						target="_blank"
-						rel="noopener noreferrer"
-						className="inline-flex shrink-0 items-center gap-1 rounded-md border border-border px-2 py-1 text-[10px] text-muted transition-colors hover:border-accent hover:text-accent"
-						title={t("plugins.skills.install")}
-					>
-						<Download className="h-3 w-3" />
-						{t("plugins.skills.install")}
-					</a>
-				)}
+				<div className="flex shrink-0 items-center gap-2">
+					<MoreMenu
+						title={t("plugins.skills.actions")}
+						items={[
+							{ icon: ExternalLink, label: t("plugins.skills.view"), onClick: view },
+							...(installed ? [] : [{ icon: Download, label: t("plugins.skills.install"), onClick: install }]),
+						]}
+					/>
+				</div>
 			</div>
 		</Card>
 	);
@@ -137,6 +173,34 @@ function SkillsTab() {
 	useEffect(() => {
 		refresh();
 	}, [refresh]);
+
+	const [busyName, setBusyName] = useState<string | null>(null);
+	const [reloadHint, setReloadHint] = useState(false);
+
+	const handleToggle = useCallback(async (name: string, enabled: boolean) => {
+		setBusyName(name);
+		try {
+			setReloadHint(await setSkillEnabled(name, enabled));
+			setInstalledSkills((prev) => prev.map((s) => (s.name === name ? { ...s, enabled } : s)));
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		} finally {
+			setBusyName(null);
+		}
+	}, []);
+
+	const handleDelete = useCallback(async (name: string) => {
+		if (!confirm(t("plugins.skills.deleteConfirm", { name }))) return;
+		setBusyName(name);
+		try {
+			await deleteSkill(name);
+			setInstalledSkills((prev) => prev.filter((s) => s.name !== name));
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		} finally {
+			setBusyName(null);
+		}
+	}, [t]);
 
 	const installedNames = new Set(installedSkills.map((s) => s.name));
 	const filteredDir = search.trim()
@@ -189,14 +253,26 @@ function SkillsTab() {
 				</Button>
 			</div>
 
-				{filteredLocal.length > 0 && (
+			{reloadHint && (
+				<Card>
+					<p className="text-xs text-muted">{t("plugins.skills.reloadHint")}</p>
+				</Card>
+			)}
+
+			{filteredLocal.length > 0 && (
 				<>
 					<h2 className="mb-3 text-sm font-semibold text-fg">
 						{t("plugins.skills.installedSection")} ({filteredLocal.length})
 					</h2>
 					<div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
 						{filteredLocal.map((skill) => (
-							<InstalledSkillCard key={skill.command} skill={skill} />
+							<InstalledSkillCard
+								key={skill.command}
+								skill={skill}
+								onToggle={handleToggle}
+								onDelete={handleDelete}
+								busyName={busyName}
+							/>
 						))}
 					</div>
 				</>

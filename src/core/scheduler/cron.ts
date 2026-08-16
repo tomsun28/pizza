@@ -46,12 +46,9 @@ function parseField(raw: string, min: number, max: number, sundayIs7 = false): C
 	let trimmed = raw.trim();
 	if (!trimmed) throw new Error(`empty cron field`);
 
-	// Sunday-as-7 normalization for weekday field: rewrite a leading/trailing
-	// "7" to "0" so the rest of the parser can treat weekdays as 0-6. We only
-	// touch the standalone "7" token (possibly with a step suffix).
-	if (sundayIs7) {
-		trimmed = trimmed.replace(/\b7\b/g, "0");
-	}
+	// Sunday-as-7 normalization for the weekday field happens per-value below
+	// (see the sundayIs7 block). We deliberately do NOT rewrite the raw string
+	// here: a regex like /\b7\b/ would corrupt ranges such as "5-7" → "5-0".
 
 	const tokens = trimmed.split(",");
 	const all: number[] = [];
@@ -93,7 +90,10 @@ function parseField(raw: string, min: number, max: number, sundayIs7 = false): C
 		}
 
 		if (!Number.isFinite(lo) || !Number.isFinite(hi)) throw new Error(`invalid range in "${t}"`);
-		if (lo < min || hi > max || lo > hi) {
+		// Weekday field also accepts 7 (=Sunday); it is normalized to 0 below,
+		// after expansion, so ranges like "5-7" or "0-7" stay well-formed.
+		const effectiveMax = sundayIs7 ? max + 1 : max;
+		if (lo < min || hi > effectiveMax || lo > hi) {
 			throw new Error(`range out of bounds in "${t}" (allowed ${min}-${max})`);
 		}
 

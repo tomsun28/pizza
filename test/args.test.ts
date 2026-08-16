@@ -182,6 +182,18 @@ describe("parseArgs", () => {
 		});
 	});
 
+	describe("--no-builtin-skills flag", () => {
+		test("parses --no-builtin-skills flag", () => {
+			const result = parseArgs(["--no-builtin-skills"]);
+			expect(result.noBuiltinSkills).toBe(true);
+		});
+
+		test("does not set the flag when absent", () => {
+			const result = parseArgs([]);
+			expect(result.noBuiltinSkills).toBeUndefined();
+		});
+	});
+
 	describe("--skill flag", () => {
 		test("parses single --skill", () => {
 			const result = parseArgs(["--skill", "./skill-dir"]);

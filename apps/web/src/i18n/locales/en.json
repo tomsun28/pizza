@@ -373,7 +373,22 @@
       "install": "Install",
       "installed": "Installed",
       "installedSection": "Installed Skills",
-      "directorySection": "Skill Directory"
+      "directorySection": "Skill Directory",
+      "actions": "Skill actions",
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "enable": "Enable",
+      "disable": "Disable",
+      "delete": "Delete",
+      "deleteConfirm": "Delete skill \"{{name}}\"? This removes its files from disk and cannot be undone.",
+      "reloadHint": "Restart the session for this change to take effect.",
+      "sources": {
+        "builtin": "Built-in",
+        "user": "User",
+        "project": "Project",
+        "cli": "CLI",
+        "local": "Local"
+      }
     },
     "extensions": {
       "comingSoon": "Extensions coming soon",

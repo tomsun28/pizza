@@ -308,6 +308,7 @@ async function createCliSessionSetup(options: {
 			additionalThemePaths: resolvedPaths.themes,
 			noExtensions: parsed.noExtensions,
 			noBuiltinExtensions: parsed.noBuiltinExtensions,
+			noBuiltinSkills: parsed.noBuiltinSkills,
 			noSkills: parsed.noSkills,
 			noPromptTemplates: parsed.noPromptTemplates,
 			noThemes: parsed.noThemes,

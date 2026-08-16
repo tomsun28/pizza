@@ -1,0 +1,83 @@
+/**
+ * Built-in skills registry.
+ *
+ * Built-in skills are SKILL.md files that ship with Pizza inside this package
+ * (`src/builtin-skills/<id>/SKILL.md`, mirrored under `dist/` at build time).
+ * Unlike built-in extensions (enabled unless disabled), built-in skills are
+ * DISABLED by default and must be enabled explicitly in `settings.json` under
+ * `enabledBuiltinSkills` (see `pizza builtin enable <id>`).
+ *
+ * To add a new built-in skill:
+ * 1. Create a folder under `src/builtin-skills/<id>/` with a valid `SKILL.md`
+ *    (frontmatter `name` must match `<id>`; a `description` is required).
+ * 2. Register the id in `BUILTIN_SKILL_IDS` below.
+ * 3. Keep ids stable: they are persisted in user settings.
+ */
+
+import { existsSync, readFileSync } from "fs";
+import { join } from "path";
+import { getBuiltinSkillsDir } from "../config.js";
+import { parseFrontmatter } from "../utils/frontmatter.js";
+import type { SkillFrontmatter } from "../core/skills.js";
+
+/** All built-in skill ids, in listing order. Ids are stable (persisted in settings). */
+const BUILTIN_SKILL_IDS = [
+	"pizza-self-optimization",
+] as const;
+
+export interface BuiltinSkillInfo {
+	/** Stable id (= directory name = skill name). */
+	id: string;
+	/** Skill name (from SKILL.md frontmatter, falls back to the id). */
+	name: string;
+	/** Short description (from SKILL.md frontmatter). */
+	description: string;
+	/** Absolute path of the bundled SKILL.md. */
+	path: string;
+}
+
+/** All built-in skill ids. */
+export function getBuiltinSkillIds(): string[] {
+	return [...BUILTIN_SKILL_IDS];
+}
+
+/** Whether `id` refers to a built-in skill. */
+export function isBuiltinSkillId(id: string): boolean {
+	return (BUILTIN_SKILL_IDS as readonly string[]).includes(id);
+}
+
+/** Absolute path of a built-in skill's SKILL.md (exists only when bundled assets are present). */
+export function getBuiltinSkillPath(id: string): string {
+	return join(getBuiltinSkillsDir(), id, "SKILL.md");
+}
+
+/**
+ * SKILL.md paths for the built-in skills enabled via settings, in registry
+ * order. Paths are returned even if missing on disk — the skills loader
+ * reports a diagnostic for those.
+ */
+export function getEnabledBuiltinSkillPaths(enabledIds: ReadonlySet<string>): string[] {
+	return BUILTIN_SKILL_IDS.filter((id) => enabledIds.has(id)).map((id) => getBuiltinSkillPath(id));
+}
+
+/** Read name/description from a built-in skill's SKILL.md, falling back to the id. */
+export function getBuiltinSkillInfo(id: string): BuiltinSkillInfo {
+	const path = getBuiltinSkillPath(id);
+	let name = id;
+	let description = "";
+	if (existsSync(path)) {
+		try {
+			const { frontmatter } = parseFrontmatter<SkillFrontmatter>(readFileSync(path, "utf-8"));
+			name = frontmatter.name || id;
+			description = frontmatter.description || "";
+		} catch {
+			// Fall back to id / empty description on parse errors.
+		}
+	}
+	return { id, name, description, path };
+}
+
+/** Info for every built-in skill, regardless of enabled state (for UI / CLI). */
+export function getBuiltinSkillInfos(): BuiltinSkillInfo[] {
+	return BUILTIN_SKILL_IDS.map((id) => getBuiltinSkillInfo(id));
+}

@@ -414,6 +414,21 @@ export interface ContextMenuProps {
 	onDismiss: () => void;
 }
 
+const CONTEXT_MENU_MIN_WIDTH = 208;
+
+/**
+ * Rough menu height for viewport-fit logic — matches the row styles (py-1.5
+ * rows, optional hint line, my-1 dividers, py-1 container padding).
+ */
+function estimateMenuHeight(items: ContextMenuItem[]): number {
+	let h = 8; // container py-1
+	for (const item of items) {
+		if (item.divider) h += 9; // my-1 + 1px rule
+		else h += item.hint ? 44 : 30; // py-1.5 + one or two text lines
+	}
+	return h;
+}
+
 /**
  * Floating context menu rendered as a `position: fixed` div with viewport
  * coordinates. Dismisses on outside mousedown or Escape (handled by the
@@ -421,13 +436,15 @@ export interface ContextMenuProps {
  * a `useEffect` while the menu is open).
  */
 export function ContextMenu({ x, y, items, onDismiss }: ContextMenuProps) {
-	// Clamp the menu inside the viewport so it doesn't overflow right/bottom
-	// edges. Width/height are estimates (item widths vary); a simple upfront
-	// clamp keeps it usable on narrow right docks.
-	const minWidth = 208; // matches the min-w-52 class below
-	const maxHeight = 360;
-	const clampedX = Math.max(8, Math.min(x, window.innerWidth - minWidth - 8));
-	const clampedY = Math.max(8, Math.min(y, window.innerHeight - maxHeight - 8));
+	// Clamp the menu inside the viewport so it does not overflow the
+	// right/bottom edges. Width/height are estimates (item widths vary). When
+	// the menu does not fit below the anchor point it opens upwards with its
+	// bottom edge at the anchor, keeping it attached to the trigger/cursor
+	// instead of jumping far above it.
+	const clampedX = Math.max(8, Math.min(x, window.innerWidth - CONTEXT_MENU_MIN_WIDTH - 8));
+	const estHeight = estimateMenuHeight(items);
+	const clampedY =
+		y + estHeight <= window.innerHeight - 8 ? y : Math.max(8, y - estHeight);
 
 	return (
 		<div
@@ -489,9 +506,11 @@ function ContextMenuRow({
 }
 
 /**
- * "More" (⋯) trigger button that opens a {@link ContextMenu} anchored to the
- * button's position. Collapses a row of action buttons into a single compact
- * icon — the menu items are supplied by the caller.
+ * "More" (⋯) trigger button that opens a {@link ContextMenu} anchored below
+ * and right-aligned with the button, flipping above it when space is tight —
+ * matching the other dropdown menus in the app. Clicking the trigger again
+ * toggles the menu closed. Collapses a row of action buttons into a single
+ * compact icon — the menu items are supplied by the caller.
  */
 export function MoreMenu({
 	items,
@@ -503,10 +522,15 @@ export function MoreMenu({
 	title?: string;
 }) {
 	const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+	const wrapRef = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
 		if (!pos) return;
-		const onDown = () => setPos(null);
+		const onDown = (e: MouseEvent) => {
+			// Clicks on the trigger (inside wrapRef) fall through to its onClick,
+			// which toggles the menu closed — same as the sidebar workspace menu.
+			if (!wrapRef.current?.contains(e.target as Node)) setPos(null);
+		};
 		const onKey = (e: KeyboardEvent) => {
 			if (e.key === "Escape") setPos(null);
 		};
@@ -519,7 +543,7 @@ export function MoreMenu({
 	}, [pos]);
 
 	return (
-		<>
+		<div ref={wrapRef} className="relative inline-flex">
 			<button
 				type="button"
 				disabled={disabled}
@@ -527,14 +551,24 @@ export function MoreMenu({
 				onClick={(e) => {
 					e.stopPropagation();
 					const rect = e.currentTarget.getBoundingClientRect();
-					setPos({ x: rect.right, y: rect.bottom });
+					// Open below the button, right-aligned with it (like the other
+					// dropdown menus in the app); flip above the button when there is
+					// no room below so the menu stays attached to it instead of being
+					// clamped far away.
+					const estHeight = estimateMenuHeight(items);
+					const below = rect.bottom + 4;
+					const y =
+						below + estHeight <= window.innerHeight - 8
+							? below
+							: Math.max(8, rect.top - estHeight - 4);
+					setPos((p) => (p ? null : { x: rect.right - CONTEXT_MENU_MIN_WIDTH, y }));
 				}}
 				className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border text-muted transition-colors hover:bg-surface-2 hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40"
 			>
 				<EllipsisVertical className="h-3.5 w-3.5" />
 			</button>
 			{pos && <ContextMenu x={pos.x} y={pos.y} items={items} onDismiss={() => setPos(null)} />}
-		</>
+		</div>
 	);
 }
 

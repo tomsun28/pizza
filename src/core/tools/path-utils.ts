@@ -86,7 +86,10 @@ export function resolveReadPath(filePath: string, cwd: string): string {
 
 	// Try combined NFD + curly quote (for French macOS screenshots like "Capture d'écran")
 	const nfdCurlyVariant = tryCurlyQuoteVariant(nfdVariant);
-	if (nfdCurlyVariant !== resolved && fileExists(nfdCurlyVariant)) {
+	// Compare against nfdVariant (not resolved): if curly-quote substitution was a
+	// no-op, nfdCurlyVariant === nfdVariant and fileExists() was already tried at
+	// the NFD branch above — skip the redundant accessSync.
+	if (nfdCurlyVariant !== nfdVariant && fileExists(nfdCurlyVariant)) {
 		return nfdCurlyVariant;
 	}
 

@@ -137,6 +137,19 @@ export function getExportTemplateDir(): string {
 export function getPackageJsonPath(): string {
 	return join(getPackageDir(), "package.json");
 }
+/**
+ * Get path to built-in skills directory (shipped with package)
+ * - For Bun binary: builtin-skills/ next to executable
+ * - For Node.js (dist/): dist/src/builtin-skills/
+ * - For tsx (src/): src/builtin-skills/
+ */
+export function getBuiltinSkillsDir(): string {
+	if (isBunBinary) {
+		return join(getPackageDir(), "builtin-skills");
+	}
+	// __dirname is always dist/src or src — built-in skills live at the same relative path
+	return join(__dirname, "builtin-skills");
+}
 
 
 /** Get path to docs directory */

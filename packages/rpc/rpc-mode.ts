@@ -47,6 +47,7 @@ import type {
 	RpcSessionState,
 	RpcSlashCommand,
 	RpcExtensionInfo,
+	RpcSkillInfo,
 } from "./rpc-types.js";
 import type { ImageContent } from "@earendil-works/pi-ai/compat";
 
@@ -209,6 +210,34 @@ function extensionKind(ext: {
 	if (ext.sourceInfo.source === "cli") return "cli";
 	if (ext.sourceInfo.scope === "project") return "project";
 	return "user";
+}
+
+/** Where a skill comes from, in the same terms the `_skill list` output uses. */
+function skillSourceLabel(skill: { sourceInfo: { source: string; scope?: string } }): string {
+	if (skill.sourceInfo.scope === "user" || skill.sourceInfo.scope === "project") {
+		return skill.sourceInfo.scope;
+	}
+	return skill.sourceInfo.source;
+}
+
+/**
+ * Build the skill list for the `get_skills` RPC: every skill the session knows
+ * about, including disabled ones so the UI can show and re-enable them.
+ */
+function buildSkillInfos(facade: SessionFacade): RpcSkillInfo[] {
+	const loader = facade.resourceLoader;
+	const catalog = loader?.getSkillCatalog?.();
+	const entries =
+		catalog ?? (loader?.getSkills().skills ?? []).map((skill) => ({ skill, enabled: true, builtinId: undefined }));
+	return entries.map(({ skill, enabled, builtinId }) => ({
+		command: `skill:${skill.name}`,
+		name: skill.name,
+		description: skill.description,
+		enabled,
+		builtin: builtinId !== undefined,
+		path: skill.filePath,
+		source: builtinId !== undefined ? "builtin" : skillSourceLabel(skill),
+	}));
 }
 
 /**
@@ -1058,14 +1087,47 @@ export async function runRpcModeWithFacade(
 
 		case "get_skills": {
 			const enableSkills = facade.settingsManager.getEnableSkillCommands();
-			const skills = enableSkills
-				? (facade.resourceLoader?.getSkills().skills ?? []).map((s) => ({
-						command: `skill:${s.name}`,
-						name: s.name,
-						description: s.description,
-					}))
-				: [];
+			// Disabled skills are reported too (with enabled: false) so a UI can list
+			// and re-enable them; callers that only want active skills filter on `enabled`.
+			const skills = enableSkills ? buildSkillInfos(facade) : [];
 			return success(id, "get_skills", { skills });
+		}
+
+		case "set_skill_enabled": {
+			const loader = facade.resourceLoader;
+			if (!loader?.setSkillEnabled) {
+				return error(id, "set_skill_enabled", "This session cannot toggle skills.");
+			}
+			if (!loader.setSkillEnabled(command.skillName, command.enabled)) {
+				return error(id, "set_skill_enabled", `Unknown skill: ${command.skillName}`);
+			}
+			// Rebuild tools + system prompt so the change applies to the next turn.
+			// Sessions without an extension runner have no tool rebuild hook and
+			// need a reload to pick the change up.
+			facade.extensionRunner?.refreshTools();
+			return success(id, "set_skill_enabled", {
+				name: command.skillName,
+				enabled: command.enabled,
+				requiresReload: !facade.extensionRunner,
+			});
+		}
+
+		case "delete_skill": {
+			const loader = facade.resourceLoader;
+			if (!loader?.deleteSkill) {
+				return error(id, "delete_skill", "This session cannot delete skills.");
+			}
+			if (!loader.deleteSkill(command.skillName)) {
+				return error(
+					id,
+					"delete_skill",
+					`Cannot delete skill: ${command.skillName} (unknown, built-in, or package-provided)`,
+				);
+			}
+			// Same as set_skill_enabled: rebuild tools so the next turn no longer
+				// offers the deleted skill.
+			facade.extensionRunner?.refreshTools();
+			return success(id, "delete_skill", { name: command.skillName });
 		}
 
 		case "get_extensions": {
