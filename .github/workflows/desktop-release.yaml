@@ -53,18 +53,13 @@ jobs:
           key: cargo-${{ matrix.label }}-${{ hashFiles('apps/desktop/Cargo.lock') }}
           restore-keys: cargo-${{ matrix.label }}-
 
-      - name: Cache tauri tools
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.tauri
-            ~/.local/share/tauri
-          key: tauri-tools-${{ matrix.label }}
-
       - name: Install tauri-cli
-        run: |
-          curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
-          cargo binstall tauri-cli --version "^2.0" --no-confirm
+        # Build tauri-cli from source for the runner's native arch instead of
+        # using cargo-binstall. binstall pulls a prebuilt x86_64-apple-darwin
+        # binary even on arm64 runners, which makes the DMG bundler pick the
+        # wrong arch for the output name and bundle_dmg.sh fails
+        # (tauri-apps/tauri-action#1003, #1091).
+        run: cargo install tauri-cli --version "^2.0" --locked --no-default-features
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -97,6 +92,11 @@ jobs:
         env:
           PIZZA_VENDOR_TOOL_TARGETS: current
           LABEL: ${{ matrix.label }}
+          # Force the non-Finder/AppleScript DMG path to avoid the
+          # `AppleEvent timed out` flake on newer macOS runner images
+          # (tauri-apps/tauri-action#1091).
+          CI: true
+          TAURI_BUNDLER_DMG_IGNORE_CI: false
         shell: bash
 
       - name: Rename artifacts with platform name
