@@ -14,9 +14,9 @@
  */
 export function resolveCliSpawn(): { cliPath: string; binary: boolean } {
 	const argv1 = process.argv[1] ?? "";
-	const isBinary = !argv1.endsWith(".js");
+	const isNode = /(?:^|[\\/])(node|node\.exe)$/i.test(process.execPath);
 	return {
-		cliPath: isBinary ? process.execPath : argv1,
-		binary: isBinary,
+		cliPath: isNode ? (argv1 || "dist/src/cli.js") : process.execPath,
+		binary: !isNode,
 	};
 }
