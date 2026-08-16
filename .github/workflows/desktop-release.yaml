@@ -59,7 +59,7 @@ jobs:
         # binary even on arm64 runners, which makes the DMG bundler pick the
         # wrong arch for the output name and bundle_dmg.sh fails
         # (tauri-apps/tauri-action#1003, #1091).
-        run: cargo install tauri-cli --version "^2.0" --locked --no-default-features
+        run: cargo install tauri-cli --version "^2.0" --locked
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
