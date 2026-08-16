@@ -36,6 +36,8 @@ export interface SettingsConfig {
 	autoResizeImages: boolean;
 	blockImages: boolean;
 	enableSkillCommands: boolean;
+	/** Built-in skills shipped with Pizza (disabled by default). */
+	builtinSkills: Array<{ id: string; name: string; description: string; enabled: boolean }>;
 	transport: Transport;
 	thinkingLevel: ThinkingLevel;
 	availableThinkingLevels: ThinkingLevel[];
@@ -61,6 +63,7 @@ export interface SettingsCallbacks {
 	onAutoResizeImagesChange: (enabled: boolean) => void;
 	onBlockImagesChange: (blocked: boolean) => void;
 	onEnableSkillCommandsChange: (enabled: boolean) => void;
+	onBuiltinSkillChange: (id: string, enabled: boolean) => void;
 	onTransportChange: (transport: Transport) => void;
 	onThinkingLevelChange: (level: ThinkingLevel) => void;
 	onThemeChange: (theme: string) => void;
@@ -322,6 +325,20 @@ export class SettingsSelectorComponent extends Container {
 			values: ["true", "false"],
 		});
 
+		// Built-in skill toggles (insert after skill-commands)
+		const skillCommandsToggleIndex = items.findIndex((item) => item.id === "skill-commands");
+		items.splice(
+			skillCommandsToggleIndex + 1,
+			0,
+			...config.builtinSkills.map((skill): SettingItem => ({
+				id: `builtin-skill:${skill.id}`,
+				label: `Skill: ${skill.name}`,
+				description: skill.description || "Built-in skill shipped with Pizza",
+				currentValue: skill.enabled ? "true" : "false",
+				values: ["true", "false"],
+			})),
+		);
+
 		// Hardware cursor toggle (insert after skill-commands)
 		const skillCommandsIndex = items.findIndex((item) => item.id === "skill-commands");
 		items.splice(skillCommandsIndex + 1, 0, {
@@ -370,6 +387,11 @@ export class SettingsSelectorComponent extends Container {
 			10,
 			getSettingsListTheme(),
 			(id, newValue) => {
+				// Built-in skill toggles use dynamic ids ("builtin-skill:<id>")
+				if (id.startsWith("builtin-skill:")) {
+					callbacks.onBuiltinSkillChange(id.slice("builtin-skill:".length), newValue === "true");
+					return;
+				}
 				switch (id) {
 					case "autocompact":
 						callbacks.onAutoCompactChange(newValue === "true");

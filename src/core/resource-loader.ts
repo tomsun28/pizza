@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import chalk from "chalk";
-import { CONFIG_DIR_NAME, getMainDir, getMainMemoryDir } from "../config.js";
+import { CONFIG_DIR_NAME, getBuiltinSkillsDir, getMainDir, getMainMemoryDir } from "../config.js";
 import { loadThemeFromPath, type Theme } from "../../packages/tui/theme/theme.js";
 import type { ResourceDiagnostic } from "./diagnostics.js";
 
@@ -21,6 +21,7 @@ import type { Skill } from "./skills.js";
 import { loadSkills } from "./skills.js";
 import { createSourceInfo, type SourceInfo } from "./source-info.js";
 import { getBuiltinExtensionFactories, type BuiltinExtension } from "../builtin-extensions/index.js";
+import { getEnabledBuiltinSkillPaths } from "../builtin-skills/index.js";
 
 export interface ResourceExtensionPaths {
 	skillPaths?: Array<{ path: string; metadata: PathMetadata }>;
@@ -38,6 +39,11 @@ export interface ResourceLoader {
 	getAppendSystemPrompt(): string[];
 	extendResources(paths: ResourceExtensionPaths): void;
 	reload(): Promise<void>;
+	/**
+	 * Synchronously re-load skills only (e.g. after toggling a built-in skill in
+	 * settings), without re-resolving packages/extensions/prompts/themes.
+	 */
+	reloadSkills?(): void;
 	/** Soul file (main agent only). */
 	getSoulFile?(): SoulFile | undefined;
 	/** Long-term memory index entries (main agent only). */
@@ -138,6 +144,8 @@ export interface DefaultResourceLoaderOptions {
 	noExtensions?: boolean;
 	/** Skip loading built-in extensions (agent-browser, …). Default: false. */
 	noBuiltinExtensions?: boolean;
+	/** Skip loading built-in skills entirely (they are disabled by default anyway). Default: false. */
+	noBuiltinSkills?: boolean;
 	noSkills?: boolean;
 	noPromptTemplates?: boolean;
 	noThemes?: boolean;
@@ -183,6 +191,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 	private extensionFactories: ExtensionFactory[];
 	private noExtensions: boolean;
 	private noBuiltinExtensions: boolean;
+	private noBuiltinSkills: boolean;
 	private noSkills: boolean;
 	private noPromptTemplates: boolean;
 	private noThemes: boolean;
@@ -247,6 +256,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.extensionFactories = options.extensionFactories ?? [];
 		this.noExtensions = options.noExtensions ?? false;
 		this.noBuiltinExtensions = options.noBuiltinExtensions ?? false;
+		this.noBuiltinSkills = options.noBuiltinSkills ?? false;
 		this.noSkills = options.noSkills ?? false;
 		this.noPromptTemplates = options.noPromptTemplates ?? false;
 		this.noThemes = options.noThemes ?? false;
@@ -560,13 +570,15 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 	private updateSkillsFromPaths(skillPaths: string[], metadataByPath?: Map<string, PathMetadata>): void {
 		let skillsResult: { skills: Skill[]; diagnostics: ResourceDiagnostic[] };
+		const builtinSkillPaths = this.getBuiltinSkillPaths();
 		if (this.noSkills && skillPaths.length === 0) {
 			skillsResult = { skills: [], diagnostics: [] };
 		} else {
 			skillsResult = loadSkills({
 				cwd: this.cwd,
 				agentDir: this.agentDir,
-				skillPaths,
+				// Built-in skills are appended last so user/project/package skills win name collisions.
+				skillPaths: [...skillPaths, ...builtinSkillPaths],
 				includeDefaults: false,
 			});
 		}
@@ -579,6 +591,38 @@ export class DefaultResourceLoader implements ResourceLoader {
 				this.getDefaultSourceInfoForPath(skill.filePath),
 		}));
 		this.skillDiagnostics = resolvedSkills.diagnostics;
+	}
+
+	/**
+	 * SKILL.md paths of the built-in skills currently enabled in settings.
+	 * Built-in skills are disabled by default (`enabledBuiltinSkills` allowlist).
+	 */
+	private getBuiltinSkillPaths(): string[] {
+		if (this.noSkills || this.noBuiltinSkills) {
+			return [];
+		}
+		const paths = getEnabledBuiltinSkillPaths(this.settingsManager.getEnabledBuiltinSkills());
+		for (const path of paths) {
+			// Register source attribution so these show up as `builtin` (persisted map,
+			// unlike the per-reload metadataByPath).
+			if (!this.extensionSkillSourceInfos.has(path)) {
+				this.extensionSkillSourceInfos.set(
+					path,
+					createSourceInfo(path, {
+						source: "builtin",
+						scope: "user",
+						origin: "top-level",
+						baseDir: getBuiltinSkillsDir(),
+					}),
+				);
+			}
+		}
+		return paths;
+	}
+
+	/** Synchronously re-load skills only (e.g. after toggling a built-in skill). */
+	reloadSkills(): void {
+		this.updateSkillsFromPaths(this.lastSkillPaths);
 	}
 
 	private updatePromptsFromPaths(promptPaths: string[], metadataByPath?: Map<string, PathMetadata>): void {

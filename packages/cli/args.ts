@@ -29,6 +29,8 @@ export interface Args {
 	noExtensions?: boolean;
 	/** Disable built-in extensions (e.g. agent-browser). */
 	noBuiltinExtensions?: boolean;
+	/** Disable built-in skills (they are disabled by default; this also ignores settings.enabledBuiltinSkills). */
+	noBuiltinSkills?: boolean;
 	print?: boolean;
 	export?: string;
 	noSkills?: boolean;
@@ -135,6 +137,8 @@ export function parseArgs(args: string[]): Args {
 			result.noExtensions = true;
 		} else if (arg === "--no-builtin-extensions") {
 			result.noBuiltinExtensions = true;
+		} else if (arg === "--no-builtin-skills") {
+			result.noBuiltinSkills = true;
 		} else if (arg === "--skill" && i + 1 < args.length) {
 			result.skills = result.skills ?? [];
 			result.skills.push(args[++i]);
@@ -256,6 +260,7 @@ ${chalk.bold("Options:")}
   --no-extensions, -ne           Disable extension discovery (explicit -e paths still work)
   --no-builtin-extensions        Disable built-in extensions (e.g. agent-browser)
   --skill <path>                 Load a skill file or directory (can be used multiple times)
+  --no-builtin-skills            Disable built-in skills (enabled ones from settings too)
   --no-skills, -ns               Disable skills discovery and loading
   --prompt-template <path>       Load a prompt template file or directory (can be used multiple times)
   --no-prompt-templates, -np     Disable prompt template discovery and loading

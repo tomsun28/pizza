@@ -56,6 +56,7 @@ import {
   getShareViewerUrl,
   VERSION,
 } from "../../src/config.js";
+import { getBuiltinSkillInfos } from "../../src/builtin-skills/index.js";
 import { getApiKeyOptions } from "../../src/core/oauth.js";
 import { parseSkillBlock } from "../../src/core/skill-block-parser.js";
 import { executeBashWithOperations } from "../../src/core/bash-executor.js";
@@ -4387,6 +4388,12 @@ export class InteractiveMode {
           autoResizeImages: this.settingsManager.getImageAutoResize(),
           blockImages: this.settingsManager.getBlockImages(),
           enableSkillCommands: this.settingsManager.getEnableSkillCommands(),
+          builtinSkills: getBuiltinSkillInfos().map((skill) => ({
+            id: skill.id,
+            name: skill.name,
+            description: skill.description,
+            enabled: this.settingsManager.getEnabledBuiltinSkills().has(skill.id),
+          })),
           transport: this.settingsManager.getTransport(),
           thinkingLevel: this.currentThinkingLevel,
           availableThinkingLevels: this.getAvailableThinkingLevelsFacade(),
@@ -4435,6 +4442,11 @@ export class InteractiveMode {
           },
           onEnableSkillCommandsChange: (enabled) => {
             this.settingsManager.setEnableSkillCommands(enabled);
+            this.setupAutocomplete(this.fdPath);
+          },
+          onBuiltinSkillChange: (id, enabled) => {
+            this.settingsManager.setBuiltinSkillEnabled(id, enabled);
+            this.resourceLoaderValue.reloadSkills?.();
             this.setupAutocomplete(this.fdPath);
           },
           onTransportChange: (transport) => {

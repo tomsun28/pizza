@@ -49,3 +49,51 @@ describe("handleBuiltinCommand", () => {
 		expect(raw.disabledBuiltinExtensions ?? []).not.toContain("agent-browser");
 	});
 });
+
+describe("handleBuiltinCommand (skills)", () => {
+	const testDir = join(process.cwd(), "test-builtin-cli-skills-tmp");
+	const agentDir = join(testDir, "agent");
+	const cwd = join(testDir, "project");
+	let originalCwd: string;
+
+	beforeEach(() => {
+		originalCwd = process.cwd();
+		if (existsSync(testDir)) rmSync(testDir, { recursive: true, force: true });
+		mkdirSync(agentDir, { recursive: true });
+		mkdirSync(cwd, { recursive: true });
+		process.env.PIZZA_CODING_AGENT_DIR = agentDir;
+	});
+
+	afterEach(() => {
+		delete process.env.PIZZA_CODING_AGENT_DIR;
+		process.chdir(originalCwd);
+		if (existsSync(testDir)) rmSync(testDir, { recursive: true, force: true });
+	});
+
+	it("lists built-in skills as disabled by default", async () => {
+		expect(await handleBuiltinCommand(["builtin", "list"])).toBe(true);
+	});
+
+	it("enables and disables a built-in skill, persisting to settings.json", async () => {
+		process.chdir(cwd);
+		await handleBuiltinCommand(["builtin", "enable", "git-workflow"]);
+		// settings writes are queued; let them flush to disk.
+		await new Promise((r) => setTimeout(r, 50));
+
+		const settingsPath = join(agentDir, "settings.json");
+		expect(existsSync(settingsPath)).toBe(true);
+		let raw = JSON.parse(readFileSync(settingsPath, "utf-8"));
+		expect(raw.enabledBuiltinSkills).toContain("git-workflow");
+
+		await handleBuiltinCommand(["builtin", "disable", "git-workflow"]);
+		await new Promise((r) => setTimeout(r, 50));
+		raw = JSON.parse(readFileSync(settingsPath, "utf-8"));
+		expect(raw.enabledBuiltinSkills ?? []).not.toContain("git-workflow");
+	});
+
+	it("rejects unknown ids", async () => {
+		await handleBuiltinCommand(["builtin", "enable", "nope"]);
+		expect(process.exitCode).toBe(1);
+		process.exitCode = 0;
+	});
+});
