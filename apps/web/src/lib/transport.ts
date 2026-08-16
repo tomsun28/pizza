@@ -18,6 +18,21 @@ function isTauri(): boolean {
 	return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
+/**
+ * Open an external URL in the system browser. In Tauri this routes through
+ * the shell plugin, because the webview cannot navigate to external origins.
+ * In a regular browser it falls back to `window.open`.
+ */
+export async function openExternal(url: string): Promise<void> {
+	if (typeof window === "undefined") return;
+	if (isTauri()) {
+		const { open } = await import("@tauri-apps/plugin-shell");
+		await open(url);
+	} else {
+		window.open(url, "_blank", "noopener,noreferrer");
+	}
+}
+
 // --- Command sending ---
 
 /**

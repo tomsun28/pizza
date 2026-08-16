@@ -12,6 +12,7 @@ import {
 	setExtensionEnabled,
 	installExtension,
 	uninstallExtension,
+	openExternal,
 	type SkillsShSkill,
 	type SkillInfo,
 	type ExtensionInfo,
@@ -109,7 +110,8 @@ function InstalledSkillCard({
 
 function DirectorySkillCard({ skill, installed }: { skill: SkillsShSkill; installed: boolean }) {
 	const { t } = useTranslation();
-	const open = () => window.open(skill.url, "_blank", "noopener,noreferrer");
+	const view = () => openExternal(skill.url);
+	const install = () => openExternal(skill.installUrl ?? skill.url);
 	return (
 		<Card className="@container transition-colors hover:border-accent/40">
 			<div className="flex flex-col gap-3 @sm:flex-row @sm:items-start @sm:justify-between">
@@ -131,8 +133,8 @@ function DirectorySkillCard({ skill, installed }: { skill: SkillsShSkill; instal
 					<MoreMenu
 						title={t("plugins.skills.actions")}
 						items={[
-							{ icon: ExternalLink, label: t("plugins.skills.view"), onClick: open },
-							...(installed ? [] : [{ icon: Download, label: t("plugins.skills.install"), onClick: open }]),
+							{ icon: ExternalLink, label: t("plugins.skills.view"), onClick: view },
+							...(installed ? [] : [{ icon: Download, label: t("plugins.skills.install"), onClick: install }]),
 						]}
 					/>
 				</div>
