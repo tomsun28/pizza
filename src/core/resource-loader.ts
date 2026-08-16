@@ -1,6 +1,6 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import chalk from "chalk";
 import { CONFIG_DIR_NAME, getBuiltinSkillsDir, getMainDir, getMainMemoryDir } from "../config.js";
 import { loadThemeFromPath, type Theme } from "../../packages/tui/theme/theme.js";
@@ -57,6 +57,13 @@ export interface ResourceLoader {
 	 * through the `disabledSkills` denylist. Returns false for unknown names.
 	 */
 	setSkillEnabled?(name: string, enabled: boolean): boolean;
+	/**
+	 * Delete a discovered skill from disk (folder skills lose their whole
+	 * directory) and re-load skills. Only filesystem-authored user/project
+	 * skills can be deleted; built-in and package-provided skills are refused
+	 * (returns false), as are unknown names.
+	 */
+	deleteSkill?(name: string): boolean;
 	getPrompts(): { prompts: PromptTemplate[]; diagnostics: ResourceDiagnostic[] };
 	getThemes(): { themes: Theme[]; diagnostics: ResourceDiagnostic[] };
 	getAgentsFiles(): { agentsFiles: Array<{ path: string; content: string }> };
@@ -689,6 +696,50 @@ export class DefaultResourceLoader implements ResourceLoader {
 			this.settingsManager.setBuiltinSkillEnabled(entry.builtinId, enabled);
 		} else {
 			this.settingsManager.setSkillDisabled(name, !enabled);
+		}
+		this.reloadSkills();
+		return true;
+	}
+
+	/**
+	 * Delete a discovered skill by name. The skill's file is removed (folder
+	 * skills: the whole skill directory) and skills are re-loaded. Refused for
+	 * anything not safely deletable: built-in skills (owned by the install),
+	 * package-provided skills (owned by their package), skills injected at
+	 * runtime, and skills living outside the default user/project skill
+	 * directories (those are managed via settings paths, not files).
+	 */
+	deleteSkill(name: string): boolean {
+		const entry = this.skillCatalog.find((candidate) => candidate.skill.name === name);
+		if (!entry || entry.builtinId !== undefined) {
+			return false;
+		}
+		const source = entry.skill.sourceInfo;
+		if (!source || source.origin === "package" || (source.scope !== "user" && source.scope !== "project")) {
+			return false;
+		}
+		// Belt and braces: the file must really live under a default skills dir.
+		const filePath = resolve(entry.skill.filePath);
+		const allowedRoots = [
+			resolve(join(this.agentDir, "skills")),
+			resolve(join(this.cwd, CONFIG_DIR_NAME, "skills")),
+		];
+		if (!allowedRoots.some((root) => this.isUnderPath(filePath, root))) {
+			return false;
+		}
+		try {
+			if (basename(filePath) === "SKILL.md") {
+				// Folder skill: remove the directory that exists for its sake.
+				rmSync(dirname(filePath), { recursive: true, force: true });
+			} else {
+				rmSync(filePath, { force: true });
+			}
+		} catch {
+			return false;
+		}
+		// Drop any denylist entry so the name does not linger in settings.
+		if (this.settingsManager.getDisabledSkills().has(name)) {
+			this.settingsManager.setSkillDisabled(name, false);
 		}
 		this.reloadSkills();
 		return true;

@@ -76,19 +76,19 @@ describe("handleBuiltinCommand (skills)", () => {
 
 	it("enables and disables a built-in skill, persisting to settings.json", async () => {
 		process.chdir(cwd);
-		await handleBuiltinCommand(["builtin", "enable", "git-workflow"]);
+		await handleBuiltinCommand(["builtin", "enable", "pizza-self-optimization"]);
 		// settings writes are queued; let them flush to disk.
 		await new Promise((r) => setTimeout(r, 50));
 
 		const settingsPath = join(agentDir, "settings.json");
 		expect(existsSync(settingsPath)).toBe(true);
 		let raw = JSON.parse(readFileSync(settingsPath, "utf-8"));
-		expect(raw.enabledBuiltinSkills).toContain("git-workflow");
+		expect(raw.enabledBuiltinSkills).toContain("pizza-self-optimization");
 
-		await handleBuiltinCommand(["builtin", "disable", "git-workflow"]);
+		await handleBuiltinCommand(["builtin", "disable", "pizza-self-optimization"]);
 		await new Promise((r) => setTimeout(r, 50));
 		raw = JSON.parse(readFileSync(settingsPath, "utf-8"));
-		expect(raw.enabledBuiltinSkills ?? []).not.toContain("git-workflow");
+		expect(raw.enabledBuiltinSkills ?? []).not.toContain("pizza-self-optimization");
 	});
 
 	it("rejects unknown ids", async () => {

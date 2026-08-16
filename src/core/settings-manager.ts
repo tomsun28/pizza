@@ -108,7 +108,7 @@ export interface Settings {
 	prompts?: string[]; // Array of local prompt template paths or directories
 	themes?: string[]; // Array of local theme file paths or directories
 	disabledBuiltinExtensions?: string[]; // Built-in extension ids to disable (e.g. ["agent-browser"]). Empty/absent = all built-ins enabled.
-	enabledBuiltinSkills?: string[]; // Built-in skill ids to enable (e.g. ["git-workflow"]). Empty/absent = all built-in skills DISABLED by default.
+	enabledBuiltinSkills?: string[]; // Built-in skill ids to enable (e.g. ["pizza-self-optimization"]). Empty/absent = all built-in skills DISABLED by default.
 	disabledSkills?: string[]; // Names of discovered (non-built-in) skills to disable. Empty/absent = every discovered skill is loaded.
 	enableSkillCommands?: boolean; // default: true - register skills as /skill:name commands
 	terminal?: TerminalSettings;

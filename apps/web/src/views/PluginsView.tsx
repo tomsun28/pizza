@@ -7,6 +7,7 @@ import {
 	fetchSkillsSh,
 	getSkills,
 	setSkillEnabled,
+	deleteSkill,
 	getExtensions,
 	setExtensionEnabled,
 	installExtension,
@@ -42,10 +43,12 @@ const TABS: TabConfig[] = [
 function InstalledSkillCard({
 	skill,
 	onToggle,
+	onDelete,
 	busyName,
 }: {
 	skill: SkillInfo;
 	onToggle: (name: string, enabled: boolean) => void;
+	onDelete: (name: string) => void;
 	busyName: string | null;
 }) {
 	const { t } = useTranslation();
@@ -82,6 +85,20 @@ function InstalledSkillCard({
 								disabled: busy,
 								onClick: () => onToggle(skill.name, !skill.enabled),
 							},
+							// Only user/project skills live as files the user authored;
+							// built-in (registry) and package skills are not deletable here.
+							...(!skill.builtin && (skill.source === "user" || skill.source === "project")
+								? [
+										{ divider: true as const },
+										{
+											icon: Trash2,
+											label: t("plugins.skills.delete"),
+											danger: true,
+											disabled: busy,
+											onClick: () => onDelete(skill.name),
+										},
+								  ]
+								: []),
 						]}
 					/>
 				</div>
@@ -170,6 +187,19 @@ function SkillsTab() {
 		}
 	}, []);
 
+	const handleDelete = useCallback(async (name: string) => {
+		if (!confirm(t("plugins.skills.deleteConfirm", { name }))) return;
+		setBusyName(name);
+		try {
+			await deleteSkill(name);
+			setInstalledSkills((prev) => prev.filter((s) => s.name !== name));
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		} finally {
+			setBusyName(null);
+		}
+	}, [t]);
+
 	const installedNames = new Set(installedSkills.map((s) => s.name));
 	const filteredDir = search.trim()
 		? dirSkills.filter(
@@ -238,6 +268,7 @@ function SkillsTab() {
 								key={skill.command}
 								skill={skill}
 								onToggle={handleToggle}
+								onDelete={handleDelete}
 								busyName={busyName}
 							/>
 						))}

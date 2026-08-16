@@ -1112,6 +1112,24 @@ export async function runRpcModeWithFacade(
 			});
 		}
 
+		case "delete_skill": {
+			const loader = facade.resourceLoader;
+			if (!loader?.deleteSkill) {
+				return error(id, "delete_skill", "This session cannot delete skills.");
+			}
+			if (!loader.deleteSkill(command.skillName)) {
+				return error(
+					id,
+					"delete_skill",
+					`Cannot delete skill: ${command.skillName} (unknown, built-in, or package-provided)`,
+				);
+			}
+			// Same as set_skill_enabled: rebuild tools so the next turn no longer
+				// offers the deleted skill.
+			facade.extensionRunner?.refreshTools();
+			return success(id, "delete_skill", { name: command.skillName });
+		}
+
 		case "get_extensions": {
 			const extensions = await buildExtensionInfos(facade);
 			return success(id, "get_extensions", { extensions });

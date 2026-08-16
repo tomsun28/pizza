@@ -335,6 +335,11 @@ export async function setSkillEnabled(name: string, enabled: boolean): Promise<b
 	return r.data?.requiresReload ?? false;
 }
 
+/** Delete a non-built-in skill from disk (user/project skills only). */
+export async function deleteSkill(name: string): Promise<void> {
+	await sendCommandAwait({ type: "delete_skill", skillName: name }, 10000);
+}
+
 export type ExtensionKind = "builtin" | "user" | "project" | "cli" | "package";
 
 export interface ExtensionInfo {

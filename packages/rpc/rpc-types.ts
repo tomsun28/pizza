@@ -125,6 +125,7 @@ export type RpcResponse =
 			success: true;
 			data: { name: string; enabled: boolean; requiresReload: boolean };
 	  }
+	| { id?: string; type: "response"; command: "delete_skill"; success: true; data: { name: string } }
 
 	// Scheduled tasks
 	| { id?: string; type: "response"; command: "schedule_list"; success: true; data: { tasks: ScheduledTaskSummary[] } }

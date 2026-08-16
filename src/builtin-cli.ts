@@ -8,7 +8,7 @@
  *
  * Built-in skills are SKILL.md files shipped with Pizza. They are DISABLED by
  * default and must be enabled explicitly here (or via /settings in a session):
- *   pizza builtin enable git-workflow
+ *   pizza builtin enable pizza-self-optimization
  *
  * Usage:
  *   pizza builtin list

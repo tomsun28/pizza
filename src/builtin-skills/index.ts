@@ -22,11 +22,7 @@ import type { SkillFrontmatter } from "../core/skills.js";
 
 /** All built-in skill ids, in listing order. Ids are stable (persisted in settings). */
 const BUILTIN_SKILL_IDS = [
-	"code-review",
-	"debugging",
-	"git-workflow",
-	"refactoring",
-	"test-writing",
+	"pizza-self-optimization",
 ] as const;
 
 export interface BuiltinSkillInfo {

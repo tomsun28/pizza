@@ -379,6 +379,8 @@
       "disabled": "已禁用",
       "enable": "启用",
       "disable": "禁用",
+      "delete": "删除",
+      "deleteConfirm": "删除技能「{{name}}」?将从磁盘删除它的文件,此操作不可撤销。",
       "reloadHint": "重启会话后此改动才会生效。",
       "sources": {
         "builtin": "内置",
