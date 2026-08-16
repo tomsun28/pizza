@@ -520,6 +520,15 @@ export class ExtensionRunner {
 		return Array.from(toolsByName.values());
 	}
 
+	/**
+	 * Rebuild the active tool set and system prompt. Used when session resources
+	 * change out of band (e.g. a skill was enabled or disabled) so the next turn
+	 * sees them. No-op until the core binds its tool actions.
+	 */
+	refreshTools(): void {
+		this.runtime.refreshTools();
+	}
+
 	/** Get a tool definition by name. Returns undefined if not found. */
 	getToolDefinition(toolName: string): RegisteredTool["definition"] | undefined {
 		for (const ext of this.extensions) {

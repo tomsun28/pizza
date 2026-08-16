@@ -297,6 +297,12 @@ export interface SkillInfo {
 	command: string;
 	name: string;
 	description?: string;
+	/** Disabled skills are listed too, so they can be re-enabled from the UI. */
+	enabled: boolean;
+	/** Skills shipped with Pizza (opt-in) rather than discovered on disk. */
+	builtin: boolean;
+	path: string;
+	source: string;
 }
 
 /** Start a new conversation session (clears context for a fresh task). */
@@ -310,7 +316,7 @@ export async function newSession(): Promise<string | null> {
 	}
 }
 
-/** List available skills (invocable as slash commands). */
+/** List known skills, enabled or not (enabled ones are invocable as slash commands). */
 export async function getSkills(): Promise<SkillInfo[]> {
 	try {
 		const r = await sendCommandAwait<{ skills: SkillInfo[] }>({ type: "get_skills" }, 10000);
@@ -318,6 +324,15 @@ export async function getSkills(): Promise<SkillInfo[]> {
 	} catch {
 		return [];
 	}
+}
+
+/** Enable or disable a skill. Returns whether a reload is required for it to take effect. */
+export async function setSkillEnabled(name: string, enabled: boolean): Promise<boolean> {
+	const r = await sendCommandAwait<{ requiresReload: boolean }>(
+		{ type: "set_skill_enabled", skillName: name, enabled },
+		10000,
+	);
+	return r.data?.requiresReload ?? false;
 }
 
 export type ExtensionKind = "builtin" | "user" | "project" | "cli" | "package";

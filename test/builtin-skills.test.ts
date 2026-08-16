@@ -90,6 +90,11 @@ describe("built-in skills loading (resource loader)", () => {
 		writeFileSync(join(agentDir, "settings.json"), JSON.stringify(settings, null, "\t"));
 	}
 
+	function readSettings(): Record<string, unknown> {
+		const path = join(agentDir, "settings.json");
+		return existsSync(path) ? JSON.parse(readFileSync(path, "utf-8")) : {};
+	}
+
 	it("are disabled by default (no settings)", async () => {
 		const loader = new DefaultResourceLoader({ cwd, agentDir });
 		await loader.reload();
@@ -146,6 +151,66 @@ describe("built-in skills loading (resource loader)", () => {
 		await loader.reload();
 
 		expect(loader.getSkills().skills.some((s) => s.name === "git-workflow")).toBe(false);
+	});
+
+	it("lists disabled built-in skills in the catalog so they can be enabled", async () => {
+		const loader = new DefaultResourceLoader({ cwd, agentDir });
+		await loader.reload();
+
+		const catalog = loader.getSkillCatalog();
+		for (const id of getBuiltinSkillIds()) {
+			const entry = catalog.find((e) => e.skill.name === id);
+			expect(entry, `${id} should be in the catalog`).toBeDefined();
+			expect(entry?.enabled).toBe(false);
+			expect(entry?.builtinId).toBe(id);
+			expect(entry?.skill.description.length).toBeGreaterThan(0);
+		}
+	});
+
+	it("setSkillEnabled toggles a built-in skill through the allowlist", async () => {
+		const settingsManager = SettingsManager.create(cwd, agentDir);
+		const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
+		await loader.reload();
+
+		expect(loader.setSkillEnabled("debugging", true)).toBe(true);
+		expect(loader.getSkills().skills.some((s) => s.name === "debugging")).toBe(true);
+		await settingsManager.flush();
+		expect(readSettings().enabledBuiltinSkills).toContain("debugging");
+
+		expect(loader.setSkillEnabled("debugging", false)).toBe(true);
+		expect(loader.getSkills().skills.some((s) => s.name === "debugging")).toBe(false);
+		// Still listed (disabled) so the UI can turn it back on.
+		expect(loader.getSkillCatalog().some((e) => e.skill.name === "debugging" && !e.enabled)).toBe(true);
+	});
+
+	it("setSkillEnabled disables a discovered skill through the denylist, keeping it listed", async () => {
+		const userSkillDir = join(agentDir, "skills", "my-skill");
+		mkdirSync(userSkillDir, { recursive: true });
+		writeFileSync(join(userSkillDir, "SKILL.md"), "---\nname: my-skill\ndescription: mine\n---\nbody");
+
+		const settingsManager = SettingsManager.create(cwd, agentDir);
+		const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
+		await loader.reload();
+		expect(loader.getSkills().skills.some((s) => s.name === "my-skill")).toBe(true);
+
+		expect(loader.setSkillEnabled("my-skill", false)).toBe(true);
+		expect(loader.getSkills().skills.some((s) => s.name === "my-skill")).toBe(false);
+		await settingsManager.flush();
+		expect(readSettings().disabledSkills).toContain("my-skill");
+		const entry = loader.getSkillCatalog().find((e) => e.skill.name === "my-skill");
+		expect(entry?.enabled).toBe(false);
+		expect(entry?.builtinId).toBeUndefined();
+
+		expect(loader.setSkillEnabled("my-skill", true)).toBe(true);
+		expect(loader.getSkills().skills.some((s) => s.name === "my-skill")).toBe(true);
+		await settingsManager.flush();
+		expect(readSettings().disabledSkills).toBeUndefined();
+	});
+
+	it("setSkillEnabled reports unknown skill names", async () => {
+		const loader = new DefaultResourceLoader({ cwd, agentDir });
+		await loader.reload();
+		expect(loader.setSkillEnabled("not-a-skill", false)).toBe(false);
 	});
 
 	it("reloadSkills picks up enable/disable changes without a full reload", async () => {

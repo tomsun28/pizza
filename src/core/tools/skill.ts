@@ -76,8 +76,11 @@ export type SkillToolInput = Static<typeof skillSchema>;
 
 /** Options for {@link createSkillToolDefinition}. */
 export interface SkillToolOptions {
-	/** Pre-loaded skills available in this session. */
-	skills: Skill[];
+	/**
+	 * Skills available in this session. Read on every invocation so skills
+	 * enabled or disabled mid-session are picked up without a restart.
+	 */
+	getSkills: () => Skill[];
 }
 
 function textResult(text: string) {
@@ -165,16 +168,17 @@ export function createSkillToolDefinition(options: SkillToolOptions): ToolDefini
 		parameters: skillSchema,
 		async execute(_toolCallId, params) {
 			const { action, name, query, file } = params;
+			const skills = options.getSkills();
 
 			if (action === "list") {
-				return textResult(formatSkillList(options.skills, query));
+				return textResult(formatSkillList(skills, query));
 			}
 
 			if (action === "load") {
 				if (!name) {
 					return textResult("skill load: --name is required. Use `_skill list` to see available skills.");
 				}
-				const skill = options.skills.find((s) => s.name === name && !s.disableModelInvocation);
+				const skill = skills.find((s) => s.name === name && !s.disableModelInvocation);
 				if (!skill) {
 					return textResult(`Skill "${name}" not found. Use \`_skill list\` to see available skills.`);
 				}
@@ -194,7 +198,7 @@ export function createSkillToolDefinition(options: SkillToolOptions): ToolDefini
 				if (!file) {
 					return textResult("skill read: --file is required. Specify a relative path within the skill's directory.");
 				}
-				const skill = options.skills.find((s) => s.name === name && !s.disableModelInvocation);
+				const skill = skills.find((s) => s.name === name && !s.disableModelInvocation);
 				if (!skill) {
 					return textResult(`Skill "${name}" not found. Use \`_skill list\` to see available skills.`);
 				}

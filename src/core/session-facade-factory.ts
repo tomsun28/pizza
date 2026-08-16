@@ -366,9 +366,14 @@ export async function createSessionFacade(
 	// are available — it lets the LLM discover and load skills on demand via
 	// `_skill list` / `_skill load` / `_skill read` instead of having the full
 	// skills list injected into the system prompt.
-	const loadedSkills = resourceLoader.getSkills().skills;
-	if (loadedSkills.length > 0) {
-		cliToolOptions.skill = { skills: loadedSkills };
+	// Registered when the session knows about any skill, including ones the user
+	// has disabled — otherwise re-enabling a skill mid-session would have no
+	// command to run until the next restart.
+	const knownSkillCount = resourceLoader.getSkillCatalog
+		? resourceLoader.getSkillCatalog().filter((entry) => entry.enabled || entry.builtinId === undefined).length
+		: resourceLoader.getSkills().skills.length;
+	if (knownSkillCount > 0) {
+		cliToolOptions.skill = { getSkills: () => resourceLoader.getSkills().skills };
 	}
 	// The `cron` built-in command (scheduled prompts) is wired into the cli
 	// tool with a LAZY engine getter. The SchedulerEngine is created later

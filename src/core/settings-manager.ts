@@ -109,6 +109,7 @@ export interface Settings {
 	themes?: string[]; // Array of local theme file paths or directories
 	disabledBuiltinExtensions?: string[]; // Built-in extension ids to disable (e.g. ["agent-browser"]). Empty/absent = all built-ins enabled.
 	enabledBuiltinSkills?: string[]; // Built-in skill ids to enable (e.g. ["git-workflow"]). Empty/absent = all built-in skills DISABLED by default.
+	disabledSkills?: string[]; // Names of discovered (non-built-in) skills to disable. Empty/absent = every discovered skill is loaded.
 	enableSkillCommands?: boolean; // default: true - register skills as /skill:name commands
 	terminal?: TerminalSettings;
 	images?: ImageSettings;
@@ -916,6 +917,29 @@ export class SettingsManager {
 		const arr = Array.from(current);
 		this.globalSettings.enabledBuiltinSkills = arr.length > 0 ? arr : undefined;
 		this.markModified("enabledBuiltinSkills");
+		this.save();
+	}
+
+	/**
+	 * Names of discovered skills the user has turned off. Discovered skills are
+	 * enabled by default, so this is a denylist (the mirror image of the
+	 * built-in skill allowlist).
+	 */
+	getDisabledSkills(): Set<string> {
+		return new Set(this.settings.disabledSkills ?? []);
+	}
+
+	/** Disable (true) or enable (false) a discovered skill by name, persisted to user settings. */
+	setSkillDisabled(name: string, disabled: boolean): void {
+		const current = new Set(this.settings.disabledSkills ?? []);
+		if (disabled) {
+			current.add(name);
+		} else {
+			current.delete(name);
+		}
+		const arr = Array.from(current);
+		this.globalSettings.disabledSkills = arr.length > 0 ? arr : undefined;
+		this.markModified("disabledSkills");
 		this.save();
 	}
 

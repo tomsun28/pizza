@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve, sep } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import chalk from "chalk";
 import { CONFIG_DIR_NAME, getBuiltinSkillsDir, getMainDir, getMainMemoryDir } from "../config.js";
 import { loadThemeFromPath, type Theme } from "../../packages/tui/theme/theme.js";
@@ -21,7 +21,12 @@ import type { Skill } from "./skills.js";
 import { loadSkills } from "./skills.js";
 import { createSourceInfo, type SourceInfo } from "./source-info.js";
 import { getBuiltinExtensionFactories, type BuiltinExtension } from "../builtin-extensions/index.js";
-import { getEnabledBuiltinSkillPaths } from "../builtin-skills/index.js";
+import {
+	getBuiltinSkillIds,
+	getBuiltinSkillInfos,
+	getBuiltinSkillPath,
+	getEnabledBuiltinSkillPaths,
+} from "../builtin-skills/index.js";
 
 export interface ResourceExtensionPaths {
 	skillPaths?: Array<{ path: string; metadata: PathMetadata }>;
@@ -29,9 +34,29 @@ export interface ResourceExtensionPaths {
 	themePaths?: Array<{ path: string; metadata: PathMetadata }>;
 }
 
+/**
+ * A skill the session knows about, enabled or not. Disabled skills are kept in
+ * the catalog so a UI can list and re-enable them; only enabled ones reach the
+ * model via {@link ResourceLoader.getSkills}.
+ */
+export interface SkillCatalogEntry {
+	skill: Skill;
+	enabled: boolean;
+	/** Built-in skill id when this entry comes from the bundled registry. */
+	builtinId?: string;
+}
+
 export interface ResourceLoader {
 	getExtensions(): LoadExtensionsResult;
 	getSkills(): { skills: Skill[]; diagnostics: ResourceDiagnostic[] };
+	/** Every known skill with its enabled state (built-in skills included). */
+	getSkillCatalog?(): SkillCatalogEntry[];
+	/**
+	 * Enable or disable a skill by name and re-load skills. Built-in skills are
+	 * toggled through the `enabledBuiltinSkills` allowlist, discovered skills
+	 * through the `disabledSkills` denylist. Returns false for unknown names.
+	 */
+	setSkillEnabled?(name: string, enabled: boolean): boolean;
 	getPrompts(): { prompts: PromptTemplate[]; diagnostics: ResourceDiagnostic[] };
 	getThemes(): { themes: Theme[]; diagnostics: ResourceDiagnostic[] };
 	getAgentsFiles(): { agentsFiles: Array<{ path: string; content: string }> };
@@ -224,6 +249,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 	private extensionsResult: LoadExtensionsResult;
 	private skills: Skill[];
+	private skillCatalog: SkillCatalogEntry[];
 	private skillDiagnostics: ResourceDiagnostic[];
 	private prompts: PromptTemplate[];
 	private promptDiagnostics: ResourceDiagnostic[];
@@ -277,6 +303,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 		this.extensionsResult = { extensions: [], errors: [], runtime: createExtensionRuntime() };
 		this.skills = [];
+		this.skillCatalog = [];
 		this.skillDiagnostics = [];
 		this.prompts = [];
 		this.promptDiagnostics = [];
@@ -298,6 +325,10 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 	getSkills(): { skills: Skill[]; diagnostics: ResourceDiagnostic[] } {
 		return { skills: this.skills, diagnostics: this.skillDiagnostics };
+	}
+
+	getSkillCatalog(): SkillCatalogEntry[] {
+		return this.skillCatalog;
 	}
 
 	getPrompts(): { prompts: PromptTemplate[]; diagnostics: ResourceDiagnostic[] } {
@@ -583,14 +614,84 @@ export class DefaultResourceLoader implements ResourceLoader {
 			});
 		}
 		const resolvedSkills = this.skillsOverride ? this.skillsOverride(skillsResult) : skillsResult;
-		this.skills = resolvedSkills.skills.map((skill) => ({
+		const loaded = resolvedSkills.skills.map((skill) => ({
 			...skill,
 			sourceInfo:
 				this.findSourceInfoForPath(skill.filePath, this.extensionSkillSourceInfos, metadataByPath) ??
 				skill.sourceInfo ??
 				this.getDefaultSourceInfoForPath(skill.filePath),
 		}));
+		const builtinIdsByPath = new Map(
+			getBuiltinSkillIds().map((id) => [getBuiltinSkillPath(id), id] as const),
+		);
+		// Discovered skills are enabled unless denylisted; built-in skills only
+		// reach this point when their allowlist entry is set, so they are enabled.
+		const disabledNames = this.settingsManager.getDisabledSkills();
+		const catalog: SkillCatalogEntry[] = loaded.map((skill) => {
+			const builtinId = builtinIdsByPath.get(skill.filePath);
+			return {
+				skill,
+				enabled: builtinId !== undefined || !disabledNames.has(skill.name),
+				builtinId,
+			};
+		});
+		// Built-in skills the user has not opted into are not loaded at all, so
+		// describe them from the registry — enough for a UI to list and enable them.
+		const known = new Set(catalog.map((entry) => entry.skill.name));
+		for (const entry of this.getUnloadedBuiltinSkillEntries()) {
+			if (!known.has(entry.skill.name)) {
+				catalog.push(entry);
+			}
+		}
+		this.skillCatalog = catalog;
+		this.skills = catalog.filter((entry) => entry.enabled).map((entry) => entry.skill);
 		this.skillDiagnostics = resolvedSkills.diagnostics;
+	}
+
+	/** Catalog entries for built-in skills that are not enabled (and so never loaded). */
+	private getUnloadedBuiltinSkillEntries(): SkillCatalogEntry[] {
+		if (this.noSkills || this.noBuiltinSkills) {
+			return [];
+		}
+		const enabledIds = this.settingsManager.getEnabledBuiltinSkills();
+		return getBuiltinSkillInfos()
+			.filter((info) => !enabledIds.has(info.id))
+			.map((info) => ({
+				enabled: false,
+				builtinId: info.id,
+				skill: {
+					name: info.name,
+					description: info.description,
+					filePath: info.path,
+					baseDir: dirname(info.path),
+					sourceInfo: createSourceInfo(info.path, {
+						source: "builtin",
+						scope: "user",
+						origin: "top-level",
+						baseDir: getBuiltinSkillsDir(),
+					}),
+					disableModelInvocation: false,
+				},
+			}));
+	}
+
+	/**
+	 * Toggle a skill by name. Built-in skills are opt-in (allowlist), discovered
+	 * skills are opt-out (denylist); either way the change is persisted to user
+	 * settings and skills are re-loaded so the caller can rebuild its prompt.
+	 */
+	setSkillEnabled(name: string, enabled: boolean): boolean {
+		const entry = this.skillCatalog.find((candidate) => candidate.skill.name === name);
+		if (!entry) {
+			return false;
+		}
+		if (entry.builtinId !== undefined) {
+			this.settingsManager.setBuiltinSkillEnabled(entry.builtinId, enabled);
+		} else {
+			this.settingsManager.setSkillDisabled(name, !enabled);
+		}
+		this.reloadSkills();
+		return true;
 	}
 
 	/**

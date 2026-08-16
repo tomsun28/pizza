@@ -353,7 +353,9 @@ export function Composer({
 		let cancelled = false;
 		(async () => {
 			const list = await getSkills();
-			if (!cancelled) setSkills(list);
+			// get_skills also reports disabled skills (for the plugins UI); only
+			// enabled ones are actually invocable.
+			if (!cancelled) setSkills(list.filter((skill) => skill.enabled));
 		})();
 		return () => {
 			cancelled = true;

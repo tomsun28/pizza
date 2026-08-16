@@ -274,6 +274,7 @@ export type RpcCommand =
 	| { id?: string; type: "set_safe_mode"; enabled: boolean }
 	| { id?: string; type: "new_session" }
 	| { id?: string; type: "get_skills" }
+	| { id?: string; type: "set_skill_enabled"; skillName: string; enabled: boolean }
 	| { id?: string; type: "get_extensions" }
 	| { id?: string; type: "set_extension_enabled"; extensionId: string; enabled: boolean }
 	| { id?: string; type: "install_extension"; extensionId: string }
@@ -348,6 +349,14 @@ export interface RpcSkillInfo {
 	name: string;
 	/** Human-readable description. */
 	description?: string;
+	/** Whether the skill is active. Disabled skills are listed so a UI can re-enable them. */
+	enabled: boolean;
+	/** Whether the skill ships with Pizza (opt-in) rather than being discovered on disk. */
+	builtin: boolean;
+	/** Absolute path of the skill's SKILL.md. */
+	path: string;
+	/** Where the skill comes from (e.g. "builtin", "local", a package name). */
+	source: string;
 }
 
 /** An extension loaded by the agent, as returned by get_extensions. */
@@ -482,6 +491,13 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "set_safe_mode"; success: true; data: { safeMode: boolean } }
 	| { id?: string; type: "response"; command: "new_session"; success: true; data: { sessionId: string } }
 	| { id?: string; type: "response"; command: "get_skills"; success: true; data: { skills: RpcSkillInfo[] } }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_skill_enabled";
+			success: true;
+			data: { name: string; enabled: boolean; requiresReload: boolean };
+	  }
 	| { id?: string; type: "response"; command: "get_extensions"; success: true; data: { extensions: RpcExtensionInfo[] } }
 	| { id?: string; type: "response"; command: "set_extension_enabled"; success: true; data: { id: string; enabled: boolean; requiresReload: boolean } }
 	| { id?: string; type: "response"; command: "install_extension"; success: true; data: { extensionId: string; ok: boolean; message: string; installed: boolean } }

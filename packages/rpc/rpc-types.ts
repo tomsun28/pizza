@@ -118,6 +118,13 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "set_safe_mode"; success: true; data: { safeMode: boolean } }
 	| { id?: string; type: "response"; command: "new_session"; success: true; data: { sessionId: string } }
 	| { id?: string; type: "response"; command: "get_skills"; success: true; data: { skills: RpcSkillInfo[] } }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_skill_enabled";
+			success: true;
+			data: { name: string; enabled: boolean; requiresReload: boolean };
+	  }
 
 	// Scheduled tasks
 	| { id?: string; type: "response"; command: "schedule_list"; success: true; data: { tasks: ScheduledTaskSummary[] } }
