@@ -2461,7 +2461,7 @@ pub async fn test_custom_provider(
 		let url = join_api_path(&base_url, "/v1/messages");
 		let body = serde_json::json!({
 			"model": model_id,
-			"max_tokens": 32,
+			"max_tokens": 1024,
 			"messages": [{ "role": "user", "content": "hi" }]
 		});
 		(
@@ -2476,7 +2476,7 @@ pub async fn test_custom_provider(
 		let url = join_api_path(&base_url, "/chat/completions");
 		let body = serde_json::json!({
 			"model": model_id,
-			"max_tokens": 32,
+			"max_tokens": 1024,
 			"stream": false,
 			"messages": [{ "role": "user", "content": "hi" }]
 		});
