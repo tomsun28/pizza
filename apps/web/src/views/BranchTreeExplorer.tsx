@@ -10,7 +10,7 @@ import {
 	subscribeEvents,
 } from "@/lib/transport";
 import type { RpcHistoryTreeNode } from "@/lib/types";
-import { EmptyState, ErrorBanner, Spinner } from "@/components/ui";
+import { Button, EmptyState, ErrorBanner, Field, Modal, Spinner } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { ContextMenu, type ContextMenuItem } from "@/components/ui";
 
@@ -50,6 +50,9 @@ export default function BranchTreeExplorer({ workspace }: { workspace?: string |
 	const [query, setQuery] = useState("");
 	const [selected, setSelected] = useState<string | null>(null);
 	const [menu, setMenu] = useState<ContextMenuState | null>(null);
+	const [renameTarget, setRenameTarget] = useState<RpcHistoryTreeNode | null>(null);
+	const [renameValue, setRenameValue] = useState("");
+	const [renaming, setRenaming] = useState(false);
 	const queryRef = useRef(query);
 	queryRef.current = query;
 
@@ -154,11 +157,21 @@ export default function BranchTreeExplorer({ workspace }: { workspace?: string |
 
 	const onRename = useCallback(async (node: RpcHistoryTreeNode) => {
 		setMenu(null);
-		const name = window.prompt(t("history.renamePrompt"), node.name ?? "");
-		if (name == null) return;
-		try { await historyTreeRename(node.session_id, name); await load(); }
+		setRenameTarget(node);
+		setRenameValue(node.name ?? "");
+	}, []);
+
+	const submitRename = useCallback(async () => {
+		if (!renameTarget || renaming) return;
+		setRenaming(true);
+		try {
+			await historyTreeRename(renameTarget.session_id, renameValue.trim());
+			setRenameTarget(null);
+			await load();
+		}
 		catch (e) { setError(e instanceof Error ? e.message : String(e)); }
-	}, [load, t]);
+		finally { setRenaming(false); }
+	}, [load, renameTarget, renameValue, renaming]);
 
 	const activeNode = nodes.find((n) => n.is_active);
 
@@ -235,6 +248,41 @@ export default function BranchTreeExplorer({ workspace }: { workspace?: string |
 					})}
 				/>
 			)}
+
+			<Modal
+				open={!!renameTarget}
+				onClose={() => { if (!renaming) setRenameTarget(null); }}
+				size="sm"
+				backdrop={false}
+				title={t("history.rename")}
+				footer={
+					<div className="flex w-full items-center justify-end gap-2">
+						<Button tone="neutral" variant="ghost" size="sm" disabled={renaming} onClick={() => setRenameTarget(null)}>
+							{t("common.dismiss")}
+						</Button>
+						<Button size="sm" loading={renaming} onClick={() => void submitRename()}>
+							{t("common.save")}
+						</Button>
+					</div>
+				}
+			>
+				<form
+					onSubmit={(e) => {
+						e.preventDefault();
+						void submitRename();
+					}}
+				>
+					<Field label={t("history.renamePrompt")}>
+						<input
+							autoFocus
+							type="text"
+							value={renameValue}
+							onChange={(e) => setRenameValue(e.target.value)}
+							className="h-9 w-full rounded-lg border border-border bg-surface px-3 font-mono text-sm text-fg placeholder:text-muted focus:border-accent focus:outline-none"
+						/>
+					</Field>
+				</form>
+			</Modal>
 		</div>
 	);
 }
