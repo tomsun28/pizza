@@ -157,7 +157,7 @@ async function testCustomProvider(input) {
 				},
 				body: {
 					model,
-					max_tokens: 32,
+					max_tokens: 1024,
 					messages: [{ role: "user", content: "hi" }],
 				},
 			}
@@ -169,7 +169,7 @@ async function testCustomProvider(input) {
 				},
 				body: {
 					model,
-					max_tokens: 32,
+					max_tokens: 1024,
 					stream: false,
 					messages: [{ role: "user", content: "hi" }],
 				},
