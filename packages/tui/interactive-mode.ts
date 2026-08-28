@@ -127,6 +127,20 @@ import {
   readClipboardImage,
 } from "../../src/utils/clipboard-image.js";
 import { parseGitUrl } from "../../src/utils/git.js";
+import {
+  findSourceInfoForPath,
+  formatContextPath,
+  formatDisplayPath,
+  formatPathWithSource,
+  getCompactDisplayPathSegments,
+  getCompactExtensionLabel,
+  getCompactPackageSourceLabel,
+  getCompactPathLabel,
+  getDisplaySourceInfo,
+  getScopeGroup,
+  getShortPath,
+  isPackageSource,
+} from "./resource-path-format.js";
 import { killTrackedDetachedChildren } from "../../src/utils/shell.js";
 import { ensureTool } from "../../src/utils/tools-manager.js";
 import { ApprovalDialogComponent } from "./components/approval-dialog.js";
@@ -1203,34 +1217,11 @@ export class InteractiveMode {
   // =========================================================================
 
   private formatDisplayPath(p: string): string {
-    const home = os.homedir();
-    let result = p;
-
-    // Replace home directory with ~
-    if (result.startsWith(home)) {
-      result = `~${result.slice(home.length)}`;
-    }
-
-    return result;
+    return formatDisplayPath(p);
   }
 
   private formatContextPath(p: string): string {
-    const cwd = path.resolve(this.facadeCwd);
-    const absolutePath = path.isAbsolute(p)
-      ? path.resolve(p)
-      : path.resolve(cwd, p);
-    const relativePath = path.relative(cwd, absolutePath);
-    const isInsideCwd =
-      relativePath === "" ||
-      (!relativePath.startsWith("..") &&
-        !relativePath.startsWith(`..${path.sep}`) &&
-        !path.isAbsolute(relativePath));
-
-    if (isInsideCwd) {
-      return relativePath || ".";
-    }
-
-    return this.formatDisplayPath(absolutePath);
+    return formatContextPath(p, this.facadeCwd);
   }
 
   private getStartupExpansionState(): boolean {
@@ -1241,104 +1232,29 @@ export class InteractiveMode {
    * Get a short path relative to the package root for display.
    */
   private getShortPath(fullPath: string, sourceInfo?: SourceInfo): string {
-    const baseDir = sourceInfo?.baseDir;
-    if (baseDir && this.isPackageSource(sourceInfo)) {
-      const relativePath = path.relative(
-        path.resolve(baseDir),
-        path.resolve(fullPath),
-      );
-      if (
-        relativePath &&
-        relativePath !== "." &&
-        !relativePath.startsWith("..") &&
-        !relativePath.startsWith(`..${path.sep}`) &&
-        !path.isAbsolute(relativePath)
-      ) {
-        return relativePath.replace(/\\/g, "/");
-      }
-    }
-
-    const source = sourceInfo?.source ?? "";
-    const npmMatch = fullPath.match(
-      /node_modules\/(@?[^/]+(?:\/[^/]+)?)\/(.*)/,
-    );
-    if (npmMatch && source.startsWith("npm:")) {
-      return npmMatch[2];
-    }
-
-    const gitMatch = fullPath.match(/git\/[^/]+\/[^/]+\/(.*)/);
-    if (gitMatch && source.startsWith("git:")) {
-      return gitMatch[1];
-    }
-
-    return this.formatDisplayPath(fullPath);
+    return getShortPath(fullPath, sourceInfo);
   }
 
   private getCompactPathLabel(
     resourcePath: string,
     sourceInfo?: SourceInfo,
   ): string {
-    const shortPath = this.getShortPath(resourcePath, sourceInfo);
-    const normalizedPath = shortPath.replace(/\\/g, "/");
-    const segments = normalizedPath
-      .split("/")
-      .filter((segment) => segment.length > 0 && segment !== "~");
-    if (segments.length > 0) {
-      return segments[segments.length - 1]!;
-    }
-    return shortPath;
+    return getCompactPathLabel(resourcePath, sourceInfo);
   }
 
   private getCompactPackageSourceLabel(sourceInfo?: SourceInfo): string {
-    const source = sourceInfo?.source ?? "";
-    if (source.startsWith("npm:")) {
-      return source.slice("npm:".length) || source;
-    }
-
-    const gitSource = parseGitUrl(source);
-    if (gitSource) {
-      return gitSource.path || source;
-    }
-
-    return source;
+    return getCompactPackageSourceLabel(sourceInfo);
   }
 
   private getCompactExtensionLabel(
     resourcePath: string,
     sourceInfo?: SourceInfo,
   ): string {
-    if (!this.isPackageSource(sourceInfo)) {
-      return this.getCompactPathLabel(resourcePath, sourceInfo);
-    }
-
-    const sourceLabel = this.getCompactPackageSourceLabel(sourceInfo);
-    if (!sourceLabel) {
-      return this.getCompactPathLabel(resourcePath, sourceInfo);
-    }
-
-    const shortPath = this.getShortPath(resourcePath, sourceInfo).replace(
-      /\\/g,
-      "/",
-    );
-    const packagePath = shortPath.startsWith("extensions/")
-      ? shortPath.slice("extensions/".length)
-      : shortPath;
-    const parsedPath = path.posix.parse(packagePath);
-
-    if (parsedPath.name === "index") {
-      return !parsedPath.dir || parsedPath.dir === "."
-        ? sourceLabel
-        : `${sourceLabel}:${parsedPath.dir}`;
-    }
-
-    return `${sourceLabel}:${packagePath}`;
+    return getCompactExtensionLabel(resourcePath, sourceInfo);
   }
 
   private getCompactDisplayPathSegments(resourcePath: string): string[] {
-    return this.formatDisplayPath(resourcePath)
-      .replace(/\\/g, "/")
-      .split("/")
-      .filter((segment) => segment.length > 0 && segment !== "~");
+    return getCompactDisplayPathSegments(resourcePath);
   }
 
   private getCompactNonPackageExtensionLabel(
@@ -1411,52 +1327,15 @@ export class InteractiveMode {
     scopeLabel?: string;
     color: "accent" | "muted";
   } {
-    const source = sourceInfo?.source ?? "local";
-    const scope = sourceInfo?.scope ?? "project";
-    if (source === "local") {
-      if (scope === "user") {
-        return { label: "user", color: "muted" };
-      }
-      if (scope === "project") {
-        return { label: "project", color: "muted" };
-      }
-      if (scope === "temporary") {
-        return { label: "path", scopeLabel: "temp", color: "muted" };
-      }
-      return { label: "path", color: "muted" };
-    }
-
-    if (source === "cli") {
-      return {
-        label: "path",
-        scopeLabel: scope === "temporary" ? "temp" : undefined,
-        color: "muted",
-      };
-    }
-
-    const scopeLabel =
-      scope === "user"
-        ? "user"
-        : scope === "project"
-          ? "project"
-          : scope === "temporary"
-            ? "temp"
-            : undefined;
-    return { label: source, scopeLabel, color: "accent" };
+    return getDisplaySourceInfo(sourceInfo);
   }
 
   private getScopeGroup(sourceInfo?: SourceInfo): "user" | "project" | "path" {
-    const source = sourceInfo?.source ?? "local";
-    const scope = sourceInfo?.scope ?? "project";
-    if (source === "cli" || scope === "temporary") return "path";
-    if (scope === "user") return "user";
-    if (scope === "project") return "project";
-    return "path";
+    return getScopeGroup(sourceInfo);
   }
 
   private isPackageSource(sourceInfo?: SourceInfo): boolean {
-    const source = sourceInfo?.source ?? "";
-    return source.startsWith("npm:") || source.startsWith("git:");
+    return isPackageSource(sourceInfo);
   }
 
   private buildScopeGroups(
@@ -1547,27 +1426,11 @@ export class InteractiveMode {
     p: string,
     sourceInfos: Map<string, SourceInfo>,
   ): SourceInfo | undefined {
-    const exact = sourceInfos.get(p);
-    if (exact) return exact;
-
-    let current = p;
-    while (current.includes("/")) {
-      current = current.substring(0, current.lastIndexOf("/"));
-      const parent = sourceInfos.get(current);
-      if (parent) return parent;
-    }
-
-    return undefined;
+    return findSourceInfoForPath(p, sourceInfos);
   }
 
   private formatPathWithSource(p: string, sourceInfo?: SourceInfo): string {
-    if (sourceInfo) {
-      const shortPath = this.getShortPath(p, sourceInfo);
-      const { label, scopeLabel } = this.getDisplaySourceInfo(sourceInfo);
-      const labelText = scopeLabel ? `${label} (${scopeLabel})` : label;
-      return `${labelText} ${shortPath}`;
-    }
-    return this.formatDisplayPath(p);
+    return formatPathWithSource(p, sourceInfo);
   }
 
   private formatDiagnostics(

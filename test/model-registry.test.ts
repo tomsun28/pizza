@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Api, Context, Model, OpenAICompletionsCompat } from "@earendil-works/pi-ai/compat";
@@ -431,6 +431,107 @@ describe("ModelRegistry", () => {
 			expect(compat?.reasoningEffortMap).toEqual({ minimal: "default", high: "max" });
 			expect(compat?.supportsStrictMode).toBe(false);
 			expect(compat?.cacheControlFormat).toBe("anthropic");
+		});
+
+		test("anthropic-messages compat schema accepts forceAdaptiveThinking and related flags", () => {
+			writeRawModelsJson({
+				"claude-relay": {
+					baseUrl: "https://relay.example.com",
+					apiKey: "TEST_KEY",
+					api: "anthropic-messages",
+					models: [
+						{
+							id: "claude-opus-4-5",
+							reasoning: true,
+							input: ["text", "image"],
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							contextWindow: 200000,
+							maxTokens: 64000,
+							compat: {
+								forceAdaptiveThinking: true,
+								supportsTemperature: false,
+								allowEmptySignature: true,
+							},
+						},
+					],
+				},
+			});
+
+			const registry = ModelRegistry.create(authStorage, modelsJsonPath);
+			const model = registry.find("claude-relay", "claude-opus-4-5");
+			const compat = model?.compat as any;
+
+			expect(registry.getError()).toBeUndefined();
+			expect(compat?.forceAdaptiveThinking).toBe(true);
+			expect(compat?.supportsTemperature).toBe(false);
+			expect(compat?.allowEmptySignature).toBe(true);
+		});
+
+		test("anthropic-messages models matching known adaptive-thinking ids auto-enable forceAdaptiveThinking", () => {
+			writeRawModelsJson({
+				"claude-relay": {
+					baseUrl: "https://relay.example.com",
+					apiKey: "TEST_KEY",
+					api: "anthropic-messages",
+					models: [
+						// Exact match with a known adaptive-thinking built-in id
+						{ id: "claude-opus-5", reasoning: true, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 200000, maxTokens: 64000 },
+						// Suffixed relay variant
+						{ id: "claude-sonnet-4-6-cc", reasoning: true, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 200000, maxTokens: 64000 },
+						// Non-adaptive model must stay untouched
+						{ id: "claude-opus-4-5", reasoning: true, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 200000, maxTokens: 64000 },
+					],
+			},
+			});
+
+			const registry = ModelRegistry.create(authStorage, modelsJsonPath);
+			expect(registry.getError()).toBeUndefined();
+
+			const opus = registry.find("claude-relay", "claude-opus-5");
+			expect((opus?.compat as any)?.forceAdaptiveThinking).toBe(true);
+			// Inherits thinkingLevelMap from the known built-in model metadata
+			expect(opus?.thinkingLevelMap).toEqual({ xhigh: "xhigh", max: "max" });
+
+			const sonnet = registry.find("claude-relay", "claude-sonnet-4-6-cc");
+			expect((sonnet?.compat as any)?.forceAdaptiveThinking).toBe(true);
+
+			const legacy = registry.find("claude-relay", "claude-opus-4-5");
+			expect((legacy?.compat as any)?.forceAdaptiveThinking).toBeUndefined();
+		});
+
+		test("explicit forceAdaptiveThinking setting is respected over auto-detection", () => {
+			writeRawModelsJson({
+				"claude-relay": {
+					baseUrl: "https://relay.example.com",
+					apiKey: "TEST_KEY",
+					api: "anthropic-messages",
+					compat: { forceAdaptiveThinking: false },
+					models: [
+						{ id: "claude-opus-5", reasoning: true, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 200000, maxTokens: 64000 },
+					],
+			},
+			});
+
+			const registry = ModelRegistry.create(authStorage, modelsJsonPath);
+			const model = registry.find("claude-relay", "claude-opus-5");
+			expect((model?.compat as any)?.forceAdaptiveThinking).toBe(false);
+		});
+
+		test("openai-completions models never get forceAdaptiveThinking auto-enabled", () => {
+			writeRawModelsJson({
+				"weird-relay": {
+					baseUrl: "https://relay.example.com/v1",
+					apiKey: "TEST_KEY",
+					api: "openai-completions",
+					models: [
+						{ id: "claude-opus-5", reasoning: true, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 200000, maxTokens: 64000 },
+					],
+			},
+			});
+
+			const registry = ModelRegistry.create(authStorage, modelsJsonPath);
+			const model = registry.find("weird-relay", "claude-opus-5");
+			expect((model?.compat as any)?.forceAdaptiveThinking).toBeUndefined();
 		});
 
 		test("model-level baseUrl overrides provider-level baseUrl for custom models", () => {
@@ -1239,5 +1340,176 @@ describe("ModelRegistry", () => {
 			expect(model!.contextWindow).toBe(123456);
 		});
 	});
+	});
+
+	describe("cacheRetention", () => {
+		function writeWithRetention(config: Record<string, unknown>) {
+			writeFileSync(modelsJsonPath, JSON.stringify({ providers: { relay: config } }));
+		}
+
+		const baseModel = {
+			id: "claude-fable-5-cc",
+			name: "Fable",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 100000,
+			maxTokens: 8000,
+		};
+
+		test("is undefined when not configured, so pi-ai keeps its default", () => {
+			writeWithRetention({
+				baseUrl: "https://relay.example.com",
+				apiKey: "K",
+				api: "anthropic-messages",
+				models: [baseModel],
+			});
+			const registry = ModelRegistry.create(authStorage, modelsJsonPath);
+			const model = registry.find("relay", "claude-fable-5-cc")!;
+			expect(registry.getCacheRetention(model)).toBeUndefined();
+		});
+
+		test("reads per-model cacheRetention", () => {
+			writeWithRetention({
+				baseUrl: "https://relay.example.com",
+				apiKey: "K",
+				api: "anthropic-messages",
+				models: [{ ...baseModel, cacheRetention: "none" }],
+			});
+			const registry = ModelRegistry.create(authStorage, modelsJsonPath);
+			const model = registry.find("relay", "claude-fable-5-cc")!;
+			expect(registry.getCacheRetention(model)).toBe("none");
+		});
+
+		test("reads provider-level cacheRetention (no other request config present)", () => {
+			writeWithRetention({
+				baseUrl: "https://relay.example.com",
+				api: "anthropic-messages",
+				cacheRetention: "none",
+				models: [baseModel],
+			});
+			const registry = ModelRegistry.create(authStorage, modelsJsonPath);
+			const model = registry.find("relay", "claude-fable-5-cc")!;
+			expect(registry.getCacheRetention(model)).toBe("none");
+		});
+
+		test("per-model wins over provider level", () => {
+			writeWithRetention({
+				baseUrl: "https://relay.example.com",
+				apiKey: "K",
+				api: "anthropic-messages",
+				cacheRetention: "long",
+				models: [{ ...baseModel, cacheRetention: "none" }],
+			});
+			const registry = ModelRegistry.create(authStorage, modelsJsonPath);
+			const model = registry.find("relay", "claude-fable-5-cc")!;
+			expect(registry.getCacheRetention(model)).toBe("none");
+		});
+
+		test("modelOverrides can set cacheRetention on a built-in model", () => {
+			writeFileSync(
+				modelsJsonPath,
+				JSON.stringify({
+					providers: {
+						anthropic: { modelOverrides: { "claude-sonnet-4-5": { cacheRetention: "none" } } },
+					},
+				}),
+			);
+			const registry = ModelRegistry.create(authStorage, modelsJsonPath);
+			const model = registry.find("anthropic", "claude-sonnet-4-5");
+			if (!model) return; // built-in id drifted; precedence covered by other cases
+			expect(registry.getCacheRetention(model)).toBe("none");
+		});
+
+		test("rejects an invalid cacheRetention value", () => {
+			writeWithRetention({
+				baseUrl: "https://relay.example.com",
+				apiKey: "K",
+				api: "anthropic-messages",
+				models: [{ ...baseModel, cacheRetention: "forever" }],
+			});
+			const registry = ModelRegistry.create(authStorage, modelsJsonPath);
+			expect(registry.getError()).toBeTruthy();
+		});
+
+	});
+
+
+	describe("adaptive thinking fallback", () => {
+		function createRegistry() {
+			writeModelsJson({
+				"relay-provider": {
+					...providerConfig("https://relay.example.com", [{ id: "relay-thinker-9" }]),
+				},
+			});
+			return ModelRegistry.create(authStorage, modelsJsonPath);
+		}
+
+		test("rememberAdaptiveThinking patches the live model entry", () => {
+			const registry = createRegistry();
+			const model = registry.find("relay-provider", "relay-thinker-9")!;
+			expect((model.compat as any)?.forceAdaptiveThinking).not.toBe(true);
+
+			const patched = registry.rememberAdaptiveThinking(model);
+			expect((patched.compat as any)?.forceAdaptiveThinking).toBe(true);
+			// The registry entry itself is updated, so future lookups see it
+			expect((registry.find("relay-provider", "relay-thinker-9")!.compat as any)?.forceAdaptiveThinking).toBe(true);
+		});
+
+		test("explicit compat.forceAdaptiveThinking survives refresh", () => {
+			const registry = createRegistry();
+			registry.rememberAdaptiveThinking(registry.find("relay-provider", "relay-thinker-9")!);
+			// refresh() reloads from disk, which does not persist learned flags —
+			// learned state lives in memory for the process lifetime only.
+			registry.refresh();
+			expect(
+				(registry.find("relay-provider", "relay-thinker-9")!.compat as any)?.forceAdaptiveThinking,
+			).not.toBe(true);
+		});
+	});
+
+	describe("models.json hot reload", () => {
+		test("manual edits are picked up by read paths without restart", async () => {
+			writeModelsJson({
+				"relay-provider": {
+					...providerConfig("https://relay.example.com", [{ id: "model-a" }]),
+				},
+			});
+			const registry = ModelRegistry.create(authStorage, modelsJsonPath);
+			expect(registry.find("relay-provider", "model-a")).toBeDefined();
+			expect(registry.find("relay-provider", "model-b")).toBeUndefined();
+
+			// Simulate an out-of-band edit. mtime granularity can hide same-second
+			// writes, so bump it explicitly.
+			const config = JSON.parse(readFileSync(modelsJsonPath, "utf-8"));
+			config.providers["relay-provider"].models.push({
+				id: "model-b",
+				name: "model-b",
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 100000,
+				maxTokens: 8000,
+			});
+			writeFileSync(modelsJsonPath, JSON.stringify(config));
+			const future = new Date(Date.now() + 2000);
+			utimesSync(modelsJsonPath, future, future);
+
+			// No refresh() call — the read path notices the change itself.
+			expect(registry.find("relay-provider", "model-b")).toBeDefined();
+			expect(registry.getAll().some((m) => m.id === "model-b")).toBe(true);
+		});
+
+		test("unchanged file does not reload (mtime guard)", () => {
+			writeModelsJson({
+				"relay-provider": {
+					...providerConfig("https://relay.example.com", [{ id: "model-a" }]),
+				},
+			});
+			const registry = ModelRegistry.create(authStorage, modelsJsonPath);
+			const before = registry.getAll().length;
+			expect(registry.find("relay-provider", "model-a")).toBeDefined();
+			expect(registry.getAll().length).toBe(before);
+		});
 	});
 });

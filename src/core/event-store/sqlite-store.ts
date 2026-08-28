@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
@@ -8,7 +8,7 @@ import type { EventAppendInput, EventQuery, EventStore, SubscribeOptions } from 
 import type { SessionIndex } from "../projection/types.js";
 import type { SessionStore } from "./session-store.js";
 import { SqliteSessionStore } from "./sqlite-session-store.js";
-import { getWorkspaceMetaPath } from "./workspace.js";
+import { atomicWriteJson, getWorkspaceMetaPath } from "./workspace.js";
 import { deriveWorkspaceId, getEventDatabasePath } from "./workspace.js";
 
 const require = createRequire(import.meta.url);
@@ -129,8 +129,10 @@ export class SqliteEventStore implements EventStore, SessionStore {
 				break;
 			} catch (error) {
 				try { this.db.exec("rollback"); } catch { /* no active transaction */ }
-				// Retry on write-lock contention (another process holds the lock).
-				if (error instanceof Error && /database is locked/.test(error.message) && attempt < 5) {
+				// Retry on write-lock contention (another process holds the lock),
+				// backing off with jitter so concurrent writers do not collide again.
+				if (isSqliteBusyError(error) && attempt < MAX_LOCK_RETRY_ATTEMPTS) {
+					sleepSync(lockRetryDelayMs(attempt));
 					continue;
 				}
 				throw error;
@@ -153,7 +155,9 @@ export class SqliteEventStore implements EventStore, SessionStore {
 			const raw = readFileSync(metaPath, "utf8");
 			const meta = JSON.parse(raw) as { last_accessed_at?: number };
 			meta.last_accessed_at = Date.now();
-			writeFileSync(metaPath, JSON.stringify(meta, null, 2));
+			// Atomic replace: other processes read this file concurrently and must
+			// never observe a half-written meta.json.
+			atomicWriteJson(metaPath, meta);
 		} catch {
 			// meta.json might not exist yet — ignore.
 		}
@@ -385,7 +389,8 @@ export class SqliteEventStore implements EventStore, SessionStore {
 				return event;
 			} catch (error) {
 				try { this.db.exec("rollback"); } catch { /* no active transaction */ }
-				if (error instanceof Error && /database is locked/.test(error.message) && attempt < 5) {
+				if (isSqliteBusyError(error) && attempt < MAX_LOCK_RETRY_ATTEMPTS) {
+					sleepSync(lockRetryDelayMs(attempt));
 					continue;
 				}
 				throw error;
@@ -407,10 +412,20 @@ export class SqliteEventStore implements EventStore, SessionStore {
 		return row ? rowToEvent(row) : undefined;
 	}
 
+	/**
+	 * Fan out an event to subscribers. Each handler is isolated: a throwing
+	 * subscriber must not prevent the remaining subscribers from seeing the
+	 * event, and must not propagate out of append() and abort the caller
+	 * (subscribers drive the reactor and the UI, so an exception here would
+	 * otherwise break the agent turn). Mirrors the event-bus contract.
+	 */
 	private _notify(event: EventBase): void {
 		for (const [, sub] of this.subscribers) {
-			if (matchesSubscription(event, sub.options)) {
+			if (!matchesSubscription(event, sub.options)) continue;
+			try {
 				sub.handler(event);
+			} catch (error) {
+				console.error(`Event subscriber error (${event.type}):`, error);
 			}
 		}
 	}
@@ -432,6 +447,46 @@ function rowToEvent(row: EventRow): EventBase {
 		schema_version: row.schema_version,
 		idempotency_key: row.idempotency_key ?? undefined,
 	};
+}
+
+/** Max retries after SQLITE_BUSY before giving up and rethrowing. */
+const MAX_LOCK_RETRY_ATTEMPTS = 5;
+
+/** Whether an error is SQLite reporting write-lock contention. */
+function isSqliteBusyError(error: unknown): boolean {
+	return error instanceof Error && /database is locked/.test(error.message);
+}
+
+/**
+ * Block the calling thread for `ms` without spinning the CPU.
+ *
+ * The store API is synchronous (node:sqlite DatabaseSync), so `await` is not
+ * available on this path. Atomics.wait on a throwaway SharedArrayBuffer is the
+ * standard way to sleep synchronously; the wait never gets notified, so it
+ * always runs to the timeout.
+ */
+function sleepSync(ms: number): void {
+	if (ms <= 0) return;
+	try {
+		Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+	} catch {
+		// SharedArrayBuffer can be unavailable in restricted environments. Losing
+		// the delay only costs us decorrelation, so proceeding is fine.
+	}
+}
+
+/**
+ * Decorrelated backoff between lock retries: 2ms, 4ms, 8ms… each with jitter.
+ *
+ * Note this is *not* about avoiding a busy-wait — `PRAGMA busy_timeout` already
+ * makes SQLite block internally, so reaching SQLITE_BUSY means ~5s of
+ * contention has already elapsed. The jitter exists so that several processes
+ * released by the same commit do not all retry in lockstep and collide again
+ * (thundering herd).
+ */
+function lockRetryDelayMs(attempt: number): number {
+	const base = 2 * 2 ** attempt;
+	return base + Math.random() * base;
 }
 
 function matchesSubscription(event: EventBase, options?: SubscribeOptions): boolean {

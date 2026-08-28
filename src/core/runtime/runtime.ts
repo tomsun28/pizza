@@ -391,9 +391,10 @@ export class EventSourcedRuntime {
 	}
 	/**
 	 * Toggle safe mode at runtime. When on, risky tool calls require explicit
-	 * user approval before executing.
+	 * user approval before executing. Pass `undefined` to defer to the
+	 * per-category require_approval_* gates the runtime was configured with.
 	 */
-	setSafeMode(enabled: boolean): void {
+	setSafeMode(enabled: boolean | undefined): void {
 		this.classifier.setSafeMode(enabled);
 	}
 

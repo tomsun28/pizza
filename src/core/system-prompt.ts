@@ -282,6 +282,12 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		"  e.g. _write f secret(\"x\",\"y\") or _edit f replace 12#ab call(\"x\") as bare tokens.",
 		"- Instead use a verbatim channel: _edit --edits JSON, _write --content, or a <<EOF heredoc.",
 		"  These preserve quotes, spaces, and newlines exactly.",
+		"",
+		"EDIT DISCIPLINE:",
+		"- Underscore arguments are LITERAL: $(), ``, $VAR never expand. Don't stage payloads",
+		"  or assemble values in shell — inline the JSON, or split into single-edit calls.",
+		"- Prefer _edit (fresh anchors or op=search) for targeted edits; scripts (sed/python) only",
+		"  for bulk/regex changes _edit cannot express.",
 	].join("\n");
 
 	// Bash Commands section — the second kind of command the cli tool handles.

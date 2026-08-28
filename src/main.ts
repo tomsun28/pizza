@@ -33,6 +33,7 @@ import { exportFromFile } from "./core/export-html/index.js";
 import type { ExtensionFactory } from "./core/extensions/types.js";
 import type { ModelRegistry } from "./core/model-registry.js";
 import { resolveCliModel } from "./core/model-resolver.js";
+import { installCrashHandlers } from "./core/crash-handlers.js";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.js";
 import type { CreateSessionFacadeOptions } from "./core/session-facade-factory.js";
 import { createSessionFacade, type CreateSessionFacadeResult } from "./core/session-facade-factory.js";
@@ -491,6 +492,12 @@ export async function main(args: string[], options?: MainOptions) {
 		};
 		process.on("SIGINT", shutdown);
 		process.on("SIGTERM", shutdown);
+		// The gateway hosts agents for other workspaces — a stray rejection must not
+		// silently take the whole pool down with it.
+		installCrashHandlers({
+			label: "gateway",
+			onFatal: () => server.stop(),
+		});
 		try {
 			await server.start();
 		} catch (error) {

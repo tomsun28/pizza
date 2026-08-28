@@ -263,6 +263,7 @@ export class Reactor {
 			clearTimeout(timeout);
 		}
 		this.retryTimers.clear();
+		this._drainPendingApprovals();
 		for (const unsub of this.unsubscribers) unsub();
 		this.unsubscribers = [];
 	}
@@ -453,6 +454,9 @@ export class Reactor {
 		}
 		// Cancel any pending compaction so we don't block turn completion
 		this.compactionAbort?.abort();
+		// Reject any approval the user was still being asked about. Without this the
+		// promise in _onIntentToolCall never settles and the turn hangs forever.
+		this._drainPendingApprovals();
 
 		if (this.retryTimers.size > 0) {
 			for (const [scheduledEventId, retry] of this.retryTimers) {
@@ -752,6 +756,26 @@ export class Reactor {
 		string,
 		{ resolve: (approved: boolean) => void; tool_call_id: string; tool_name: string; arguments: Record<string, unknown> }
 	>();
+
+	/**
+	 * Resolve every pending approval as rejected and notify the UI to dismiss its
+	 * dialogs. Called on user interrupt and on stop() so the `await` inside
+	 * _onIntentToolCall can never be left dangling — a dangling approval promise
+	 * would strand its turn tracker and hang the turn forever.
+	 */
+	private _drainPendingApprovals(): void {
+		if (this._pendingApprovals.size === 0) return;
+		const pending = [...this._pendingApprovals.entries()];
+		this._pendingApprovals.clear();
+		for (const [intentEventId, entry] of pending) {
+			try {
+				this.config.approvalHandler?.cancelApproval(intentEventId);
+			} catch {
+				// A failing UI handler must not block the remaining resolutions.
+			}
+			entry.resolve(false);
+		}
+	}
 
 	private async _onIntentToolCall(event: EventBase): Promise<void> {
 		if (this._shouldInterrupt()) return;

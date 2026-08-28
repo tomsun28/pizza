@@ -175,6 +175,50 @@ interface SpeechRecognition extends EventTarget {
 	stop(): void;
 }
 
+
+// Module-level per-workspace draft store. Survives Composer unmounts (the
+// workspace-switch loading screen unmounts the whole AgentView), so unsent
+// input is restored when the user switches back. Images/files are kept in
+// memory only; plain text is also mirrored to localStorage so drafts survive
+// an app restart.
+interface ComposerDraft {
+	input: string;
+	images: ComposerImage[];
+	files: LoadedFileAttachment[];
+}
+
+const draftsByWs = new Map<string, ComposerDraft>();
+const DRAFT_STORAGE_KEY = "pizza.composer.drafts";
+
+function saveDraft(ws: string, draft: Pick<ComposerDraft, "input" | "images" | "files">) {
+	draftsByWs.set(ws, { input: draft.input, images: draft.images, files: draft.files });
+	try {
+		const stored: Record<string, string> = JSON.parse(localStorage.getItem(DRAFT_STORAGE_KEY) ?? "{}");
+		if (draft.input.trim()) {
+			stored[ws] = draft.input;
+		} else {
+			delete stored[ws];
+		}
+		localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(stored));
+	} catch {
+		// localStorage unavailable (private mode/quota) — memory store still works.
+	}
+}
+
+function loadDraft(ws: string): ComposerDraft {
+	const memory = draftsByWs.get(ws);
+	if (memory) return memory;
+	// No in-memory draft (e.g. app restarted): fall back to persisted text.
+	let input = "";
+	try {
+		const stored: Record<string, string> = JSON.parse(localStorage.getItem(DRAFT_STORAGE_KEY) ?? "{}");
+		input = stored[ws] ?? "";
+	} catch {
+		// ignore
+	}
+	return { input, images: [], files: [] };
+}
+
 export function Composer({
 	sidecarReady,
 	isRunning,
@@ -206,29 +250,42 @@ export function Composer({
 	const [rejected, setRejected] = useState<RejectedAttachment[]>([]);
 	const [isDragOver, setIsDragOver] = useState(false);
 	const dragDepthRef = useRef(0);
-	// Per-workspace draft isolation. The Composer is a single component
-	// instance that does NOT remount when the user switches workspaces, so
-	// without this its input/images would bleed across workspaces. We save
-	// the current draft under the old workspace on switch and restore it
-	// (if any) for the newly selected one.
-	const inputByWs = useRef<Map<string, string>>(new Map());
-	const imagesByWs = useRef<Map<string, ComposerImage[]>>(new Map());
+	// Per-workspace draft isolation. Drafts live in a MODULE-LEVEL store, not
+	// refs: switching workspaces briefly unmounts the whole AgentView (the
+	// `waitingForWorkspace` full-screen loader in App.tsx), which would discard
+	// any draft kept in component state/refs. The module store survives
+	// unmounts, so an unsent draft is still there when the user switches back.
 	const prevWsRef = useRef<string | null>(null);
+	// Latest draft state for the unmount handler (avoids stale closures).
+	const draftStateRef = useRef({ input, images, files });
+	// Keep the ref in sync on every render — the unmount handler and the
+	// switch handler read it to persist the LATEST draft, not the mount-time one.
+	draftStateRef.current = { input, images, files };
 	useEffect(() => {
 		const prevWs = prevWsRef.current;
 		const newWs = workspace ?? "";
 		if (prevWs === newWs) return;
 		// Save the current draft under the workspace we're leaving.
 		if (prevWs) {
-			inputByWs.current.set(prevWs, input);
-			imagesByWs.current.set(prevWs, images);
+			saveDraft(prevWs, draftStateRef.current);
 		}
 		// Restore (or clear) the draft for the workspace we're entering.
-		setInput(inputByWs.current.get(newWs) ?? "");
-		setImages(imagesByWs.current.get(newWs) ?? []);
+		const restored = loadDraft(newWs);
+		setInput(restored.input);
+		setImages(restored.images);
+		setFiles(restored.files);
 		prevWsRef.current = newWs;
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [workspace]);
+	// Save the draft when the Composer unmounts (e.g. the workspace-switch
+	// loading screen) so nothing typed is lost.
+	useEffect(() => {
+		return () => {
+			const ws = prevWsRef.current;
+			if (ws) saveDraft(ws, draftStateRef.current);
+		};
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, []);
 	const [models, setModels] = useState<ModelInfo[]>([]);
 	const [recording, setRecording] = useState(false);
 	const [transcribing, setTranscribing] = useState(false);
@@ -989,6 +1046,8 @@ ${insert}`;
 		setInput("");
 		setImages([]);
 		setFiles([]);
+		// Sent — drop the stored draft so it does not reappear after a restart.
+		saveDraft(workspace ?? "", { input: "", images: [], files: [] });
 	};
 
 	const canSend =

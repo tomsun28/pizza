@@ -13,6 +13,7 @@ import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { getAgentDir } from "../config.js";
 import { resolveConfigValue } from "./resolve-config-value.js";
+import { ConfigFileVersionTracker } from "./config-file-version.js";
 
 export type ApiKeyCredential = {
 	type: "api_key";
@@ -35,10 +36,19 @@ type LockResult<T> = {
 export interface AuthStorageBackend {
 	withLock<T>(fn: (current: string | undefined) => LockResult<T>): T;
 	withLockAsync<T>(fn: (current: string | undefined) => Promise<LockResult<T>>): Promise<T>;
+	/**
+	 * Path backing this store, when file-backed. Optional: in-memory backends
+	 * have no file to watch, and undefined simply disables change detection.
+	 */
+	getPath?(): string | undefined;
 }
 
 export class FileAuthStorageBackend implements AuthStorageBackend {
 	constructor(private authPath: string = join(getAgentDir(), "auth.json")) {}
+
+	getPath(): string {
+		return this.authPath;
+	}
 
 	private ensureParentDir(): void {
 		const dir = dirname(this.authPath);

@@ -9,7 +9,12 @@
  */
 
 import { join } from "node:path";
-import { type Model, streamSimple } from "@earendil-works/pi-ai/compat";
+import {
+	type CacheRetention,
+	createAssistantMessageEventStream,
+	type Model,
+	streamSimple,
+} from "@earendil-works/pi-ai/compat";
 import { APP_NAME, getAgentDir, getDocsPath, getMainMemoryDir, getMainSoulPath } from "../config.js";
 import { acquireWorkspaceLock, getMainAgentGuidelines, isSoulUninitialized } from "./main-agent.js";
 import type { AgentMessage, AgentTool, ThinkingLevel } from "./agent/index.js";
@@ -245,6 +250,66 @@ function prepareForkedSession(options: {
 		sourceSessionManager.dispose();
 		sourceStore.close();
 	}
+}
+
+/**
+ * Detect the provider error that says budget-based thinking is unsupported
+ * and adaptive thinking (thinking.type "adaptive" + output_config.effort)
+ * must be used instead. Newer Claude models behind relays emit this while
+ * arbitrary model ids may not be in pi-ai's built-in adaptive-thinking index,
+ * so we learn it from the provider itself instead of matching model names.
+ */
+function isAdaptiveThinkingRejection(event: unknown): boolean {
+	if ((event as { type?: string })?.type !== "error") return false;
+	const message =
+		(event as { error?: { errorMessage?: unknown } })?.error?.errorMessage ??
+		(event as { errorMessage?: unknown })?.errorMessage;
+	if (typeof message !== "string") return false;
+	return message.includes("thinking.type.enabled") && message.includes("is not supported");
+}
+
+/**
+ * Wrap a stream call with a one-shot adaptive-thinking fallback.
+ *
+ * When the provider rejects budget-based thinking for a model that isn't
+ * flagged `compat.forceAdaptiveThinking`, retry once with the flag enabled and
+ * remember the decision in the registry so subsequent requests go straight to
+ * adaptive. No model id is hardcoded: any current or future model that answers
+ * with this error is handled, and models that accept budget thinking (or that
+ * were explicitly configured) are untouched.
+ */
+export function streamWithAdaptiveThinkingFallback(
+	model: Model<any>,
+	registry: { rememberAdaptiveThinking(model: Model<any>): Model<any> },
+	call: (model: Model<any>) => ReturnType<typeof streamSimple>,
+): ReturnType<typeof streamSimple> {
+	// Already adaptive (explicit config or learned earlier): nothing to fall back from.
+	if ((model.compat as { forceAdaptiveThinking?: boolean } | undefined)?.forceAdaptiveThinking === true) {
+		return call(model);
+	}
+
+	const out = createAssistantMessageEventStream();
+	void (async () => {
+		let iterator = call(model)[Symbol.asyncIterator]();
+		let retried = false;
+		try {
+			while (true) {
+				const { value: event, done } = await iterator.next();
+				if (done || !event) return;
+				if (!retried && isAdaptiveThinkingRejection(event)) {
+					retried = true;
+					const patched = registry.rememberAdaptiveThinking(model);
+					iterator = call(patched)[Symbol.asyncIterator]();
+					continue; // drop the error event and stream the retry instead
+				}
+				out.push(event);
+				if (event.type === "done" || event.type === "error") return;
+			}
+		} catch (error) {
+			out.push({ type: "error", error } as any);
+		}
+	})();
+	return out;
 }
 
 /**
@@ -726,15 +791,22 @@ export async function createSessionFacade(
 			if (!auth.ok) {
 				throw new Error(auth.error);
 			}
-			return streamSimple(
-				// OAuth providers may carry a per-credential baseUrl (e.g. GitHub Copilot)
-				auth.baseUrl ? { ...m, baseUrl: auth.baseUrl } : m,
-				context,
-				{
-					...opts,
-					apiKey: auth.apiKey,
-					headers: auth.headers ?? opts?.headers,
-				},
+			// Prompt cache retention: per-model/provider models.json config wins,
+			// then the global setting. Left undefined when nothing is configured
+			// so pi-ai applies its own default ("short"). "none" suppresses
+			// cache_control for relays that reject cached requests.
+			const streamOptions = {
+				...opts,
+				apiKey: auth.apiKey,
+				headers: auth.headers ?? opts?.headers,
+				...((): { cacheRetention?: CacheRetention } => {
+					const retention = modelRegistry.getCacheRetention(m) ?? settingsManager.getCacheRetention();
+					return retention ? { cacheRetention: retention } : {};
+				})(),
+			};
+			// OAuth providers may carry a per-credential baseUrl (e.g. GitHub Copilot)
+			return streamWithAdaptiveThinkingFallback(m, modelRegistry, patched =>
+				streamSimple(auth.baseUrl ? { ...patched, baseUrl: auth.baseUrl } : patched, context, streamOptions),
 			);
 		}, {
 			thinkingBudgets: settingsManager.getThinkingBudgets(),
@@ -763,6 +835,7 @@ export async function createSessionFacade(
 		});
 	const llmClient = model ? buildLlmClient() : undefined;
 
+	const approvalSettings = settingsManager.getApprovalSettings();
 	// ── Runtime ────────────────────────────────────────────────────────────
 	runtime = new EventSourcedRuntime({
 		cwd,
@@ -778,8 +851,14 @@ export async function createSessionFacade(
 		// Safe mode is the master toggle for tool approval. When off (default),
 		// tools auto-run with no approval gate. When on, risky tool calls block
 		// until the user explicitly approves them (USER_APPROVAL / USER_REJECTION).
+		// When set to "auto", getSafeModeSetting() returns undefined and the
+		// per-category require_approval_* gates below decide instead.
 		classifierConfig: {
-			safe_mode: settingsManager.getSafeMode(),
+			safe_mode: settingsManager.getSafeModeSetting(),
+			require_approval_writes: approvalSettings.writes,
+			require_approval_edits: approvalSettings.edits,
+			require_approval_shell_moderate: approvalSettings.shellModerate,
+			require_approval_unknown: approvalSettings.unknown,
 		},
 		// The facade has no built-in approval dialog; the UI (TUI / web / desktop)
 		// discovers pending approvals via the INTENT_TOOL_CALL event and resolves

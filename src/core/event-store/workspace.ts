@@ -11,7 +11,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { getAgentDir as getDefaultAgentDir } from "../../config.js";
 
@@ -44,6 +44,39 @@ export function getEventDatabasePath(workspaceId: string, agentDir?: string): st
 /** Returns the meta.json path for a workspace. */
 export function getWorkspaceMetaPath(workspaceId: string, agentDir?: string): string {
 	return join(getWorkspaceDir(workspaceId, agentDir), "meta.json");
+}
+
+/**
+ * Write JSON to `path` atomically (temp file + rename).
+ *
+ * meta.json is updated by every Pizza process that touches the workspace, so a
+ * plain writeFileSync leaves a window where a concurrent reader observes a
+ * truncated file and treats the workspace as corrupt. rename(2) is atomic, so
+ * readers only ever see the old or the new file — never a partial one.
+ */
+export function atomicWriteJson(path: string, data: unknown): void {
+	const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
+	try {
+		writeFileSync(tmp, JSON.stringify(data, null, 2), "utf8");
+		// POSIX rename replaces atomically. Older Node on Windows could throw
+		// EEXIST, so drop a known-existing target first (mirrors scheduler/store).
+		if (process.platform === "win32" && existsSync(path)) {
+			try {
+				unlinkSync(path);
+			} catch {
+				// Locked target — let the rename below surface the real error.
+			}
+		}
+		renameSync(tmp, path);
+	} catch (error) {
+		// Never leave the temp file behind on failure.
+		try {
+			if (existsSync(tmp)) unlinkSync(tmp);
+		} catch {
+			// Nothing more we can do.
+		}
+		throw error;
+	}
 }
 
 /** Workspace metadata. */
@@ -137,6 +170,6 @@ export function ensureWorkspaceMeta(workspaceId: string, cwd: string, agentDir?:
 		created_at: Date.now(),
 		last_accessed_at: Date.now(),
 	};
-	writeFileSync(path, JSON.stringify(meta, null, 2));
+	atomicWriteJson(path, meta);
 	return meta;
 }
