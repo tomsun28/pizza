@@ -518,13 +518,13 @@ export class InteractiveMode {
     return {};
   }
   private getSteeringMessagesFacade(): readonly string[] {
-    return [];
+    return this.facade?.getQueuedMessages().steering ?? [];
   }
   private getFollowUpMessagesFacade(): readonly string[] {
-    return [];
+    return this.facade?.getQueuedMessages().followUp ?? [];
   }
   private clearQueueFacade(): { steering: string[]; followUp: string[] } {
-    return { steering: [], followUp: [] };
+    return this.facade?.clearQueuedMessages() ?? { steering: [], followUp: [] };
   }
   private getUserMessagesForForkingFacade(): Array<{
     entryId: string;

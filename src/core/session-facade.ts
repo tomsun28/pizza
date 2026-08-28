@@ -30,6 +30,21 @@ export interface SessionFacadeConfig {
 
 export type SessionFacadeEventListener = (event: EventBase) => void;
 
+/** Render queued content (string or content blocks) as display text. */
+function queuedContentToText(content: string | unknown[]): string {
+	if (typeof content === "string") return content;
+	return content
+		.map((block) => {
+			if (block && typeof block === "object" && "text" in block && typeof (block as { text: unknown }).text === "string") {
+				return (block as { text: string }).text;
+			}
+			return "";
+		})
+		.filter(Boolean)
+		.join("\n");
+}
+
+
 export class SessionFacade {
 	readonly runtime: EventSourcedRuntime;
 	readonly settingsManager: SettingsManager;
@@ -62,6 +77,24 @@ export class SessionFacade {
 
 	followUp(text: string, images?: ImageContent[], files?: FileAttachment[]): void {
 		this.runtime.followUp(text, images, files);
+	}
+
+	/** Queued steer/follow-up texts (for pending-message display). Empty when idle. */
+	getQueuedMessages(): { steering: string[]; followUp: string[] } {
+		const entries = this.runtime.pendingFollowUps;
+		return {
+			steering: entries.filter((e) => e.kind === "steer").map((e) => queuedContentToText(e.content)),
+			followUp: entries.filter((e) => e.kind === "followUp").map((e) => queuedContentToText(e.content)),
+		};
+	}
+
+	/** Clear the runtime's pending queue; returns the cleared texts by kind. */
+	clearQueuedMessages(): { steering: string[]; followUp: string[] } {
+		const cleared = this.runtime.clearQueuedFollowUps();
+		return {
+			steering: cleared.steering.map((e) => queuedContentToText(e.content)),
+			followUp: cleared.followUp.map((e) => queuedContentToText(e.content)),
+		};
 	}
 
 	abort(): void {

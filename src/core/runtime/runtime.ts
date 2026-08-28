@@ -268,10 +268,12 @@ export class EventSourcedRuntime {
 	 */
 	steer(text: string, images?: ImageContent[], files?: FileAttachment[]): void {
 		if (!this._isProcessing) {
-			this.store.append({
-				actor_id: "user",
-				type: "USER_MESSAGE",
-				payload: { content: text, images, files },
+			// Idle: there is no turn to interrupt and no live reactor to pick up a
+			// bare USER_MESSAGE — run it as a normal prompt cycle so it is actually
+			// answered. If we lose a race with a concurrent prompt(), queue it as a
+			// follow-up instead.
+			this.prompt(text, images, files).catch(() => {
+				this.followUp(text, images, files);
 			});
 			return;
 		}
@@ -280,6 +282,40 @@ export class EventSourcedRuntime {
 			type: "USER_INTERRUPT",
 			payload: { content: text, images, files, reason: "steer" },
 		});
+	}
+
+	/** Queued follow-up/steer entries (empty when no reactor is alive). */
+	get pendingFollowUps(): Array<{ kind: "steer" | "followUp"; content: string | unknown[]; sourceEventId?: string }> {
+		return this.reactor?.pendingFollowUps ?? [];
+	}
+
+	/**
+	 * Clear the pending follow-up queue and record a USER_FOLLOWUP_DROPPED event so
+	 * reactor restarts do not resurrect the cleared messages. Returns the cleared
+	 * entries split by kind (for the UI to restore them into the editor).
+	 */
+	clearQueuedFollowUps(): {
+		steering: Array<{ content: string | unknown[]; sourceEventId?: string }>;
+		followUp: Array<{ content: string | unknown[]; sourceEventId?: string }>;
+	} {
+		const entries = this.reactor?.pendingFollowUps ?? [];
+		if (entries.length === 0) return { steering: [], followUp: [] };
+
+		this.reactor?.clearFollowUpQueue();
+		const droppedIds = entries
+			.map((e) => e.sourceEventId)
+			.filter((id): id is string => typeof id === "string");
+		if (droppedIds.length > 0) {
+			this.store.append({
+				actor_id: "runtime",
+				type: "USER_FOLLOWUP_DROPPED",
+				payload: { dropped_event_ids: droppedIds, reason: "user_clear" },
+			});
+		}
+		return {
+			steering: entries.filter((e) => e.kind === "steer").map(({ content, sourceEventId }) => ({ content, sourceEventId })),
+			followUp: entries.filter((e) => e.kind === "followUp").map(({ content, sourceEventId }) => ({ content, sourceEventId })),
+		};
 	}
 
 	/**
@@ -433,6 +469,10 @@ export class EventSourcedRuntime {
 						if (followUpsRemaining > 0) return;
 						const retriesRemaining = this.reactor?.pendingRetryCount ?? 0;
 						if (retriesRemaining > 0) return;
+						// A compaction triggered by the completed turn may still be running —
+						// the runtime is not idle until it finishes (it may deliver follow-ups
+						// queued while it ran).
+						if (this.reactor?.isCompacting) return;
 						const lastMsg = this.store.query({ types: ["USER_MESSAGE"], reverse: true, limit: 1 })[0];
 						const lastCompleted = this.store.query({
 							types: ["AGENT_TURN_COMPLETED"],
@@ -444,7 +484,9 @@ export class EventSourcedRuntime {
 						resolve();
 					});
 				},
-				{ types: ["AGENT_TURN_COMPLETED"] },
+				// COMPACTION_END/ABORTED re-run the check so we don't hang when compaction
+				// outlives the last AGENT_TURN_COMPLETED.
+				{ types: ["AGENT_TURN_COMPLETED", "COMPACTION_END", "COMPACTION_ABORTED"] },
 			);
 			this._turnSubscription = unsub;
 		});

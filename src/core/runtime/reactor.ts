@@ -150,7 +150,13 @@ export class Reactor {
 	/** Active compaction policy. */
 	private compactionPolicy: CompactionPolicy;
 	/** Pending follow-up messages (delivered after current turn completes without interrupt). */
-	private followUpQueue: Array<{ content: string | unknown[]; images?: unknown[]; sourceEventId?: string }> = [];
+	private followUpQueue: Array<{
+		content: string | unknown[];
+		images?: unknown[];
+		sourceEventId?: string;
+		/** Origin: steer (interrupt-with-content) or plain follow-up queueing. */
+		kind: "steer" | "followUp";
+	}> = [];
 	/** Aborter for the current compaction run (if any). */
 	private compactionAbort: AbortController | undefined;
 	/** Retry timers waiting to re-enter the turn loop. */
@@ -161,6 +167,8 @@ export class Reactor {
 	}>();
 	/** Set when abort() is called with no new content — next turn completion should discard queued follow-ups. */
 	private _abortedByUser = false;
+	/** True while a turn (or its retry backoff) is in flight — queued follow-ups are delivered only when false. */
+	private _turnInFlight = false;
 	/** Signatures (tool name + argument hash) for each consecutive tool-use round within the current prompt cycle. */
 	private _toolRoundSignatures: string[][] = [];
 	/**
@@ -251,7 +259,7 @@ export class Reactor {
 			// previous run are abandoned (their in-memory buffer no longer exists).
 			if (runStartedAt > 0 && f.timestamp < runStartedAt) continue;
 			const p = f.payload as { content: string | unknown[]; images?: unknown[] };
-			this.followUpQueue.push({ content: p.content, images: p.images, sourceEventId: f.event_id });
+			this.followUpQueue.push({ content: p.content, images: p.images, sourceEventId: f.event_id, kind: "followUp" });
 		}
 	}
 
@@ -334,6 +342,8 @@ export class Reactor {
 			USER_APPROVAL: this._onUserApproval.bind(this),
 			USER_REJECTION: this._onUserRejection.bind(this),
 			COMPACTION_REQUESTED: this._onCompactionRequested.bind(this),
+			COMPACTION_END: this._onCompactionSettled.bind(this),
+			COMPACTION_ABORTED: this._onCompactionSettled.bind(this),
 			SESSION_BOUNDARY_INFERRED: this._onSessionBoundaryInferred.bind(this),
 			SESSION_FORKED: this._onSessionBoundaryInferred.bind(this),
 			SESSION_JUMPED: this._onSessionBoundaryInferred.bind(this),
@@ -400,6 +410,16 @@ export class Reactor {
 		return this.retryTimers.size;
 	}
 
+	/** Whether a compaction run is currently in flight. */
+	get isCompacting(): boolean {
+		return this.compactionAbort !== undefined;
+	}
+
+	/** Snapshot of the pending follow-up queue (for UI display). */
+	get pendingFollowUps(): Array<{ kind: "steer" | "followUp"; content: string | unknown[]; sourceEventId?: string }> {
+		return this.followUpQueue.map((e) => ({ kind: e.kind, content: e.content, sourceEventId: e.sourceEventId }));
+	}
+
 	/** Clear pending follow-ups (e.g. on user-explicit cancel). */
 	clearFollowUpQueue(): void {
 		this.followUpQueue = [];
@@ -414,6 +434,9 @@ export class Reactor {
 	private async _onUserMessage(event: EventBase): Promise<void> {
 		const payload = event.payload as { content: unknown; images?: unknown };
 		if (this._shouldInterrupt()) return;
+
+		// A turn starts here — queued follow-ups must wait for its completion.
+		this._turnInFlight = true;
 
 		// Reset loop detection for a new prompt cycle
 		this._toolRoundSignatures = [];
@@ -438,6 +461,22 @@ export class Reactor {
 	// ─── USER_INTERRUPT ─────────────────────────────────────────────────────
 	private async _onUserInterrupt(event: EventBase): Promise<void> {
 		const payload = event.payload as { content?: unknown; images?: unknown };
+
+		// Steer with no turn in flight (and nothing that will re-enter the turn loop):
+		// there is nothing to interrupt — deliver the content as a fresh turn now.
+		// Without this the message strands in the queue, because the queue is only
+		// drained on AGENT_TURN_COMPLETED, which already fired.
+		if (payload.content !== undefined && this._canDeliverFollowUpNow()) {
+			this.followUpQueue.push({
+				content: payload.content as string | unknown[],
+				images: payload.images as unknown[] | undefined,
+				sourceEventId: event.event_id,
+				kind: "steer",
+			});
+			this._deliverFollowUpNow(event.event_id);
+			return;
+		}
+
 		this.interrupt();
 		// Track hard abort (no new content) so _onAgentTurnCompleted doesn't drain follow-ups.
 		if (payload.content === undefined) {
@@ -450,6 +489,7 @@ export class Reactor {
 				content: payload.content as string | unknown[],
 				images: payload.images as unknown[] | undefined,
 				sourceEventId: event.event_id,
+				kind: "steer",
 			});
 		}
 		// Cancel any pending compaction so we don't block turn completion
@@ -486,13 +526,36 @@ export class Reactor {
 				payload: { reason: "aborted" },
 				caused_by: event.event_id,
 			});
+		} else if (payload.content === undefined && !this._turnInFlight) {
+			// Hard abort with nothing in flight and no retry pending: no AGENT_TURN_COMPLETED
+			// will ever fire on its own. Emit one so the runtime's settled promise resolves
+			// instead of hanging (this can happen when the abort lands in the window between
+			// turn completion and the runtime stopping the reactor).
+			this._emit({
+				actor_id: "coder_agent",
+				type: "AGENT_TURN_END",
+				payload: { tool_calls_count: 0 },
+				caused_by: event.event_id,
+			});
+			this._emit({
+				actor_id: "coder_agent",
+				type: "AGENT_TURN_COMPLETED",
+				payload: { reason: "aborted" },
+				caused_by: event.event_id,
+			});
 		}
 	}
 	// ─── USER_FOLLOWUP_QUEUED ───────────────────────────────────────────────
 
 	private async _onUserFollowupQueued(event: EventBase): Promise<void> {
 		const payload = event.payload as { content: string | unknown[]; images?: unknown[] };
-		this.followUpQueue.push({ content: payload.content, images: payload.images, sourceEventId: event.event_id });
+		this.followUpQueue.push({ content: payload.content, images: payload.images, sourceEventId: event.event_id, kind: "followUp" });
+		// If the reactor is idle (no turn, retry, or compaction in flight) the queue is
+		// never drained by _onAgentTurnCompleted — deliver immediately instead, otherwise
+		// the message strands in the queue and the runtime's settled promise hangs.
+		if (this._canDeliverFollowUpNow()) {
+			this._deliverFollowUpNow(event.event_id);
+		}
 	}
 
 	// ─── AGENT_TURN_REQUESTED ───────────────────────────────────────────────
@@ -515,6 +578,10 @@ export class Reactor {
 			});
 			return;
 		}
+
+		// Covers every turn (re)start: user message, tool-result rounds, and retry
+		// re-entry. Queued follow-ups must wait while a turn is in flight.
+		this._turnInFlight = true;
 
 		const payload = event.payload as { reason: string; retry_attempt?: number };
 
@@ -1100,6 +1167,10 @@ export class Reactor {
 	private _onAgentTurnCompleted(event: EventBase): void {
 		const payload = event.payload as { reason: string; error_message?: string };
 
+		// The turn is over from the reactor's perspective. If a queued follow-up is
+		// delivered below, its USER_MESSAGE handler re-sets this to true synchronously.
+		this._turnInFlight = false;
+
 		// If abort() was called, discard any pending follow-ups so the reactor stops.
 		// _abortedByUser is set by _onUserInterrupt when the interrupt has no new content.
 		if (this._abortedByUser) {
@@ -1123,32 +1194,64 @@ export class Reactor {
 		}
 
 		if (this._scheduleRetryForCompletedError(event)) {
+			// A retry is pending — the turn loop will re-enter, so stay busy.
+			this._turnInFlight = true;
 			return;
 		}
 
 		// If a steer or follow-up message is queued, deliver it as a new USER_MESSAGE
 		// so the turn cycle restarts.
 		if (this.followUpQueue.length > 0) {
-			// Reset abort controller for the new turn — the previous turn's interrupt
-			// has already been handled.
-			this.abortController = new AbortController();
-			const next = this.followUpQueue.shift()!;
-			// Use the source event id (USER_FOLLOWUP_QUEUED or USER_INTERRUPT) as
-			// caused_by so _replayPendingFollowUps can detect the follow-up as
-			// consumed on restart. Falling back to the completion event id keeps
-			// backward compatibility for any queue entries without a source id.
-			this._emit({
-				actor_id: "user",
-				type: "USER_MESSAGE",
-				payload: { content: next.content, images: next.images },
-				caused_by: next.sourceEventId ?? event.event_id,
-			});
+			this._deliverFollowUpNow(event.event_id);
 			return;
 		}
 
 		// Check compaction policy after a non-aborted turn
 		if (payload.reason !== "aborted") {
 			this._checkCompaction(event);
+		}
+	}
+
+	// ─── Follow-up delivery helpers ──────────────────────────────────────────
+
+	/**
+	 * Whether the reactor is fully idle and can start a turn for a queued
+	 * follow-up right now: no turn in flight, no retry backoff pending, and no
+	 * compaction running (a follow-up queued during compaction is delivered by
+	 * _onCompactionSettled once the compaction finishes).
+	 */
+	private _canDeliverFollowUpNow(): boolean {
+		return !this._turnInFlight && this.retryTimers.size === 0 && this.compactionAbort === undefined;
+	}
+
+	/**
+	 * Deliver the head of the follow-up queue as a fresh USER_MESSAGE turn.
+	 * Shared by the turn-completion drain, idle-time queueing, and post-compaction
+	 * delivery. Resets the abort controller first — the previous turn's interrupt
+	 * (if any) has already been handled, and _onUserMessage drops messages while
+	 * the signal is aborted.
+	 *
+	 * Uses the source event id (USER_FOLLOWUP_QUEUED or USER_INTERRUPT) as
+	 * caused_by so _replayPendingFollowUps can detect the follow-up as consumed
+	 * on restart; falls back to the completion event id for legacy entries
+	 * without a source id.
+	 */
+	private _deliverFollowUpNow(causedByFallback: string): void {
+		if (this.followUpQueue.length === 0) return;
+		this.abortController = new AbortController();
+		const next = this.followUpQueue.shift()!;
+		this._emit({
+			actor_id: "user",
+			type: "USER_MESSAGE",
+			payload: { content: next.content, images: next.images },
+			caused_by: next.sourceEventId ?? causedByFallback,
+		});
+	}
+
+	/** After compaction settles, deliver any follow-ups queued while it ran. */
+	private _onCompactionSettled(event: EventBase): void {
+		if (this._canDeliverFollowUpNow()) {
+			this._deliverFollowUpNow(event.event_id);
 		}
 	}
 
