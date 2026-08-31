@@ -12,7 +12,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "f
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { getAgentDir } from "../config.js";
-import { resolveConfigValue } from "./resolve-config-value.js";
+import { collectConfigCommands, registerTrustedConfigCommands, resolveConfigValue } from "./resolve-config-value.js";
 import { ConfigFileVersionTracker } from "./config-file-version.js";
 
 export type ApiKeyCredential = {
@@ -257,6 +257,10 @@ export class AuthStorage {
 				return { result: undefined };
 			});
 			this.data = this.parseStorageData(content);
+			// Register "!command" credential values while the trust window is open
+			// (TOFU gate in resolve-config-value.ts): after createSessionFacade
+			// seals it, commands added to auth.json mid-session are refused.
+			registerTrustedConfigCommands(collectConfigCommands(this.data));
 			this.loadError = null;
 		} catch (error) {
 			this.loadError = error as Error;

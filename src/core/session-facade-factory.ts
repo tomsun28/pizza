@@ -42,6 +42,7 @@ import { DefaultResourceLoader, type ResourceLoader } from "./resource-loader.js
 import type { LLMClient, ToolDefinition as RuntimeToolDefinition } from "./runtime/llm-types.js";
 import { buildLlmClientFromStreamFn, toModelConfig } from "./runtime/ai-client.js";
 import { recoverDanglingTurnState } from "./runtime/crash-recovery.js";
+import { sealConfigCommandTrust } from "./resolve-config-value.js";
 import { DefaultRetryPolicy } from "./runtime/policies.js";
 import { EventSourcedRuntime } from "./runtime/runtime.js";
 import { SessionFacade } from "./session-facade.js";
@@ -345,6 +346,11 @@ export async function createSessionFacade(
 	const modelsPath = options.agentDir ? join(agentDir, "models.json") : undefined;
 	const authStorage = options.authStorage ?? AuthStorage.create(authPath);
 	const modelRegistry = options.modelRegistry ?? ModelRegistry.create(authStorage, modelsPath);
+	// Seal the "!command" config-value trust window (TOFU): every command
+	// present in models.json/auth.json at this point was registered during the
+	// loads above; commands that appear later (e.g. the LLM writing a payload
+	// into models.json and triggering a hot reload) are refused until restart.
+	sealConfigCommandTrust();
 	const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
 
 	let resourceLoader = options.resourceLoader;

@@ -28,6 +28,8 @@ import { APP_NAME, getAgentDir, VERSION } from "../config.js";
 import type { AuthStorage } from "./auth-storage.js";
 import {
 	clearConfigValueCache,
+	collectConfigCommands,
+	registerTrustedConfigCommands,
 	resolveConfigValueOrThrow,
 	resolveConfigValueUncached,
 	resolveHeadersOrThrow,
@@ -589,6 +591,12 @@ export class ModelRegistry {
 		try {
 			const content = readFileSync(modelsJsonPath, "utf-8");
 			const config: ModelsConfig = JSON.parse(content);
+
+			// Register any "!command" config values while the trust window is open
+			// (before createSessionFacade seals it). After sealing, commands added
+			// to models.json mid-session are refused until a restart — see
+			// resolve-config-value.ts (TOFU gate).
+			registerTrustedConfigCommands(collectConfigCommands(config));
 
 			// Validate schema
 			const validate = ajv.getSchema("ModelsConfig")!;

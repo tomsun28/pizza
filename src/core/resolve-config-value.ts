@@ -9,6 +9,71 @@ import { getShellConfig } from "../utils/shell.js";
 // Cache for shell command results (persists for process lifetime)
 const commandResultCache = new Map<string, string | undefined>();
 
+// ============================================================================
+// Trust-on-first-use gate for "!command" config values
+// ============================================================================
+//
+// "!cmd" values in models.json / auth.json execute arbitrary shell commands
+// when resolved. Both files are hot-reloaded, and the LLM has a write tool —
+// so without a gate, "write models.json with an apiKey of !<payload>, then
+// trigger a provider reload" was a silent self-privilege-escalation chain.
+//
+// Defense: at process startup the config owners (ModelRegistry, AuthStorage)
+// register every "!command" present in their files; createSessionFacade then
+// SEALS the set before the first LLM turn can run. After sealing, a command
+// string not registered at startup is refused (with a restart hint) instead
+// of executed. Editing configs by hand still works — it just needs a restart,
+// which is exactly the property that turns a silent mid-session escalation
+// into a visible, user-mediated change.
+
+let trustSealed = false;
+const trustedCommands = new Set<string>();
+
+/** Register "!command" strings found in a config file at load time. No-op after sealing. */
+export function registerTrustedConfigCommands(commands: Iterable<string>): void {
+	if (trustSealed) return;
+	for (const command of commands) {
+		if (typeof command === "string" && command.startsWith("!")) trustedCommands.add(command);
+	}
+}
+
+/** Recursively collect every string value starting with "!" from parsed config JSON. */
+export function collectConfigCommands(value: unknown, out: string[] = []): string[] {
+	if (typeof value === "string") {
+		if (value.startsWith("!")) out.push(value);
+	} else if (Array.isArray(value)) {
+		for (const item of value) collectConfigCommands(item, out);
+	} else if (value && typeof value === "object") {
+		for (const item of Object.values(value)) collectConfigCommands(item, out);
+	}
+	return out;
+}
+
+/** Seal the trusted set. Commands registered afterwards are ignored; unknown commands are refused. */
+export function sealConfigCommandTrust(): void {
+	trustSealed = true;
+}
+
+/** Test hook. */
+export function resetConfigCommandTrustForTest(): void {
+	trustSealed = false;
+	trustedCommands.clear();
+}
+
+function isCommandTrusted(commandConfig: string): boolean {
+	if (!trustSealed) return true;
+	return trustedCommands.has(commandConfig);
+}
+
+function refuseUntrustedCommand(commandConfig: string): void {
+	// Redact the payload — it is attacker-controlled and may be huge.
+	const preview = commandConfig.slice(1, 61);
+	console.warn(
+		`Refusing to execute config command that was not present at startup: "${preview}${commandConfig.length > 61 ? "…" : ""}". ` +
+			"Commands in models.json/auth.json are trusted as of process start; restart Pizza to trust this change.",
+	);
+}
+
 /**
  * Resolve a config value (API key, header value, etc.) to an actual value.
  * - If starts with "!", executes the rest as a shell command and uses stdout (cached)
@@ -66,6 +131,10 @@ function executeWithDefaultShell(command: string): string | undefined {
 }
 
 function executeCommandUncached(commandConfig: string): string | undefined {
+	if (!isCommandTrusted(commandConfig)) {
+		refuseUntrustedCommand(commandConfig);
+		return undefined;
+	}
 	const command = commandConfig.slice(1);
 	return process.platform === "win32"
 		? (() => {
@@ -76,6 +145,10 @@ function executeCommandUncached(commandConfig: string): string | undefined {
 }
 
 function executeCommand(commandConfig: string): string | undefined {
+	if (!isCommandTrusted(commandConfig)) {
+		refuseUntrustedCommand(commandConfig);
+		return undefined; // NOT cached — a restart (or unseal in tests) may allow it
+	}
 	if (commandResultCache.has(commandConfig)) {
 		return commandResultCache.get(commandConfig);
 	}
