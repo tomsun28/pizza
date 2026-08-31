@@ -29,6 +29,7 @@ import {
 	parseBuiltinToolInput,
 	type ParsedBuiltinToolInput,
 } from "./builtin-commands.js";
+import { hasShellControlSyntax, splitShellSegments, splitShellWords } from "../shell-words.js";
 import { createEditToolDefinition, type EditToolDetails, type EditToolInput, type EditToolOptions } from "./edit.js";
 import { createReadToolDefinition, type ReadToolDetails, type ReadToolInput, type ReadToolOptions } from "./read.js";
 import { createHistoryTreeToolDefinition, type HistoryTreeToolInput } from "./history-tree.js";
@@ -365,35 +366,6 @@ function parseBashBuiltinCommand(command: string): ParsedBuiltinToolInput | null
 	return parseBuiltinToolInput(builtinName, parsed.args, parsed.heredoc, { quoteDelimitersConsumed: parsed.quoteDelimitersConsumed });
 }
 
-function hasShellControlSyntax(command: string): boolean {
-	let quote: "'" | "\"" | undefined;
-	let escaped = false;
-
-	for (let i = 0; i < command.length; i++) {
-		const char = command[i];
-		if (escaped) {
-			escaped = false;
-			continue;
-		}
-		if (char === "\\") {
-			escaped = true;
-			continue;
-		}
-		if (quote) {
-			if (char === quote) quote = undefined;
-			continue;
-		}
-		if (char === "'" || char === "\"") {
-			quote = char;
-			continue;
-		}
-		if (char === "|" || char === "&" || char === ";" || char === "<" || char === ">" || char === "\n") {
-			return true;
-		}
-	}
-	return false;
-}
-
 /**
  * Detect a Pizza built-in command name that appears as the FIRST word of a
  * shell segment AFTER a chaining operator (&&, ||, ;, |). e.g.
@@ -411,54 +383,14 @@ function hasShellControlSyntax(command: string): boolean {
  */
 export function detectChainedBuiltin(command: string): string | null {
 	const builtins = BUILTIN_COMMANDS as readonly string[];
-	// First whitespace-delimited token of a segment, ignoring quotes/escapes.
-	const firstWord = (text: string): string => {
-		const raw = text.trimStart();
-		let out = "";
-		let q: "'" | '"' | undefined;
-		let esc = false;
-		for (let i = 0; i < raw.length && out.length < 64; i++) {
-			const ch = raw[i];
-			if (esc) { esc = false; out += ch; continue; }
-			if (ch === "\\") { esc = true; continue; }
-			if (q) { if (ch === q) q = undefined; else out += ch; continue; }
-			if (ch === "'" || ch === '"') { q = ch; continue; }
-			if (ch === " " || ch === "\t" || ch === "\n") break;
-			out += ch;
-		}
-		return out.toLowerCase();
-	};
-
-	let quote: "'" | '"' | undefined;
-	let escaped = false;
-	let segmentStart = 0;
+	const segments = splitShellSegments(command);
 	// Only built-ins chained AFTER an operator are the misuses we care about;
 	// the leading segment routes through normal cli parsing.
-	let skipFirst = true;
-
-	const checkSegment = (start: number, end: number): string | null => {
-		if (skipFirst) return null;
-		const word = firstWord(command.slice(start, end));
-		return word && builtins.includes(word) ? word : null;
-	};
-
-	for (let i = 0; i < command.length; i++) {
-		const char = command[i];
-		if (escaped) { escaped = false; continue; }
-		if (char === "\\") { escaped = true; continue; }
-		if (quote) { if (char === quote) quote = undefined; continue; }
-		if (char === "'" || char === '"') { quote = char; continue; }
-		const next = command[i + 1];
-		const two = (char === "&" && next === "&") || (char === "|" && next === "|");
-		if (two || char === ";" || char === "|") {
-			const hit = checkSegment(segmentStart, i);
-			if (hit) return hit;
-			skipFirst = false;
-			segmentStart = i + (two ? 2 : 1);
-			if (two) i += 1;
-		}
+	for (let i = 1; i < segments.length; i++) {
+		const word = splitShellWords(segments[i])[0]?.toLowerCase() ?? "";
+		if (word && builtins.includes(word)) return word;
 	}
-	return checkSegment(segmentStart, command.length);
+	return null;
 }
 
 function builtinKey(builtin: ParsedBuiltinToolInput | BashBuiltinDetails): string {
