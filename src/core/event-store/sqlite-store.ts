@@ -33,7 +33,10 @@ type EventRow = {
 
 export class SqliteEventStore implements EventStore, SessionStore {
 	private db: DatabaseSync;
-	private subscribers: Map<number, { handler: (event: EventBase) => void; options?: SubscribeOptions }> = new Map();
+	private subscribers: Map<
+		number,
+		{ handler: (event: EventBase) => void; options?: SubscribeOptions; afterSequence?: number }
+	> = new Map();
 	private nextSubId = 0;
 	private sessionStore: SqliteSessionStore;
 
@@ -251,7 +254,15 @@ export class SqliteEventStore implements EventStore, SessionStore {
 
 	subscribe(handler: (event: EventBase) => void, options?: SubscribeOptions): () => void {
 		const subId = this.nextSubId++;
-		this.subscribers.set(subId, { handler, options });
+		// Resolve the `after` event_id to its log sequence ONCE at subscribe time.
+		// Matching then compares sequences — the previous string comparison on
+		// event_id only worked because uuidv7 happens to be time-ordered, and
+		// broke for ids from another generator (or chunk ids never persisted).
+		let afterSequence: number | undefined;
+		if (options?.after) {
+			afterSequence = this.get(options.after)?.sequence;
+		}
+		this.subscribers.set(subId, { handler, options, afterSequence });
 		return () => this.subscribers.delete(subId);
 	}
 
@@ -424,7 +435,7 @@ export class SqliteEventStore implements EventStore, SessionStore {
 	 */
 	private _notify(event: EventBase): void {
 		for (const [, sub] of this.subscribers) {
-			if (!matchesSubscription(event, sub.options)) continue;
+			if (!matchesSubscription(event, sub.options, sub.afterSequence)) continue;
 			try {
 				sub.handler(event);
 			} catch (error) {
@@ -492,9 +503,19 @@ function lockRetryDelayMs(attempt: number): number {
 	return base + Math.random() * base;
 }
 
-function matchesSubscription(event: EventBase, options?: SubscribeOptions): boolean {
+function matchesSubscription(event: EventBase, options?: SubscribeOptions, afterSequence?: number): boolean {
 	if (!options) return true;
-	if (options.after && event.event_id <= options.after) return false;
+	if (options.after) {
+		// afterSequence was resolved at subscribe time. When the `after` event
+		// could not be resolved (unknown id / never-persisted chunk id), fall
+		// back to the legacy uuidv7 string ordering rather than dropping the
+		// filter entirely.
+		if (afterSequence !== undefined) {
+			if (event.sequence <= afterSequence) return false;
+		} else if (event.event_id <= options.after) {
+			return false;
+		}
+	}
 	if (options.after_sequence !== undefined && event.sequence <= options.after_sequence) return false;
 	if (options.types?.length && !options.types.includes(event.type)) return false;
 	if (options.actor_ids?.length && !options.actor_ids.includes(event.actor_id)) return false;
