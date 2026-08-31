@@ -13,7 +13,7 @@ import { loadLongTermMemory, loadSoulFile, type MemoryEntry, type SoulFile } fro
 import { createEventBus, type EventBus } from "./event-bus.js";
 import { createExtensionRuntime, loadExtensionFromFactory, loadExtensions } from "./extensions/loader.js";
 import type { Extension, ExtensionFactory, ExtensionRuntime, LoadExtensionsResult } from "./extensions/types.js";
-import { DefaultPackageManager, type PathMetadata } from "./package-manager.js";
+import { collectAncestorAgentsSkillDirs, DefaultPackageManager, type PathMetadata } from "./package-manager.js";
 import type { PromptTemplate } from "./prompt-templates.js";
 import { loadPromptTemplates } from "./prompt-templates.js";
 import { SettingsManager } from "./settings-manager.js";
@@ -76,6 +76,13 @@ export interface ResourceLoader {
 	 * settings), without re-resolving packages/extensions/prompts/themes.
 	 */
 	reloadSkills?(): void;
+	/**
+	 * Re-scan skill source directories on disk and reload skills when anything
+	 * changed (new/removed/edited skill files). Long-lived agents call this so
+	 * skills installed after process start are picked up without a restart.
+	 * Returns true when a reload happened.
+	 */
+	refreshSkillsIfChanged?(): Promise<boolean>;
 	/** Soul file (main agent only). */
 	getSoulFile?(): SoulFile | undefined;
 	/** Long-term memory index entries (main agent only). */
@@ -266,6 +273,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 	private systemPrompt?: string;
 	private appendSystemPrompt: string[];
 	private lastSkillPaths: string[];
+	private lastSkillSourceFingerprint = "";
 	private extensionSkillSourceInfos: Map<string, SourceInfo>;
 	private extensionPromptSourceInfos: Map<string, SourceInfo>;
 	private extensionThemeSourceInfos: Map<string, SourceInfo>;
@@ -595,6 +603,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 			: baseAppend;
 
 		this.loadMainAgentResources();
+		this.lastSkillSourceFingerprint = this.computeSkillSourceFingerprint();
 	}
 
 	private normalizeExtensionPaths(
@@ -775,6 +784,50 @@ export class DefaultResourceLoader implements ResourceLoader {
 	/** Synchronously re-load skills only (e.g. after toggling a built-in skill). */
 	reloadSkills(): void {
 		this.updateSkillsFromPaths(this.lastSkillPaths);
+	}
+
+	/**
+	 * Fingerprint of auto-discovered skill sources: directory mtimes (so added
+	 * or removed skill folders are detected) plus mtimes of every known skill
+	 * file (so in-place edits are detected too).
+	 */
+	private computeSkillSourceFingerprint(): string {
+		const userAgentsSkillsDir = join(homedir(), ".agents", "skills");
+		const dirs = [
+			join(this.agentDir, "skills"),
+			join(this.cwd, CONFIG_DIR_NAME, "skills"),
+			userAgentsSkillsDir,
+			...collectAncestorAgentsSkillDirs(this.cwd).filter(
+				(dir) => resolve(dir) !== resolve(userAgentsSkillsDir),
+			),
+		];
+		const parts: string[] = [];
+		for (const dir of dirs) {
+			try {
+				parts.push(`${dir}:${statSync(dir).mtimeMs}`);
+			} catch {
+				parts.push(`${dir}:-`);
+			}
+		}
+		for (const p of this.lastSkillPaths) {
+			try {
+				parts.push(`${p}:${statSync(p).mtimeMs}`);
+			} catch {
+				parts.push(`${p}:-`);
+			}
+		}
+		return parts.join("|");
+	}
+
+	async refreshSkillsIfChanged(): Promise<boolean> {
+		if (this.noSkills) {
+			return false;
+		}
+		if (this.computeSkillSourceFingerprint() === this.lastSkillSourceFingerprint) {
+			return false;
+		}
+		await this.reload();
+		return true;
 	}
 
 	private updatePromptsFromPaths(promptPaths: string[], metadataByPath?: Map<string, PathMetadata>): void {

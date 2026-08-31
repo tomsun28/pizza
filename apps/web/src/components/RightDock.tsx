@@ -41,9 +41,9 @@ export default function RightDock({ workspace }: { workspace?: string | null }) 
 	const activeTab: RightDockTab = tab === "git" && !isGitRepo ? "files" : tab;
 
 	const tabs: Array<{ id: RightDockTab; label: string; icon: typeof GitBranch }> = [
+		{ id: "history", label: t("history.title"), icon: GitBranch },
 		...(isGitRepo ? [{ id: "git" as const, label: t("git.title"), icon: GitCommitHorizontal }] : []),
 		{ id: "files", label: t("files.title"), icon: FolderTree },
-		{ id: "history", label: t("history.title"), icon: GitBranch },
 		{ id: "timeline", label: t("timeline.title"), icon: Activity },
 	];
 

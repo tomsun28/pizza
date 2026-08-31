@@ -7,6 +7,7 @@ import {
 	type OAuthAuth,
 	type AssistantMessageEventStream,
 	type BuiltinProvider,
+	type CacheRetention,
 	type Context,
 	getModels,
 	getProviders,
@@ -16,16 +17,19 @@ import {
 	registerApiProvider,
 	resetApiProviders,
 	type SimpleStreamOptions,
+	type ThinkingLevelMap,
 } from "@earendil-works/pi-ai/compat";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { type Static, Type } from "@sinclair/typebox";
 import AjvModule from "ajv";
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readFileSync, statSync } from "fs";
 import { join } from "path";
 import { APP_NAME, getAgentDir, VERSION } from "../config.js";
 import type { AuthStorage } from "./auth-storage.js";
 import {
 	clearConfigValueCache,
+	collectConfigCommands,
+	registerTrustedConfigCommands,
 	resolveConfigValueOrThrow,
 	resolveConfigValueUncached,
 	resolveHeadersOrThrow,
@@ -147,7 +151,56 @@ const OpenAIResponsesCompatSchema = Type.Object({
 	// Reserved for future use
 });
 
+// Schema for Anthropic Messages compatibility settings (api: "anthropic-messages").
+// Mirrors pi-ai AnthropicMessagesCompat; see pi-ai types for field semantics.
+const AnthropicMessagesCompatSchema = Type.Object({
+	supportsEagerToolInputStreaming: Type.Optional(Type.Boolean()),
+	supportsLongCacheRetention: Type.Optional(Type.Boolean()),
+	sendSessionAffinityHeaders: Type.Optional(Type.Boolean()),
+	supportsCacheControlOnTools: Type.Optional(Type.Boolean()),
+	supportsTemperature: Type.Optional(Type.Boolean()),
+	/** Force adaptive thinking (thinking.type: "adaptive" + output_config.effort)
+	 * instead of budget-based thinking (thinking.type: "enabled"). Required by
+	 * newer Claude models (Opus 4.6+/5, Sonnet 4.6/5, Fable 5) which reject
+	 * "thinking.type.enabled" with a 400 error. */
+	forceAdaptiveThinking: Type.Optional(Type.Boolean()),
+	allowEmptySignature: Type.Optional(Type.Boolean()),
+	supportsStrictTools: Type.Optional(Type.Boolean()),
+	supportsToolReferences: Type.Optional(Type.Boolean()),
+});
+
+/** Compat settings for models.json. Fields of both API families are accepted;
+ * only the ones relevant to the model/provider api apply. */
 const OpenAICompatSchema = Type.Union([OpenAICompletionsCompatSchema, OpenAIResponsesCompatSchema]);
+
+/** Compat settings for models.json. Fields of both API families are accepted;
+ * only the ones relevant to the model/provider api apply. */
+const ModelCompatSchema = Type.Intersect([OpenAICompatSchema, AnthropicMessagesCompatSchema]);
+
+type ModelCompat = Static<typeof ModelCompatSchema>;
+
+// Maps pi thinking levels ("off", "low", ..., "max") to provider/model-specific
+// effort values. null marks a level as unsupported.
+const ThinkingLevelMapSchema = Type.Object({
+	off: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+	minimal: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+	low: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+	medium: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+	high: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+	xhigh: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+	max: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+});
+
+/**
+ * Prompt cache retention preference, forwarded to pi-ai as
+ * `SimpleStreamOptions.cacheRetention`.
+ *
+ * `"none"` suppresses `cache_control` blocks entirely. That matters for relay
+ * gateways that reject cached requests for specific models, e.g. new-api
+ * answering `cache endpoint request without claude trace cli is not allowed
+ * for this model` with a 403.
+ */
+const CacheRetentionSchema = Type.Union([Type.Literal("none"), Type.Literal("short"), Type.Literal("long")]);
 
 // Schema for custom model definition
 // Most fields are optional with sensible defaults for local models (Ollama, LM Studio, etc.)
@@ -169,7 +222,9 @@ const ModelDefinitionSchema = Type.Object({
 	contextWindow: Type.Optional(Type.Number()),
 	maxTokens: Type.Optional(Type.Number()),
 	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
-	compat: Type.Optional(OpenAICompatSchema),
+	compat: Type.Optional(ModelCompatSchema),
+	cacheRetention: Type.Optional(CacheRetentionSchema),
+	thinkingLevelMap: Type.Optional(ThinkingLevelMapSchema),
 });
 
 // Schema for per-model overrides (all fields optional, merged with built-in model)
@@ -188,7 +243,9 @@ const ModelOverrideSchema = Type.Object({
 	contextWindow: Type.Optional(Type.Number()),
 	maxTokens: Type.Optional(Type.Number()),
 	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
-	compat: Type.Optional(OpenAICompatSchema),
+	compat: Type.Optional(ModelCompatSchema),
+	cacheRetention: Type.Optional(CacheRetentionSchema),
+	thinkingLevelMap: Type.Optional(ThinkingLevelMapSchema),
 });
 
 type ModelOverride = Static<typeof ModelOverrideSchema>;
@@ -199,7 +256,8 @@ const ProviderConfigSchema = Type.Object({
 	apiKey: Type.Optional(Type.String({ minLength: 1 })),
 	api: Type.Optional(Type.String({ minLength: 1 })),
 	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
-	compat: Type.Optional(OpenAICompatSchema),
+	compat: Type.Optional(ModelCompatSchema),
+	cacheRetention: Type.Optional(CacheRetentionSchema),
 	authHeader: Type.Optional(Type.Boolean()),
 	models: Type.Optional(Type.Array(ModelDefinitionSchema)),
 	modelOverrides: Type.Optional(Type.Record(Type.String(), ModelOverrideSchema)),
@@ -223,6 +281,7 @@ interface ProviderRequestConfig {
 	apiKey?: string;
 	headers?: Record<string, string>;
 	authHeader?: boolean;
+	cacheRetention?: CacheRetention;
 }
 
 export type ResolvedRequestAuth =
@@ -254,13 +313,13 @@ function emptyCustomModelsResult(error?: string): CustomModelsResult {
 
 function mergeCompat(
 	baseCompat: Model<Api>["compat"],
-	overrideCompat: ModelOverride["compat"],
+	overrideCompat: ModelCompat | undefined,
 ): Model<Api>["compat"] | undefined {
 	if (!overrideCompat) return baseCompat;
 
-	const base = baseCompat as OpenAICompletionsCompat | OpenAIResponsesCompat | undefined;
-	const override = overrideCompat as OpenAICompletionsCompat | OpenAIResponsesCompat;
-	const merged = { ...base, ...override } as OpenAICompletionsCompat | OpenAIResponsesCompat;
+	const base = baseCompat as ModelCompat | undefined;
+	const override = overrideCompat as ModelCompat;
+	const merged = { ...base, ...override } as ModelCompat;
 
 	const baseCompletions = base as OpenAICompletionsCompat | undefined;
 	const overrideCompletions = override as OpenAICompletionsCompat;
@@ -307,10 +366,77 @@ function applyModelOverride(model: Model<Api>, override: ModelOverride): Model<A
 		};
 	}
 
+	// Merge thinkingLevelMap (partial override)
+	if (override.thinkingLevelMap) {
+		result.thinkingLevelMap = { ...model.thinkingLevelMap, ...override.thinkingLevelMap } as ThinkingLevelMap;
+	}
+
 	// Deep merge compat
 	result.compat = mergeCompat(model.compat, override.compat);
 
 	return result;
+}
+
+/**
+ * Built-in models that require adaptive thinking (thinking.type: "adaptive" +
+ * output_config.effort) instead of budget-based thinking (thinking.type:
+ * "enabled"). Derived from pi-ai metadata so new models are picked up
+ * automatically. Maps known model id -> its thinkingLevelMap (if any).
+ */
+let adaptiveThinkingModelIndex: Map<string, ThinkingLevelMap | undefined> | undefined;
+
+function getAdaptiveThinkingModelIndex(): Map<string, ThinkingLevelMap | undefined> {
+	if (!adaptiveThinkingModelIndex) {
+		adaptiveThinkingModelIndex = new Map<string, ThinkingLevelMap | undefined>();
+		for (const provider of getProviders()) {
+			for (const model of getModels(provider as BuiltinProvider) as Model<Api>[]) {
+				if ((model.compat as ModelCompat | undefined)?.forceAdaptiveThinking === true && !adaptiveThinkingModelIndex.has(model.id)) {
+						adaptiveThinkingModelIndex.set(model.id, model.thinkingLevelMap);
+				}
+			}
+		}
+	}
+	return adaptiveThinkingModelIndex;
+}
+
+/**
+ * Check whether a custom model id refers to a known adaptive-thinking model.
+ * Anthropic-compatible relays often expose suffixed or date-stamped variants
+ * ("claude-opus-5-cc", "claude-sonnet-4-6-20251201"), so match the known id
+ * exactly or as a "<knownId>-..." prefix.
+ */
+function matchAdaptiveThinkingModel(
+	modelId: string,
+): { thinkingLevelMap: ThinkingLevelMap | undefined } | undefined {
+	for (const [knownId, thinkingLevelMap] of getAdaptiveThinkingModelIndex()) {
+		if (modelId === knownId || modelId.startsWith(`${knownId}-`)) {
+			return { thinkingLevelMap };
+		}
+	}
+	return undefined;
+}
+
+/**
+ * Custom anthropic-messages models whose upstream requires adaptive thinking
+ * (newer Claude models) reject budget-based thinking with a 400:
+ * `"thinking.type.enabled" is not supported for this model. Use
+ * "thinking.type.adaptive" and "output_config.effort"...`. Auto-enable the
+ * adaptive format when the model id matches a known adaptive-thinking model
+ * and the user has not set compat.forceAdaptiveThinking explicitly.
+ */
+function applyAdaptiveThinkingDefaults(
+	api: string,
+	modelId: string,
+	compat: Model<Api>["compat"] | undefined,
+): { compat: Model<Api>["compat"] | undefined; thinkingLevelMap?: ThinkingLevelMap } {
+	if (api !== "anthropic-messages" || (compat as ModelCompat | undefined)?.forceAdaptiveThinking !== undefined) {
+		return { compat };
+	}
+	const match = matchAdaptiveThinkingModel(modelId);
+	if (!match) {
+		return { compat };
+	}
+	return { compat: { ...compat, forceAdaptiveThinking: true }, thinkingLevelMap: match.thinkingLevelMap };
 }
 
 /** Clear the config value command cache. Exported for testing. */
@@ -323,6 +449,8 @@ export class ModelRegistry {
 	private models: Model<Api>[] = [];
 	private providerRequestConfigs: Map<string, ProviderRequestConfig> = new Map();
 	private modelRequestHeaders: Map<string, Record<string, string>> = new Map();
+	/** provider:modelId -> cacheRetention (model level beats provider level) */
+	private modelCacheRetentions: Map<string, CacheRetention> = new Map();
 	private registeredProviders: Map<string, ProviderConfigInput> = new Map();
 	private loadError: string | undefined = undefined;
 
@@ -347,6 +475,7 @@ export class ModelRegistry {
 	refresh(): void {
 		this.providerRequestConfigs.clear();
 		this.modelRequestHeaders.clear();
+		this.modelCacheRetentions.clear();
 		this.loadError = undefined;
 
 		// Ensure dynamic API/OAuth registrations are rebuilt from current provider state.
@@ -368,6 +497,12 @@ export class ModelRegistry {
 	}
 
 	private loadModels(): void {
+		// Remember the file version we just loaded so refreshIfModelsJsonChanged()
+		// only reacts to edits after this point.
+		this.modelsJsonMtimeMs =
+			this.modelsJsonPath && existsSync(this.modelsJsonPath)
+				? statSync(this.modelsJsonPath).mtimeMs
+				: undefined;
 		// Load custom models and overrides from models.json
 		const {
 			models: customModels,
@@ -457,6 +592,12 @@ export class ModelRegistry {
 			const content = readFileSync(modelsJsonPath, "utf-8");
 			const config: ModelsConfig = JSON.parse(content);
 
+			// Register any "!command" config values while the trust window is open
+			// (before createSessionFacade seals it). After sealing, commands added
+			// to models.json mid-session are refused until a restart — see
+			// resolve-config-value.ts (TOFU gate).
+			registerTrustedConfigCommands(collectConfigCommands(config));
+
 			// Validate schema
 			const validate = ajv.getSchema("ModelsConfig")!;
 			if (!validate(config)) {
@@ -486,6 +627,7 @@ export class ModelRegistry {
 					modelOverrides.set(providerName, new Map(Object.entries(providerConfig.modelOverrides)));
 					for (const [modelId, modelOverride] of Object.entries(providerConfig.modelOverrides)) {
 						this.storeModelHeaders(providerName, modelId, modelOverride.headers);
+						this.storeModelCacheRetention(providerName, modelId, modelOverride.cacheRetention);
 					}
 				}
 			}
@@ -582,8 +724,15 @@ export class ModelRegistry {
 				const baseUrl = modelDef.baseUrl ?? providerConfig.baseUrl ?? builtInDefaults?.baseUrl;
 				if (!baseUrl) continue;
 
-				const compat = mergeCompat(providerConfig.compat, modelDef.compat);
+				let compat = mergeCompat(providerConfig.compat, modelDef.compat);
+				// Auto-enable adaptive thinking for custom anthropic-messages models whose
+				// id matches a known adaptive-thinking Claude model (e.g. relay models like
+				// "claude-opus-5" or "claude-sonnet-4-6-cc"), unless explicitly configured.
+				const adaptive = applyAdaptiveThinkingDefaults(api, modelDef.id, compat);
+				compat = adaptive.compat;
+				const thinkingLevelMap = modelDef.thinkingLevelMap ?? adaptive.thinkingLevelMap;
 				this.storeModelHeaders(providerName, modelDef.id, modelDef.headers);
+				this.storeModelCacheRetention(providerName, modelDef.id, modelDef.cacheRetention);
 
 				const defaultCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 				models.push({
@@ -599,6 +748,7 @@ export class ModelRegistry {
 					maxTokens: modelDef.maxTokens ?? 16384,
 					headers: undefined,
 					compat,
+					thinkingLevelMap,
 				} as Model<Api>);
 			}
 		}
@@ -606,11 +756,31 @@ export class ModelRegistry {
 		return models;
 	}
 
+	/** mtime of models.json at last load; manual edits are picked up lazily */
+	private modelsJsonMtimeMs: number | undefined;
+
+	/**
+	 * Reload models.json if it changed on disk since the last load.
+	 *
+	 * Editors write models.json out-of-band; without this the registry serves
+	 * stale in-memory config until restart. Called from the read paths
+	 * (getAll/getAvailable/find) so any consumer — /model picker, RPC, gateway —
+	 * sees hand-edits without a restart. A statSync per read is negligible and
+	 * no-op when mtime is unchanged.
+	 */
+	private refreshIfModelsJsonChanged(): void {
+		if (!this.modelsJsonPath || !existsSync(this.modelsJsonPath)) return;
+		const mtimeMs = statSync(this.modelsJsonPath).mtimeMs;
+		if (this.modelsJsonMtimeMs === mtimeMs) return;
+		this.refresh();
+	}
+
 	/**
 	 * Get all models (built-in + custom).
 	 * If models.json had errors, returns only built-in models.
 	 */
 	getAll(): Model<Api>[] {
+		this.refreshIfModelsJsonChanged();
 		return this.models;
 	}
 
@@ -619,6 +789,7 @@ export class ModelRegistry {
 	 * This is a fast check that doesn't refresh OAuth tokens.
 	 */
 	getAvailable(): Model<Api>[] {
+		this.refreshIfModelsJsonChanged();
 		return this.models.filter((m) => this.hasConfiguredAuth(m));
 	}
 
@@ -626,6 +797,7 @@ export class ModelRegistry {
 	 * Find a model by provider and ID.
 	 */
 	find(provider: string, modelId: string): Model<Api> | undefined {
+		this.refreshIfModelsJsonChanged();
 		return this.models.find((m) => m.provider === provider && m.id === modelId);
 	}
 
@@ -666,9 +838,10 @@ export class ModelRegistry {
 			apiKey?: string;
 			headers?: Record<string, string>;
 			authHeader?: boolean;
+			cacheRetention?: CacheRetention;
 		},
 	): void {
-		if (!config.apiKey && !config.headers && !config.authHeader) {
+		if (!config.apiKey && !config.headers && !config.authHeader && !config.cacheRetention) {
 			return;
 		}
 
@@ -676,6 +849,7 @@ export class ModelRegistry {
 			apiKey: config.apiKey,
 			headers: config.headers,
 			authHeader: config.authHeader,
+			cacheRetention: config.cacheRetention,
 		});
 	}
 
@@ -686,6 +860,48 @@ export class ModelRegistry {
 			return;
 		}
 		this.modelRequestHeaders.set(key, headers);
+	}
+
+	private storeModelCacheRetention(providerName: string, modelId: string, retention?: CacheRetention): void {
+		const key = this.getModelRequestKey(providerName, modelId);
+		if (!retention) {
+			this.modelCacheRetentions.delete(key);
+			return;
+		}
+		this.modelCacheRetentions.set(key, retention);
+	}
+
+	/**
+	 * Resolve the prompt cache retention configured for a model.
+	 *
+	 * Precedence: per-model `cacheRetention` > provider `cacheRetention`.
+	 * Returns undefined when unset, so callers leave the option off and let
+	 * pi-ai apply its own default ("short").
+	 */
+	getCacheRetention(model: Model<Api>): CacheRetention | undefined {
+		return (
+			this.modelCacheRetentions.get(this.getModelRequestKey(model.provider, model.id)) ??
+			this.providerRequestConfigs.get(model.provider)?.cacheRetention
+		);
+	}
+
+	/**
+	 * Remember that a provider rejected budget-based thinking for this model
+	 * ("\"thinking.type.enabled\" is not supported ...") so future requests use
+	 * adaptive thinking without waiting for another 400. Learned at runtime
+	 * from the provider's own error, so it works for any model id or relay.
+	 *
+	 * Mutates the live model entry so every consumer (context builder, UI,
+	 * future requests) sees the corrected compat.
+	 */
+	rememberAdaptiveThinking(model: Model<Api>): Model<Api> {
+		const index = this.models.findIndex((m) => m.provider === model.provider && m.id === model.id);
+		const patched: Model<Api> = {
+			...model,
+			compat: { ...model.compat, forceAdaptiveThinking: true },
+		};
+		if (index >= 0) this.models[index] = patched;
+		return patched;
 	}
 
 	/**
@@ -863,6 +1079,7 @@ export class ModelRegistry {
 			for (const modelDef of config.models) {
 				const api = modelDef.api || config.api;
 				this.storeModelHeaders(providerName, modelDef.id, modelDef.headers);
+				this.storeModelCacheRetention(providerName, modelDef.id, modelDef.cacheRetention);
 
 				this.models.push({
 					id: modelDef.id,
@@ -903,6 +1120,8 @@ export interface ProviderConfigInput {
 	streamSimple?: (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream;
 	headers?: Record<string, string>;
 	authHeader?: boolean;
+	/** Prompt cache retention for all models of this provider (model level wins) */
+	cacheRetention?: CacheRetention;
 	/** OAuth provider for /login support */
 	oauth?: OAuthAuth;
 	models?: Array<{
@@ -917,5 +1136,6 @@ export interface ProviderConfigInput {
 		maxTokens: number;
 		headers?: Record<string, string>;
 		compat?: Model<Api>["compat"];
+		cacheRetention?: CacheRetention;
 	}>;
 }

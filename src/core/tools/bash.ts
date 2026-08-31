@@ -1,6 +1,5 @@
-import { randomBytes } from "node:crypto";
 import { createWriteStream, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { makePrivateLogPath, PRIVATE_LOG_MODE } from "../../utils/temp-files.js";
 import { join } from "node:path";
 import type { AgentTool } from "../agent/types.js";
 import { Container, Text, truncateToWidth, type Component } from "@earendil-works/pi-tui";
@@ -29,6 +28,7 @@ import {
 	parseBuiltinToolInput,
 	type ParsedBuiltinToolInput,
 } from "./builtin-commands.js";
+import { hasShellControlSyntax, splitShellSegments, splitShellWords } from "../shell-words.js";
 import { createEditToolDefinition, type EditToolDetails, type EditToolInput, type EditToolOptions } from "./edit.js";
 import { createReadToolDefinition, type ReadToolDetails, type ReadToolInput, type ReadToolOptions } from "./read.js";
 import { createHistoryTreeToolDefinition, type HistoryTreeToolInput } from "./history-tree.js";
@@ -38,12 +38,9 @@ import { createCronToolDefinition, type CronToolInput, type CronToolOptions } fr
 import { createTellToolDefinition, type TellToolInput, type TellToolOptions } from "./tell.js";
 import { createWriteToolDefinition, type WriteToolInput, type WriteToolOptions } from "./write.js";
 
-/**
- * Generate a unique temp file path for bash output.
- */
+/** Unique private temp file path for bash output overflow (0700 dir, 0600 file). */
 function getTempFilePath(): string {
-	const id = randomBytes(8).toString("hex");
-	return join(tmpdir(), `pizza-bash-${id}.log`);
+	return makePrivateLogPath("bash");
 }
 
 const bashSchema = Type.Object({
@@ -365,35 +362,6 @@ function parseBashBuiltinCommand(command: string): ParsedBuiltinToolInput | null
 	return parseBuiltinToolInput(builtinName, parsed.args, parsed.heredoc, { quoteDelimitersConsumed: parsed.quoteDelimitersConsumed });
 }
 
-function hasShellControlSyntax(command: string): boolean {
-	let quote: "'" | "\"" | undefined;
-	let escaped = false;
-
-	for (let i = 0; i < command.length; i++) {
-		const char = command[i];
-		if (escaped) {
-			escaped = false;
-			continue;
-		}
-		if (char === "\\") {
-			escaped = true;
-			continue;
-		}
-		if (quote) {
-			if (char === quote) quote = undefined;
-			continue;
-		}
-		if (char === "'" || char === "\"") {
-			quote = char;
-			continue;
-		}
-		if (char === "|" || char === "&" || char === ";" || char === "<" || char === ">" || char === "\n") {
-			return true;
-		}
-	}
-	return false;
-}
-
 /**
  * Detect a Pizza built-in command name that appears as the FIRST word of a
  * shell segment AFTER a chaining operator (&&, ||, ;, |). e.g.
@@ -411,54 +379,14 @@ function hasShellControlSyntax(command: string): boolean {
  */
 export function detectChainedBuiltin(command: string): string | null {
 	const builtins = BUILTIN_COMMANDS as readonly string[];
-	// First whitespace-delimited token of a segment, ignoring quotes/escapes.
-	const firstWord = (text: string): string => {
-		const raw = text.trimStart();
-		let out = "";
-		let q: "'" | '"' | undefined;
-		let esc = false;
-		for (let i = 0; i < raw.length && out.length < 64; i++) {
-			const ch = raw[i];
-			if (esc) { esc = false; out += ch; continue; }
-			if (ch === "\\") { esc = true; continue; }
-			if (q) { if (ch === q) q = undefined; else out += ch; continue; }
-			if (ch === "'" || ch === '"') { q = ch; continue; }
-			if (ch === " " || ch === "\t" || ch === "\n") break;
-			out += ch;
-		}
-		return out.toLowerCase();
-	};
-
-	let quote: "'" | '"' | undefined;
-	let escaped = false;
-	let segmentStart = 0;
+	const segments = splitShellSegments(command);
 	// Only built-ins chained AFTER an operator are the misuses we care about;
 	// the leading segment routes through normal cli parsing.
-	let skipFirst = true;
-
-	const checkSegment = (start: number, end: number): string | null => {
-		if (skipFirst) return null;
-		const word = firstWord(command.slice(start, end));
-		return word && builtins.includes(word) ? word : null;
-	};
-
-	for (let i = 0; i < command.length; i++) {
-		const char = command[i];
-		if (escaped) { escaped = false; continue; }
-		if (char === "\\") { escaped = true; continue; }
-		if (quote) { if (char === quote) quote = undefined; continue; }
-		if (char === "'" || char === '"') { quote = char; continue; }
-		const next = command[i + 1];
-		const two = (char === "&" && next === "&") || (char === "|" && next === "|");
-		if (two || char === ";" || char === "|") {
-			const hit = checkSegment(segmentStart, i);
-			if (hit) return hit;
-			skipFirst = false;
-			segmentStart = i + (two ? 2 : 1);
-			if (two) i += 1;
-		}
+	for (let i = 1; i < segments.length; i++) {
+		const word = splitShellWords(segments[i])[0]?.toLowerCase() ?? "";
+		if (word && builtins.includes(word)) return word;
 	}
-	return checkSegment(segmentStart, command.length);
+	return null;
 }
 
 function builtinKey(builtin: ParsedBuiltinToolInput | BashBuiltinDetails): string {
@@ -591,103 +519,33 @@ export function createBashToolDefinition(
 					};
 				}
 				if (builtin) {
-					switch (builtin.command) {
-						case "read": {
-							const result = await readDefinition.execute(toolCallId, builtin.input, signal, undefined, ctx as never);
-							return {
-								content: result.content,
-								details: { builtin: { name: "read", args: builtin.input, details: result.details } },
-							};
-						}
-						case "write": {
-							const result = await writeDefinition.execute(toolCallId, builtin.input, signal, undefined, ctx as never);
-							return {
-								content: result.content,
-								details: { builtin: { name: "write", args: builtin.input, details: result.details } },
-							};
-						}
-						case "edit": {
-							const prepared = editDefinition.prepareArguments
-								? editDefinition.prepareArguments(builtin.input)
-								: builtin.input;
-							const result = await editDefinition.execute(toolCallId, prepared, signal, undefined, ctx as never);
-							return {
-								content: result.content,
-								details: { builtin: { name: "edit", args: prepared, details: result.details } },
-							};
-						}
-						case "session_split": {
-							const result = await sessionSplitDefinition.execute(toolCallId, builtin.input, signal, undefined, ctx as never);
-							return {
-								content: result.content,
-								details: { builtin: { name: "session_split", args: builtin.input, details: result.details } },
-							};
-						}
-						case "history_tree": {
-							const result = await historyTreeDefinition.execute(toolCallId, builtin.input, signal, undefined, ctx as never);
-							return {
-								content: result.content,
-								details: { builtin: { name: "history_tree", args: builtin.input, details: result.details } },
-							};
-						}
-						case "skill": {
-							if (!skillDefinition) {
-								return {
-									content: [
-										{
-											type: "text",
-											text: "skill is not available in this session (no skills loaded). " +
-												"It cannot be used here.",
-										},
-									],
-									details: undefined,
-								};
-							}
-							const result = await skillDefinition.execute(toolCallId, builtin.input, signal, undefined, ctx as never);
-							return {
-								content: result.content,
-								details: { builtin: { name: "skill", args: builtin.input, details: result.details } },
-							};
-						}
-						case "cron": {
-							if (!cronDefinition) {
-								return {
-									content: [
-										{
-											type: "text",
-											text: "cron is not available in this session (scheduler not configured). " +
-												"It cannot be used here.",
-										},
-									],
-									details: undefined,
-								};
-							}
-							const result = await cronDefinition.execute(toolCallId, builtin.input, signal, undefined, ctx as never);
-							return {
-								content: result.content,
-								details: { builtin: { name: "cron", args: builtin.input, details: result.details } },
-							};
-						}
-						case "tell": {
-							if (!tellDefinition) {
-								return {
-									content: [
-										{
-											type: "text",
-											text: "tell is not available in this session (no agent dir configured). " +
-												"It cannot be used here.",
-										},
-									],
-									details: undefined,
-								};
-							}
-							const result = await tellDefinition.execute(toolCallId, builtin.input, signal, undefined, ctx as never);
-							return {
-								content: result.content,
-								details: { builtin: { name: "tell", args: builtin.input, details: result.details } },
-							};
-						}
+					// One generic dispatch for every built-in: look the definition up in
+					// builtinDefinitions (the same map the renderers use), run its
+					// prepareArguments hook when present (edit), and wrap the result.
+					// skill/cron/tell are undefined when not configured for this session.
+					const definition = builtinDefinitions[builtin.command];
+					if (!definition) {
+						const unavailableReason: Record<string, string> = {
+							skill: "skill is not available in this session (no skills loaded). It cannot be used here.",
+							cron: "cron is not available in this session (scheduler not configured). It cannot be used here.",
+							tell: "tell is not available in this session (no agent dir configured). It cannot be used here.",
+						};
+						return {
+							content: [
+								{
+									type: "text",
+									text: unavailableReason[builtin.command] ?? `${builtin.command} is not available in this session.`,
+								},
+							],
+							details: undefined,
+						};
 					}
+					const args = definition.prepareArguments ? definition.prepareArguments(builtin.input) : builtin.input;
+					const result = await definition.execute(toolCallId, args, signal, undefined, ctx as never);
+					return {
+						content: result.content,
+						details: { builtin: { name: builtin.command, args, details: result.details } },
+					};
 				}
 			}
 			const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
@@ -706,7 +564,7 @@ export function createBashToolDefinition(
 				const ensureTempFile = () => {
 					if (tempFilePath) return;
 					tempFilePath = getTempFilePath();
-					tempFileStream = createWriteStream(tempFilePath);
+					tempFileStream = createWriteStream(tempFilePath, { mode: PRIVATE_LOG_MODE });
 					for (const chunk of chunks) tempFileStream.write(chunk);
 				};
 

@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
@@ -8,7 +8,7 @@ import type { EventAppendInput, EventQuery, EventStore, SubscribeOptions } from 
 import type { SessionIndex } from "../projection/types.js";
 import type { SessionStore } from "./session-store.js";
 import { SqliteSessionStore } from "./sqlite-session-store.js";
-import { getWorkspaceMetaPath } from "./workspace.js";
+import { atomicWriteJson, getWorkspaceMetaPath } from "./workspace.js";
 import { deriveWorkspaceId, getEventDatabasePath } from "./workspace.js";
 
 const require = createRequire(import.meta.url);
@@ -33,7 +33,10 @@ type EventRow = {
 
 export class SqliteEventStore implements EventStore, SessionStore {
 	private db: DatabaseSync;
-	private subscribers: Map<number, { handler: (event: EventBase) => void; options?: SubscribeOptions }> = new Map();
+	private subscribers: Map<
+		number,
+		{ handler: (event: EventBase) => void; options?: SubscribeOptions; afterSequence?: number }
+	> = new Map();
 	private nextSubId = 0;
 	private sessionStore: SqliteSessionStore;
 
@@ -68,8 +71,11 @@ export class SqliteEventStore implements EventStore, SessionStore {
 		// captured by the subsequent AGENT_MESSAGE_END event (whose payload.content
 		// holds the full LLM response), so persisting chunks is pure redundancy.
 		// Historical replay / context rebuild / compaction all read END, never CHUNK.
+		// Chunks must NOT consume a sequence number: they are never inserted, so
+		// advancing _nextSequence here would fork the in-memory counter away from
+		// the DB max used by _appendAutoSequence / appendBatch.
 		if (partial.type === "AGENT_MESSAGE_CHUNK") {
-			const event = this._normalizeEvent(partial);
+			const event = this._normalizeEvent(partial, false);
 			this._notify(event);
 			return event;
 		}
@@ -129,8 +135,10 @@ export class SqliteEventStore implements EventStore, SessionStore {
 				break;
 			} catch (error) {
 				try { this.db.exec("rollback"); } catch { /* no active transaction */ }
-				// Retry on write-lock contention (another process holds the lock).
-				if (error instanceof Error && /database is locked/.test(error.message) && attempt < 5) {
+				// Retry on write-lock contention (another process holds the lock),
+				// backing off with jitter so concurrent writers do not collide again.
+				if (isSqliteBusyError(error) && attempt < MAX_LOCK_RETRY_ATTEMPTS) {
+					sleepSync(lockRetryDelayMs(attempt));
 					continue;
 				}
 				throw error;
@@ -146,14 +154,24 @@ export class SqliteEventStore implements EventStore, SessionStore {
 	}
 
 	/** Update workspace meta.json last_accessed_at when a message event is appended. */
+	private _lastMetaTouch = 0;
+
 	private _touchMetaOnMessage(eventType: string): void {
 		if (eventType !== "USER_MESSAGE" && eventType !== "AGENT_MESSAGE_START") return;
+		// Throttle: last_accessed_at only feeds workspace-list recency sorting.
+		// Without this, every message did a synchronous read+parse+write of
+		// meta.json inside the append hot path.
+		const now = Date.now();
+		if (now - this._lastMetaTouch < 60_000) return;
+		this._lastMetaTouch = now;
 		try {
 			const metaPath = getWorkspaceMetaPath(this.workspace_id);
 			const raw = readFileSync(metaPath, "utf8");
 			const meta = JSON.parse(raw) as { last_accessed_at?: number };
 			meta.last_accessed_at = Date.now();
-			writeFileSync(metaPath, JSON.stringify(meta, null, 2));
+			// Atomic replace: other processes read this file concurrently and must
+			// never observe a half-written meta.json.
+			atomicWriteJson(metaPath, meta);
 		} catch {
 			// meta.json might not exist yet — ignore.
 		}
@@ -244,7 +262,15 @@ export class SqliteEventStore implements EventStore, SessionStore {
 
 	subscribe(handler: (event: EventBase) => void, options?: SubscribeOptions): () => void {
 		const subId = this.nextSubId++;
-		this.subscribers.set(subId, { handler, options });
+		// Resolve the `after` event_id to its log sequence ONCE at subscribe time.
+		// Matching then compares sequences — the previous string comparison on
+		// event_id only worked because uuidv7 happens to be time-ordered, and
+		// broke for ids from another generator (or chunk ids never persisted).
+		let afterSequence: number | undefined;
+		if (options?.after) {
+			afterSequence = this.get(options.after)?.sequence;
+		}
+		this.subscribers.set(subId, { handler, options, afterSequence });
 		return () => this.subscribers.delete(subId);
 	}
 
@@ -325,9 +351,9 @@ export class SqliteEventStore implements EventStore, SessionStore {
 		}
 	}
 
-	private _normalizeEvent(partial: EventAppendInput): EventBase {
+	private _normalizeEvent(partial: EventAppendInput, consumeSequence = true): EventBase {
 		const sequence = partial.sequence ?? this._nextSequence;
-		if (sequence >= this._nextSequence) {
+		if (consumeSequence && sequence >= this._nextSequence) {
 			this._nextSequence = sequence + 1;
 		}
 		return {
@@ -385,7 +411,8 @@ export class SqliteEventStore implements EventStore, SessionStore {
 				return event;
 			} catch (error) {
 				try { this.db.exec("rollback"); } catch { /* no active transaction */ }
-				if (error instanceof Error && /database is locked/.test(error.message) && attempt < 5) {
+				if (isSqliteBusyError(error) && attempt < MAX_LOCK_RETRY_ATTEMPTS) {
+					sleepSync(lockRetryDelayMs(attempt));
 					continue;
 				}
 				throw error;
@@ -407,10 +434,20 @@ export class SqliteEventStore implements EventStore, SessionStore {
 		return row ? rowToEvent(row) : undefined;
 	}
 
+	/**
+	 * Fan out an event to subscribers. Each handler is isolated: a throwing
+	 * subscriber must not prevent the remaining subscribers from seeing the
+	 * event, and must not propagate out of append() and abort the caller
+	 * (subscribers drive the reactor and the UI, so an exception here would
+	 * otherwise break the agent turn). Mirrors the event-bus contract.
+	 */
 	private _notify(event: EventBase): void {
 		for (const [, sub] of this.subscribers) {
-			if (matchesSubscription(event, sub.options)) {
+			if (!matchesSubscription(event, sub.options, sub.afterSequence)) continue;
+			try {
 				sub.handler(event);
+			} catch (error) {
+				console.error(`Event subscriber error (${event.type}):`, error);
 			}
 		}
 	}
@@ -434,9 +471,59 @@ function rowToEvent(row: EventRow): EventBase {
 	};
 }
 
-function matchesSubscription(event: EventBase, options?: SubscribeOptions): boolean {
+/** Max retries after SQLITE_BUSY before giving up and rethrowing. */
+const MAX_LOCK_RETRY_ATTEMPTS = 5;
+
+/** Whether an error is SQLite reporting write-lock contention. */
+function isSqliteBusyError(error: unknown): boolean {
+	return error instanceof Error && /database is locked/.test(error.message);
+}
+
+/**
+ * Block the calling thread for `ms` without spinning the CPU.
+ *
+ * The store API is synchronous (node:sqlite DatabaseSync), so `await` is not
+ * available on this path. Atomics.wait on a throwaway SharedArrayBuffer is the
+ * standard way to sleep synchronously; the wait never gets notified, so it
+ * always runs to the timeout.
+ */
+function sleepSync(ms: number): void {
+	if (ms <= 0) return;
+	try {
+		Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+	} catch {
+		// SharedArrayBuffer can be unavailable in restricted environments. Losing
+		// the delay only costs us decorrelation, so proceeding is fine.
+	}
+}
+
+/**
+ * Decorrelated backoff between lock retries: 2ms, 4ms, 8ms… each with jitter.
+ *
+ * Note this is *not* about avoiding a busy-wait — `PRAGMA busy_timeout` already
+ * makes SQLite block internally, so reaching SQLITE_BUSY means ~5s of
+ * contention has already elapsed. The jitter exists so that several processes
+ * released by the same commit do not all retry in lockstep and collide again
+ * (thundering herd).
+ */
+function lockRetryDelayMs(attempt: number): number {
+	const base = 2 * 2 ** attempt;
+	return base + Math.random() * base;
+}
+
+function matchesSubscription(event: EventBase, options?: SubscribeOptions, afterSequence?: number): boolean {
 	if (!options) return true;
-	if (options.after && event.event_id <= options.after) return false;
+	if (options.after) {
+		// afterSequence was resolved at subscribe time. When the `after` event
+		// could not be resolved (unknown id / never-persisted chunk id), fall
+		// back to the legacy uuidv7 string ordering rather than dropping the
+		// filter entirely.
+		if (afterSequence !== undefined) {
+			if (event.sequence <= afterSequence) return false;
+		} else if (event.event_id <= options.after) {
+			return false;
+		}
+	}
 	if (options.after_sequence !== undefined && event.sequence <= options.after_sequence) return false;
 	if (options.types?.length && !options.types.includes(event.type)) return false;
 	if (options.actor_ids?.length && !options.actor_ids.includes(event.actor_id)) return false;

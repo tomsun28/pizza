@@ -38,6 +38,7 @@ import { startPtyServer, type PtyServer } from "../pty/pty-server.js";
 import { type Theme, theme } from "../../packages/tui/theme/theme.js";
 import { SchedulerEngine, type Dispatcher as SchedulerDispatcher } from "../../src/core/scheduler/index.js";
 import { SCHEDULED_TASK_FIRED, SCHEDULED_TASK_COMPLETED, type ScheduledTaskPatch, type SessionTarget } from "@tomsun28/pizza-protocol";
+import { installCrashHandlers } from "../../src/core/crash-handlers.js";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
 import type {
 	RpcCommand,
@@ -238,6 +239,27 @@ function buildSkillInfos(facade: SessionFacade): RpcSkillInfo[] {
 		path: skill.filePath,
 		source: builtinId !== undefined ? "builtin" : skillSourceLabel(skill),
 	}));
+}
+
+/**
+ * Long-lived agents cache skills from process start. Re-scan the skill source
+ * directories and, when something changed on disk (new/removed/edited skill
+ * files), reload and rebuild tools + system prompt so the next turn and the
+ * skills panel see the fresh set — same pattern as set_skill_enabled.
+ */
+async function refreshSkillsFromDisk(facade: SessionFacade): Promise<void> {
+	const loader = facade.resourceLoader;
+	if (!loader?.refreshSkillsIfChanged) return;
+	let changed = false;
+	try {
+		changed = await loader.refreshSkillsIfChanged();
+	} catch {
+		// A failed re-scan must never break the RPC; keep serving stale skills.
+		return;
+	}
+	if (changed) {
+		facade.extensionRunner?.refreshTools();
+	}
 }
 
 /**
@@ -715,6 +737,19 @@ export async function runRpcModeWithFacade(
 			process.on(signal, handler);
 			signalCleanupHandlers.push(() => process.off(signal, handler));
 		}
+
+		// The rpc server is a long-lived sidecar for the desktop/GUI frontend.
+		// Log stray rejections instead of dying, and on a fatal error tear down
+		// cleanly so the frontend sees the turn end rather than a silent exit.
+		// Diagnostics go to stderr — stdout is the JSONL protocol channel.
+		signalCleanupHandlers.push(
+			installCrashHandlers({
+				label: "rpc",
+				onFatal: () => {
+					killTrackedDetachedChildren();
+				},
+			}),
+		);
 	};
 
 	let detachInput = () => {};
@@ -1080,12 +1115,18 @@ export async function runRpcModeWithFacade(
 				return success(id, "set_scheduler_policy", { policy: facade.settingsManager.getSchedulerPolicy() });
 			}
 		case "new_session": {
+			// Long-lived agents cache skills from process start; pick up skills
+			// added/removed on disk so each new conversation sees the current set.
+			await refreshSkillsFromDisk(facade);
 			const desc = facade.runtime.createSession();
 			const sessionId = desc?.session_id ?? facade.runtime.sessionManager?.getActiveSessionId() ?? "";
 			return success(id, "new_session", { sessionId });
 		}
 
 		case "get_skills": {
+			// Same as new_session: the GUI skills panel reads from the loader, so
+			// refresh from disk first to reflect newly installed skills.
+			await refreshSkillsFromDisk(facade);
 			const enableSkills = facade.settingsManager.getEnableSkillCommands();
 			// Disabled skills are reported too (with enabled: false) so a UI can list
 			// and re-enable them; callers that only want active skills filter on `enabled`.

@@ -116,11 +116,16 @@ export function renderHistoryTreeText(nodes: HistoryTreeNodeInfo[]): string {
 	const lines = nodes.map((node) => {
 		const indent = "  ".repeat(node.depth);
 		const marker = node.is_active ? "*" : "-";
-		const name = node.name ? ` ${JSON.stringify(node.name)}` : "";
 		const status = node.is_active ? " [active]" : node.closed ? "" : " [open]";
-		const snippet = node.snippet ? ` — ${node.snippet}` : "";
 		const date = new Date(node.created_at).toISOString().replace("T", " ").slice(0, 16);
-		return `${indent}${marker} ${node.session_id}${name} (${date})${status}${snippet}`;
+		// Title first, session id second: the title is the split name, falling back
+		// to the first user message snippet, so unnamed sessions stay identifiable.
+		const title = node.name ?? node.snippet;
+		if (title) {
+			const snippet = node.name && node.snippet ? ` — ${node.snippet}` : "";
+			return `${indent}${marker} ${title} · ${node.session_id} (${date})${status}${snippet}`;
+		}
+		return `${indent}${marker} ${node.session_id} (${date})${status}`;
 	});
 	return lines.join("\n");
 }

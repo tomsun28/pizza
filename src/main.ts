@@ -8,10 +8,6 @@
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { type Api, type ImageContent, type Model, getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
-
-function supportsXhigh(model: Model<Api>): boolean {
-	return getSupportedThinkingLevels(model).includes("xhigh" as any);
-}
 import chalk from "chalk";
 import { type Args, type Mode, parseArgs, printHelp } from "../packages/cli/args.js";
 import { processFileArguments } from "../packages/cli/file-processor.js";
@@ -33,6 +29,7 @@ import { exportFromFile } from "./core/export-html/index.js";
 import type { ExtensionFactory } from "./core/extensions/types.js";
 import type { ModelRegistry } from "./core/model-registry.js";
 import { resolveCliModel } from "./core/model-resolver.js";
+import { installCrashHandlers } from "./core/crash-handlers.js";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.js";
 import type { CreateSessionFacadeOptions } from "./core/session-facade-factory.js";
 import { createSessionFacade, type CreateSessionFacadeResult } from "./core/session-facade-factory.js";
@@ -48,6 +45,10 @@ import { handleBuiltinCommand } from "./builtin-cli.js";
 import { handleGatewayCommand } from "./gateway-cli.js";
 import { handleAuthCommand } from "./auth-cli.js";
 import { isLocalPath } from "./utils/paths.js";
+
+function supportsXhigh(model: Model<Api>): boolean {
+	return getSupportedThinkingLevels(model).includes("xhigh" as any);
+}
 
 /**
  * Read all content from piped stdin.
@@ -161,7 +162,15 @@ async function resolveSessionPath(sessionArg: string, cwd: string, agentDir: str
 	const localMatches = localSessions.filter((s) => s.id.startsWith(sessionArg) || s.path === sessionArg);
 
 	if (localMatches.length >= 1) {
-		return { type: "local", path: localMatches[0].path };
+		const chosen = localMatches.find((s) => s.id === sessionArg) ?? localMatches[0];
+		if (localMatches.length > 1 && chosen.id !== sessionArg) {
+			console.error(
+				chalk.yellow(
+					`Warning: "${sessionArg}" matches ${localMatches.length} sessions (${localMatches.map((s) => s.id.slice(0, 12)).join(", ")}…) — using ${chosen.id}. Use a longer prefix to disambiguate.`,
+				),
+			);
+		}
+		return { type: "local", path: chosen.path };
 	}
 
 	// Try global search across all projects
@@ -169,7 +178,14 @@ async function resolveSessionPath(sessionArg: string, cwd: string, agentDir: str
 	const globalMatches = allSessions.filter((s) => s.id.startsWith(sessionArg) || s.path === sessionArg);
 
 	if (globalMatches.length >= 1) {
-		const match = globalMatches[0];
+		const match = globalMatches.find((s) => s.id === sessionArg) ?? globalMatches[0];
+		if (globalMatches.length > 1 && match.id !== sessionArg) {
+			console.error(
+				chalk.yellow(
+					`Warning: "${sessionArg}" matches ${globalMatches.length} sessions across projects — using ${match.id} (${match.cwd}). Use a longer prefix to disambiguate.`,
+				),
+			);
+		}
 		return { type: "global", path: match.path, cwd: match.cwd };
 	}
 
@@ -193,7 +209,6 @@ async function promptConfirm(message: string): Promise<boolean> {
 
 function buildSessionOptions(
 	parsed: Args,
-	hasExistingSession: boolean,
 	modelRegistry: ModelRegistry,
 	settingsManager: SettingsManager,
 ): {
@@ -287,12 +302,11 @@ async function createCliSessionSetup(options: {
 	parsed: Args;
 	resolvedPaths: ResolvedCliResourcePaths;
 	extensionFactories?: ExtensionFactory[];
-	hasExistingSession: boolean;
 	isMainAgent?: boolean;
 	mainDir?: string;
 	memoryDir?: string;
 }): Promise<CliSessionSetup> {
-	const { cwd, agentDir, authStorage, parsed, resolvedPaths, extensionFactories, hasExistingSession } = options;
+	const { cwd, agentDir, authStorage, parsed, resolvedPaths, extensionFactories } = options;
 	const services = await createSessionServices({
 		cwd,
 		agentDir,
@@ -334,7 +348,6 @@ async function createCliSessionSetup(options: {
 		diagnostics: sessionOptionDiagnostics,
 	} = buildSessionOptions(
 		parsed,
-		hasExistingSession,
 		modelRegistry,
 		settingsManager,
 	);
@@ -491,6 +504,12 @@ export async function main(args: string[], options?: MainOptions) {
 		};
 		process.on("SIGINT", shutdown);
 		process.on("SIGTERM", shutdown);
+		// The gateway hosts agents for other workspaces — a stray rejection must not
+		// silently take the whole pool down with it.
+		installCrashHandlers({
+			label: "gateway",
+			onFatal: () => server.stop(),
+		});
 		try {
 			await server.start();
 		} catch (error) {
@@ -577,7 +596,6 @@ export async function main(args: string[], options?: MainOptions) {
 		parsed,
 		resolvedPaths,
 		extensionFactories: options?.extensionFactories,
-		hasExistingSession: target.hasExistingSession,
 		isMainAgent,
 		mainDir,
 		memoryDir,
@@ -599,6 +617,39 @@ export async function main(args: string[], options?: MainOptions) {
 		process.exit(0);
 	}
 
+	// Shared createSessionFacade() options for all four app modes (rpc /
+	// interactive / gui / print). Defined as a closure so each mode reads the
+	// same resolved CLI/session state. Per-mode safety posture goes in extras:
+	// print has no approval UI so it keeps auto-run (a one-shot the user
+	// explicitly typed); gateway-spawned rpc sub-agents are headless and must
+	// fail closed instead of hanging on approvals.
+	const buildFacadeOptions = (extras?: { safeModeDefault?: boolean | "auto"; approvalUi?: boolean }) => ({
+		cwd: target.cwd,
+		agentDir: sessionStorageAgentDir,
+		authStorage,
+		settingsManager,
+		modelRegistry,
+		resourceLoader,
+		model: sessionOptions.model,
+		thinkingLevel: sessionOptions.thinkingLevel,
+		tools: sessionOptions.tools,
+		customTools: sessionOptions.customTools,
+		storagePath: parsed.noSession ? ":memory:" : undefined,
+		workspaceId: target.workspaceId,
+		sessionId: target.sessionId,
+		isContinuing: parsed.continue ?? target.hasExistingSession,
+		forkFrom: target.forkFrom
+			? {
+					...target.forkFrom,
+					agentDir: sessionStorageAgentDir,
+				}
+			: undefined,
+		isMainAgent,
+		mainDir,
+		memoryDir,
+		...extras,
+	});
+
 	if (appMode === "rpc") {
 		initTheme(settingsManager.getTheme(), false);
 		time("initTheme");
@@ -609,31 +660,12 @@ export async function main(args: string[], options?: MainOptions) {
 		}
 		time("createSessionFacade.setup");
 
-		const created = await createSessionFacade({
-			cwd: target.cwd,
-			agentDir: sessionStorageAgentDir,
-			authStorage,
-			settingsManager,
-			modelRegistry,
-			resourceLoader,
-			model: sessionOptions.model,
-			thinkingLevel: sessionOptions.thinkingLevel,
-			tools: sessionOptions.tools,
-			customTools: sessionOptions.customTools,
-			storagePath: parsed.noSession ? ":memory:" : undefined,
-			workspaceId: target.workspaceId,
-			sessionId: target.sessionId,
-			isContinuing: parsed.continue ?? target.hasExistingSession,
-			forkFrom: target.forkFrom
-				? {
-						...target.forkFrom,
-						agentDir: sessionStorageAgentDir,
-					}
-				: undefined,
-			isMainAgent,
-			mainDir,
-			memoryDir,
-		});
+		// Gateway-spawned sub-agents (PIZZA_HEADLESS=1) have no human to answer
+		// approval dialogs: install no approval handler so gated tool calls are
+		// auto-rejected with guidance (fail closed) instead of hanging the turn.
+		// Desktop-GUI rpc keeps the default: its approve dialog resolves over rpc.
+		const headless = isTruthyEnvFlag(process.env.PIZZA_HEADLESS);
+		const created = await createSessionFacade(buildFacadeOptions(headless ? { approvalUi: false } : undefined));
 		applyCliThinkingClampToFacade(created, parsed.thinking !== undefined || cliThinkingFromModel);
 		time("createSessionFacade");
 
@@ -671,31 +703,7 @@ export async function main(args: string[], options?: MainOptions) {
 		}
 		time("createSessionFacade.setup");
 
-		const created = await createSessionFacade({
-			cwd: target.cwd,
-			agentDir: sessionStorageAgentDir,
-			authStorage,
-			settingsManager,
-			modelRegistry,
-			resourceLoader,
-			model: sessionOptions.model,
-			thinkingLevel: sessionOptions.thinkingLevel,
-			tools: sessionOptions.tools,
-			customTools: sessionOptions.customTools,
-			storagePath: parsed.noSession ? ":memory:" : undefined,
-			workspaceId: target.workspaceId,
-			sessionId: target.sessionId,
-			isContinuing: parsed.continue ?? target.hasExistingSession,
-			forkFrom: target.forkFrom
-				? {
-						...target.forkFrom,
-						agentDir: sessionStorageAgentDir,
-					}
-				: undefined,
-			isMainAgent,
-			mainDir,
-			memoryDir,
-		});
+		const created = await createSessionFacade(buildFacadeOptions());
 		applyCliThinkingClampToFacade(created, parsed.thinking !== undefined || cliThinkingFromModel);
 		time("createSessionFacade");
 
@@ -755,31 +763,7 @@ export async function main(args: string[], options?: MainOptions) {
 		}
 		time("createSessionFacade.setup");
 
-		const created = await createSessionFacade({
-			cwd: target.cwd,
-			agentDir: sessionStorageAgentDir,
-			authStorage,
-			settingsManager,
-			modelRegistry,
-			resourceLoader,
-			model: sessionOptions.model,
-			thinkingLevel: sessionOptions.thinkingLevel,
-			tools: sessionOptions.tools,
-			customTools: sessionOptions.customTools,
-			storagePath: parsed.noSession ? ":memory:" : undefined,
-			workspaceId: target.workspaceId,
-			sessionId: target.sessionId,
-			isContinuing: parsed.continue ?? target.hasExistingSession,
-			forkFrom: target.forkFrom
-				? {
-						...target.forkFrom,
-						agentDir: sessionStorageAgentDir,
-					}
-				: undefined,
-			isMainAgent,
-			mainDir,
-			memoryDir,
-		});
+		const created = await createSessionFacade(buildFacadeOptions());
 		applyCliThinkingClampToFacade(created, parsed.thinking !== undefined || cliThinkingFromModel);
 		time("createSessionFacade");
 
@@ -827,31 +811,10 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 	time("createSessionFacade.setup");
 
-	const created = await createSessionFacade({
-		cwd: target.cwd,
-		agentDir: sessionStorageAgentDir,
-		authStorage,
-		settingsManager,
-		modelRegistry,
-		resourceLoader,
-		model: sessionOptions.model,
-		thinkingLevel: sessionOptions.thinkingLevel,
-		tools: sessionOptions.tools,
-		customTools: sessionOptions.customTools,
-		storagePath: parsed.noSession ? ":memory:" : undefined,
-		workspaceId: target.workspaceId,
-		sessionId: target.sessionId,
-		isContinuing: parsed.continue ?? target.hasExistingSession,
-		forkFrom: target.forkFrom
-			? {
-					...target.forkFrom,
-					agentDir: sessionStorageAgentDir,
-				}
-			: undefined,
-		isMainAgent,
-		mainDir,
-		memoryDir,
-	});
+	// Print mode is a one-shot command the user explicitly typed, with no UI
+	// to answer approval prompts — keep the auto-run default. An explicit
+	// safeMode in settings.json still wins over this default.
+	const created = await createSessionFacade(buildFacadeOptions({ safeModeDefault: false }));
 	applyCliThinkingClampToFacade(created, parsed.thinking !== undefined || cliThinkingFromModel);
 	time("createSessionFacade");
 

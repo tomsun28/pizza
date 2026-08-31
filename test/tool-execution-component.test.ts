@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { Text, type TUI } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
 import stripAnsi from "strip-ansi";
-import { beforeAll, describe, expect, test } from "vitest";
+import { beforeAll, afterEach, describe, expect, test, vi } from "vitest";
 import type { ToolDefinition } from "../src/core/extensions/types.js";
 import { type BashOperations, createBashToolDefinition } from "../src/core/tools/bash.js";
 import { formatLineAnchor } from "../src/core/tools/line-anchors.js";
@@ -421,5 +421,147 @@ describe("ToolExecutionComponent parity", () => {
 		expect(rendered).toContain("one");
 		expect(rendered).toContain("two");
 		expect(rendered).not.toContain("two\n\n");
+	});
+});
+
+describe("ToolExecutionComponent generic running indicator", () => {
+	beforeAll(() => {
+		initTheme("dark");
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	test("shows a Running... loader between execution start and first feedback", () => {
+		vi.useFakeTimers();
+		const toolDefinition: ToolDefinition = {
+			...createBaseToolDefinition(),
+			renderCall: () => new Text("custom call", 0, 0),
+			renderResult: () => new Text("custom result", 0, 0),
+		};
+
+		const component = new ToolExecutionComponent(
+			"custom_tool",
+			"tool-run-1",
+			{},
+			{},
+			toolDefinition,
+			createFakeTui(),
+			process.cwd(),
+		);
+
+		// Before execution starts: no running indicator.
+		expect(stripAnsi(component.render(120).join("\n"))).not.toContain("Running...");
+
+		component.markExecutionStarted();
+		expect(stripAnsi(component.render(120).join("\n"))).toContain("Running...");
+
+		// Final result removes the indicator and shows the result instead.
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "done" }],
+				details: {},
+				isError: false,
+			},
+			false,
+		);
+		const rendered = stripAnsi(component.render(120).join("\n"));
+		expect(rendered).not.toContain("Running...");
+		expect(rendered).toContain("custom result");
+	});
+
+	test("partial streamed feedback replaces the generic loader (no double indicator for cli)", () => {
+		vi.useFakeTimers();
+		const toolDefinition: ToolDefinition = {
+			...createBaseToolDefinition(),
+			renderCall: () => new Text("custom call", 0, 0),
+			renderResult: () => new Text("custom result", 0, 0),
+		};
+
+		const component = new ToolExecutionComponent(
+			"custom_tool",
+			"tool-run-2",
+			{},
+			{},
+			toolDefinition,
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.markExecutionStarted();
+		expect(stripAnsi(component.render(120).join("\n"))).toContain("Running...");
+
+		// First streamed partial update (like cli's initial empty update) hides the loader.
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "" }],
+				isError: false,
+			},
+			true,
+		);
+		expect(stripAnsi(component.render(120).join("\n"))).not.toContain("Running...");
+	});
+
+	test("stops the loader animation timer once the result arrives", () => {
+		vi.useFakeTimers();
+		let renderCalls = 0;
+		const fakeTui = {
+			requestRender: () => {
+				renderCalls++;
+			},
+		} as unknown as TUI;
+
+		const toolDefinition: ToolDefinition = {
+			...createBaseToolDefinition(),
+			renderCall: () => new Text("custom call", 0, 0),
+			renderResult: () => new Text("custom result", 0, 0),
+		};
+
+		const component = new ToolExecutionComponent(
+			"custom_tool",
+			"tool-run-3",
+			{},
+			{},
+			toolDefinition,
+			fakeTui,
+			process.cwd(),
+		);
+		component.markExecutionStarted();
+
+		// Loader animates: requestRender fires on its interval while running.
+		const before = renderCalls;
+		vi.advanceTimersByTime(400);
+		expect(renderCalls).toBeGreaterThan(before);
+
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "done" }],
+				details: {},
+				isError: false,
+			},
+			false,
+		);
+
+		// Animation stopped: no further requestRender calls from the loader.
+		const afterResult = renderCalls;
+		vi.advanceTimersByTime(400);
+		expect(renderCalls).toBe(afterResult);
+	});
+
+	test("fallback rendering (no tool definition) also shows a running marker", () => {
+		vi.useFakeTimers();
+		const component = new ToolExecutionComponent(
+			"mystery_tool",
+			"tool-run-4",
+			{ path: "x" },
+			{},
+			undefined,
+			createFakeTui(),
+			process.cwd(),
+		);
+		expect(stripAnsi(component.render(120).join("\n"))).not.toContain("Running...");
+
+		component.markExecutionStarted();
+		expect(stripAnsi(component.render(120).join("\n"))).toContain("Running...");
 	});
 });

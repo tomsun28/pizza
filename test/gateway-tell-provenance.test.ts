@@ -161,6 +161,10 @@ describe("gateway tell provenance", () => {
 		expect(delivered).toContain('<message from="agent:/proj/pizza"');
 		expect(delivered).toContain("do these two files conflict?");
 		expect(delivered).toContain("</message>");
+		// Trust-boundary trailer sits OUTSIDE the block so the sender cannot
+		// neutralize it from inside the message body.
+		const afterBlock = delivered.slice(delivered.lastIndexOf("</message>"));
+		expect(afterBlock).toContain("crossed a workspace boundary");
 	});
 
 	it("delivers the bare message when `from` is absent (back-compat)", async () => {

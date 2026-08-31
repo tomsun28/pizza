@@ -747,7 +747,7 @@ describe("Reactor (event-driven core)", () => {
 		runtime.dispose();
 	});
 
-	it("aggregates completed tools by tool_call_id when causal chain is unavailable", async () => {
+	it("aggregates completed tools via assistant_message_event_id carried on INTENT_TOOL_CALL", async () => {
 		const cwd = makeTempDir();
 		const store = new SqliteEventStore("reactor-causality-fallback", ":memory:");
 		const registry = makeRegistry();
@@ -794,6 +794,20 @@ describe("Reactor (event-driven core)", () => {
 
 		await (reactor as any)._onAgentMessageEnd(assistantEnd);
 
+		// _onAgentMessageEnd emitted one INTENT_TOOL_CALL per tool call, each
+		// carrying assistant_message_event_id. TOOL_EXECUTION_END references its
+		// intent via caused_by — the only supported lookup path.
+		const intents = store.query({ types: ["INTENT_TOOL_CALL"] });
+		expect(intents).toHaveLength(2);
+		for (const intent of intents) {
+			expect((intent.payload as { assistant_message_event_id: string }).assistant_message_event_id).toBe(
+				assistantEnd.event_id,
+			);
+		}
+		const intentByToolCallId = new Map(
+			intents.map((intent) => [(intent.payload as { tool_call_id: string }).tool_call_id, intent]),
+		);
+
 		const firstResult = store.append({
 			actor_id: "runtime",
 			type: "TOOL_EXECUTION_END",
@@ -803,6 +817,7 @@ describe("Reactor (event-driven core)", () => {
 				result: [{ type: "text", text: "a" }],
 				is_error: false,
 			},
+			caused_by: intentByToolCallId.get("missing_chain_1")!.event_id,
 		});
 		const secondResult = store.append({
 			actor_id: "runtime",
@@ -813,6 +828,7 @@ describe("Reactor (event-driven core)", () => {
 				result: [{ type: "text", text: "b" }],
 				is_error: false,
 			},
+			caused_by: intentByToolCallId.get("missing_chain_2")!.event_id,
 		});
 
 		await (reactor as any)._onToolExecutionEnd(firstResult);

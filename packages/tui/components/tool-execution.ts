@@ -1,4 +1,4 @@
-import { Box, type Component, Container, getCapabilities, Image, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
+import { Box, type Component, Container, getCapabilities, Image, Loader, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
 import type { ToolDefinition, ToolRenderContext } from "../../../src/core/extensions/types.js";
 import { createAllToolDefinitions, type ToolName } from "../../../src/core/tools/index.js";
 import { getTextOutput as getRenderedTextOutput } from "../../../src/core/tools/render-utils.js";
@@ -39,6 +39,8 @@ export class ToolExecutionComponent extends Container {
 	};
 	private convertedImages: Map<number, { data: string; mimeType: string }> = new Map();
 	private hideComponent = false;
+	/** Generic running indicator — shown while a tool executes with no streamed feedback. */
+	private runningLoader: Loader | undefined;
 
 	constructor(
 		toolName: string,
@@ -264,6 +266,12 @@ export class ToolExecutionComponent extends Container {
 				? (text: string) => theme.bg("toolErrorBg", text)
 				: (text: string) => theme.bg("toolSuccessBg", text);
 
+		// A tool is "running" from TOOL_EXECUTION_START until its first feedback arrives
+		// (a streamed partial result or the final result). Tools that stream progress
+		// (e.g. cli/bash) surface their own elapsed ticker via partial results, so the
+		// generic loader hides as soon as any result content exists to avoid doubling up.
+		const isRunning = this.executionStarted && this.result === undefined;
+
 		let hasContent = false;
 		this.hideComponent = false;
 		if (this.hasRendererDefinition()) {
@@ -288,6 +296,22 @@ export class ToolExecutionComponent extends Container {
 					renderContainer.addChild(this.createCallFallback());
 					hasContent = true;
 				}
+			}
+
+			if (isRunning) {
+				// Reuse a single Loader across re-renders — each new instance starts its
+				// own animation interval, so leaking instances would pile up timers.
+				this.runningLoader ??= new Loader(
+					this.ui,
+					(spinner) => theme.fg("toolTitle", spinner),
+					(text) => theme.fg("muted", text),
+					"Running...",
+				);
+				renderContainer.addChild(this.runningLoader);
+				hasContent = true;
+			} else if (this.runningLoader) {
+				this.runningLoader.stop();
+				this.runningLoader = undefined;
 			}
 
 			if (this.result) {
@@ -321,7 +345,9 @@ export class ToolExecutionComponent extends Container {
 			}
 		} else {
 			this.contentText.setCustomBgFn(bgFn);
-			this.contentText.setText(this.formatToolExecution());
+			this.contentText.setText(
+				isRunning ? `${this.formatToolExecution()}\n${theme.fg("muted", "Running...")}` : this.formatToolExecution(),
+			);
 			hasContent = true;
 		}
 

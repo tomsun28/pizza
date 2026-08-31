@@ -19,7 +19,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { splitShellWords, splitShellWordsWithMeta } from "../src/core/shell-words.js";
+import { splitShellWords, splitShellWordsWithMeta, hasShellControlSyntax, splitShellSegments } from "../src/core/shell-words.js";
 
 describe("splitShellWords — unquoted splitting", () => {
 	it("splits on runs of whitespace", () => {
@@ -181,5 +181,81 @@ describe("splitShellWordsWithMeta — quote delimiter accounting", () => {
 
 	it("still accounts for an empty-quoted pair", () => {
 		expect(splitShellWordsWithMeta('""').meta.quoteDelimitersConsumed).toBe(2);
+	});
+});
+
+// ============================================================================
+// Shared scanner: hasShellControlSyntax / splitShellSegments
+// ============================================================================
+
+describe("hasShellControlSyntax", () => {
+	it("detects bare control operators", () => {
+		expect(hasShellControlSyntax("a | b")).toBe(true);
+		expect(hasShellControlSyntax("a && b")).toBe(true);
+		expect(hasShellControlSyntax("a; b")).toBe(true);
+		expect(hasShellControlSyntax("a > f")).toBe(true);
+		expect(hasShellControlSyntax("a < f")).toBe(true);
+		expect(hasShellControlSyntax("a\nb")).toBe(true);
+	});
+
+	it("ignores operators inside quotes", () => {
+		expect(hasShellControlSyntax("echo 'a | b'")).toBe(false);
+		expect(hasShellControlSyntax('echo "a && b"')).toBe(false);
+		expect(hasShellControlSyntax("echo 'x; y'")).toBe(false);
+	});
+
+	it("ignores escaped operators outside quotes", () => {
+		expect(hasShellControlSyntax("echo a\\|b")).toBe(false);
+		expect(hasShellControlSyntax("echo a\\;b")).toBe(false);
+	});
+
+	it("POSIX single quotes: backslash is literal, does NOT extend the quote", () => {
+		// In POSIX sh, 'a\' closes at the second quote — the ; after it is a
+		// REAL operator. The old scanner treated \' as an escape and stayed
+		// "inside quotes", missing the operator (classification bypass).
+		expect(hasShellControlSyntax("echo 'a\\' ; rm x")).toBe(true);
+	});
+
+	it("double quotes: backslash escapes the quote, keeping the ; inside the string", () => {
+		// echo "a\" ; rm x" — the \" is an escaped quote, so the string runs to
+		// the final quote and the ; is DATA (bash prints: a" ; rm x).
+		expect(hasShellControlSyntax('echo "a\\" ; rm x"')).toBe(false);
+	});
+
+	it("clean builtin-style commands have no control syntax", () => {
+		expect(hasShellControlSyntax("_read src/main.ts 10 50")).toBe(false);
+		expect(hasShellControlSyntax('_write out.txt "hello world"')).toBe(false);
+	});
+});
+
+describe("splitShellSegments", () => {
+	it("splits on && || ; and |", () => {
+		expect(splitShellSegments("a && b")).toEqual(["a ", " b"]);
+		expect(splitShellSegments("a || b")).toEqual(["a ", " b"]);
+		expect(splitShellSegments("a; b")).toEqual(["a", " b"]);
+		expect(splitShellSegments("a | b")).toEqual(["a ", " b"]);
+	});
+
+	it("does not split on quoted operators", () => {
+		expect(splitShellSegments("echo 'a && b'")).toEqual(["echo 'a && b'"]);
+		expect(splitShellSegments('echo "x | y"')).toEqual(['echo "x | y"']);
+	});
+
+	it("does not split on escaped operators", () => {
+		expect(splitShellSegments("echo a\\;b")).toEqual(["echo a\\;b"]);
+	});
+
+	it("single & (background) is not a separator", () => {
+		expect(splitShellSegments("sleep 1 & wait")).toEqual(["sleep 1 & wait"]);
+	});
+
+	it("handles multi-operator chains", () => {
+		expect(splitShellSegments("a && b; c | d")).toEqual(["a ", " b", " c ", " d"]);
+	});
+
+	it("single-quote backslash does not hide a following separator (POSIX)", () => {
+		const segments = splitShellSegments("echo 'a\\' && _read f");
+		expect(segments).toHaveLength(2);
+		expect(segments[1].trim()).toBe("_read f");
 	});
 });

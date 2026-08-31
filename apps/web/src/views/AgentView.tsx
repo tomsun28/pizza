@@ -1089,7 +1089,11 @@ export default function AgentView({
 			{error && (
 				<div className="mx-auto max-w-3xl px-6 pb-2">
 					<div className="rounded-md border border-danger/30 bg-danger/5 px-4 py-2 text-sm text-danger">
-						{error}
+						{error.split("\n").map((line, i) => (
+							<div key={i} className={i === 0 ? "" : "mt-0.5 text-xs opacity-70"}>
+								{line}
+							</div>
+						))}
 					</div>
 				</div>
 			)}

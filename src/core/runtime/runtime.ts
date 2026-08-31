@@ -104,6 +104,9 @@ export class EventSourcedRuntime {
 	/** Agent data directory */
 	get agentDir(): string { return this.config.agentDir ?? getAgentDir(); }
 	private _isProcessing = false;
+	/** In-flight compaction started while no reactor was alive (idle /compact). */
+	private _idleCompaction: Promise<void> | undefined;
+	private _idleCompactionAbort: AbortController | undefined;
 	private _turnCompletionWaiters: Array<() => void> = [];
 	private _turnSubscription: (() => void) | undefined;
 	private _resolveSettled: (() => void) | undefined;
@@ -155,6 +158,10 @@ export class EventSourcedRuntime {
 		this._isProcessing = true;
 
 		try {
+			// An idle-triggered compaction (compact() with no live reactor) may
+			// still be running; the new turn must not race it — both rewrite the
+			// same context boundary.
+			await this._idleCompaction?.catch(() => {});
 			this.sessionManager?.ensureActiveSessionWritable("prompt from historical session");
 			this.refreshSystemPromptForCurrentSession();
 			// Lazy-create the reactor and start it. Reactor lives only as long as the prompt cycle.
@@ -174,16 +181,7 @@ export class EventSourcedRuntime {
 				tools: this.config.tools,
 				retryPolicy: this.config.retryPolicy,
 				retryAssistantErrorCompletions: this.config.retryAssistantErrorCompletions,
-				compactionPolicy: this.config.compactionPolicy ?? new CompactionEngine({
-					store: this.store,
-					projection,
-					llmClient: this.config.llmClient,
-					model: this.config.model,
-					settings: {
-						contextWindow: this.config.contextBudget ?? 128000,
-						...this.config.compactionEngineSettings,
-					},
-				}),
+				compactionPolicy: this._buildCompactionPolicy(projection),
 			sessionManager: this.sessionManager,
 			refreshSystemPrompt: this.config.refreshSystemPrompt,
 		});
@@ -192,14 +190,24 @@ export class EventSourcedRuntime {
 
 			// Wait until the reactor reaches a fully idle state. The reactor may chain
 			// multiple turns (e.g. follow-up queue draining), so we keep waiting until settled.
-			const settledPromise = this._waitUntilSettled();
+			// The settled check must be scoped to this prompt's thread: with
+			// multiple threads on one store, another thread's USER_MESSAGE would
+			// otherwise keep this prompt waiting forever (its own turn completed,
+			// but globally lastMsg.sequence > lastCompleted.sequence stays true).
+			// The thread id comes from the appended event (ThreadScopedStore tags
+			// it); the subscription only fires on turn-completion events, which
+			// necessarily happen after the append, so the holder is always set by
+			// the time the check runs.
+			let promptThreadId: string | undefined;
+			const settledPromise = this._waitUntilSettled(() => promptThreadId);
 
 			// Append the user message — the reactor will pick it up
-			this.store.append({
+			const userMessage = this.store.append({
 				actor_id: "user",
 				type: "USER_MESSAGE",
 				payload: { content: text, images, files },
 			});
+			promptThreadId = userMessage.thread_id;
 
 			await settledPromise;
 		} finally {
@@ -208,6 +216,7 @@ export class EventSourcedRuntime {
 			this.reactor?.stop();
 			this.reactor = null;
 			this._isProcessing = false;
+			this._resolveSettled = undefined;
 			this._resolveIdleWaiters();
 		}
 	}
@@ -227,7 +236,7 @@ export class EventSourcedRuntime {
 	 * Resolve when the current prompt cycle is fully settled.
 	 */
 	waitForIdle(): Promise<void> {
-		if (!this._isProcessing) return Promise.resolve();
+		if (!this._isProcessing && !this._idleCompaction) return Promise.resolve();
 		return new Promise((resolve) => {
 			this._turnCompletionWaiters.push(resolve);
 		});
@@ -255,11 +264,11 @@ export class EventSourcedRuntime {
 			payload: {},
 		});
 		this.reactor?.interrupt();
-		// The _waitUntilSettled subscription will resolve when AGENT_TURN_COMPLETED fires.
-		// But if no turn is running (or the turn fails before starting), we resolve immediately.
-		if (!this._isProcessing && this._resolveSettled) {
-			this._resolveSettled();
-		}
+		// Cancel a compaction running outside a prompt cycle (idle /compact).
+		this._idleCompactionAbort?.abort();
+		// The _waitUntilSettled subscription resolves when AGENT_TURN_COMPLETED fires;
+		// when idle there is no pending settled promise (_resolveSettled is cleared in
+		// prompt()'s finally), so nothing else to do here.
 	}
 
 	/**
@@ -268,10 +277,15 @@ export class EventSourcedRuntime {
 	 */
 	steer(text: string, images?: ImageContent[], files?: FileAttachment[]): void {
 		if (!this._isProcessing) {
-			this.store.append({
-				actor_id: "user",
-				type: "USER_MESSAGE",
-				payload: { content: text, images, files },
+			// Idle: there is no turn to interrupt and no live reactor to pick up a
+			// bare USER_MESSAGE — run it as a normal prompt cycle so it is actually
+			// answered. If we lose a race with a concurrent prompt(), queue it as a
+			// follow-up instead. Only the already-processing race is downgraded —
+			// real prompt failures (LLM/tool errors) must not be silently re-queued.
+			this.prompt(text, images, files).catch((err: unknown) => {
+				if (err instanceof Error && err.message.includes("already processing")) {
+					this.followUp(text, images, files);
+				}
 			});
 			return;
 		}
@@ -280,6 +294,40 @@ export class EventSourcedRuntime {
 			type: "USER_INTERRUPT",
 			payload: { content: text, images, files, reason: "steer" },
 		});
+	}
+
+	/** Queued follow-up/steer entries (empty when no reactor is alive). */
+	get pendingFollowUps(): Array<{ kind: "steer" | "followUp"; content: string | unknown[]; sourceEventId?: string }> {
+		return this.reactor?.pendingFollowUps ?? [];
+	}
+
+	/**
+	 * Clear the pending follow-up queue and record a USER_FOLLOWUP_DROPPED event so
+	 * reactor restarts do not resurrect the cleared messages. Returns the cleared
+	 * entries split by kind (for the UI to restore them into the editor).
+	 */
+	clearQueuedFollowUps(): {
+		steering: Array<{ content: string | unknown[]; sourceEventId?: string }>;
+		followUp: Array<{ content: string | unknown[]; sourceEventId?: string }>;
+	} {
+		const entries = this.reactor?.pendingFollowUps ?? [];
+		if (entries.length === 0) return { steering: [], followUp: [] };
+
+		this.reactor?.clearFollowUpQueue();
+		const droppedIds = entries
+			.map((e) => e.sourceEventId)
+			.filter((id): id is string => typeof id === "string");
+		if (droppedIds.length > 0) {
+			this.store.append({
+				actor_id: "runtime",
+				type: "USER_FOLLOWUP_DROPPED",
+				payload: { dropped_event_ids: droppedIds, reason: "user_clear" },
+			});
+		}
+		return {
+			steering: entries.filter((e) => e.kind === "steer").map(({ content, sourceEventId }) => ({ content, sourceEventId })),
+			followUp: entries.filter((e) => e.kind === "followUp").map(({ content, sourceEventId }) => ({ content, sourceEventId })),
+		};
 	}
 
 	/**
@@ -299,12 +347,96 @@ export class EventSourcedRuntime {
 	 * running; otherwise the request is recorded for the event stream.
 	 */
 	compact(options?: RuntimeCompactOptions): void {
-		this.store.append({
+		const requested = this.store.append({
 			actor_id: "user",
 			type: "COMPACTION_REQUESTED",
 			payload: {
 				reason: options?.reason ?? "manual",
 				token_count: options?.token_count ?? 0,
+			},
+		});
+		// A live reactor consumes COMPACTION_REQUESTED via its subscription. With
+		// no reactor (idle — the common case for a manual /compact between turns)
+		// the event used to be recorded and silently never handled. Run the
+		// compaction inline instead so idle /compact actually compacts.
+		if (!this.reactor && !this._idleCompaction) {
+			this._idleCompaction = this._runIdleCompaction(requested.event_id, options?.reason ?? "manual", options?.token_count ?? 0)
+				.finally(() => {
+					this._idleCompaction = undefined;
+					this._idleCompactionAbort = undefined;
+					this._resolveIdleWaiters();
+				});
+		}
+	}
+
+	/**
+	 * Execute a compaction outside any prompt cycle. Mirrors the reactor's
+	 * _onCompactionRequested handling (START → policy.compact → END/ABORTED)
+	 * so projections see the same event shapes regardless of who ran it.
+	 *
+	 * NEVER rejects: dispose() may close the store while a compaction is in
+	 * flight (shutdown between two of its appends), and every append below
+	 * then throws "database is not open". A rejection here used to escape as
+	 * an unhandled promise rejection (vitest fails the run on it). A
+	 * compaction that dies at shutdown is simply abandoned — the
+	 * COMPACTION_REQUESTED event stays in the log and the next run can
+	 * compact again.
+	 */
+	private async _runIdleCompaction(causedBy: string, reason: "manual" | "threshold" | "overflow", tokenCount: number): Promise<void> {
+		const abortController = new AbortController();
+		this._idleCompactionAbort = abortController;
+		try {
+			this.store.append({
+				actor_id: "compactor",
+				type: "COMPACTION_START",
+				payload: { token_count: tokenCount },
+				caused_by: causedBy,
+			});
+			const policy = this._buildCompactionPolicy(this.getProjection());
+			const outcome = await policy.compact(reason, abortController.signal);
+			this.store.append({
+				actor_id: "compactor",
+				type: "COMPACTION_END",
+				payload: {
+					summary: outcome.summary,
+					first_kept_event_id: outcome.first_kept_event_id,
+					tokens_before: outcome.tokens_before,
+					tokens_after: outcome.tokens_after,
+				},
+				caused_by: causedBy,
+			});
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			try {
+				this.store.append({
+					actor_id: "compactor",
+					type: "COMPACTION_ABORTED",
+					payload: {
+						reason: abortController.signal.aborted ? "user_cancelled" : "error",
+						message: msg,
+						token_count: tokenCount,
+					},
+					caused_by: causedBy,
+				});
+			} catch (appendErr) {
+				// The store is already closed (runtime disposed mid-compaction) —
+				// there is nothing left to record the abort on. Expected at
+				// shutdown; not an error.
+				const appendMsg = appendErr instanceof Error ? appendErr.message : String(appendErr);
+				console.warn(`Idle compaction failed (${msg}) and its COMPACTION_ABORTED event could not be recorded: ${appendMsg}`);
+			}
+		}
+	}
+
+	private _buildCompactionPolicy(projection: SessionProjection): import("./policies.js").CompactionPolicy {
+		return this.config.compactionPolicy ?? new CompactionEngine({
+			store: this.store,
+			projection,
+			llmClient: this.config.llmClient,
+			model: this.config.model,
+			settings: {
+				contextWindow: this.config.contextBudget ?? 128000,
+				...this.config.compactionEngineSettings,
 			},
 		});
 	}
@@ -391,9 +523,10 @@ export class EventSourcedRuntime {
 	}
 	/**
 	 * Toggle safe mode at runtime. When on, risky tool calls require explicit
-	 * user approval before executing.
+	 * user approval before executing. Pass `undefined` to defer to the
+	 * per-category require_approval_* gates the runtime was configured with.
 	 */
-	setSafeMode(enabled: boolean): void {
+	setSafeMode(enabled: boolean | undefined): void {
 		this.classifier.setSafeMode(enabled);
 	}
 
@@ -418,7 +551,7 @@ export class EventSourcedRuntime {
 	 * Wait until the reactor has settled — i.e. an AGENT_TURN_COMPLETED fires AND
 	 * no further USER_MESSAGE has been appended in the same tick (e.g. by follow-up draining).
 	 */
-	private _waitUntilSettled(): Promise<void> {
+	private _waitUntilSettled(threadId?: () => string | undefined): Promise<void> {
 		return new Promise<void>((resolve) => {
 			this._resolveSettled = resolve;
 			let pendingCheck = false;
@@ -432,9 +565,17 @@ export class EventSourcedRuntime {
 						if (followUpsRemaining > 0) return;
 						const retriesRemaining = this.reactor?.pendingRetryCount ?? 0;
 						if (retriesRemaining > 0) return;
-						const lastMsg = this.store.query({ types: ["USER_MESSAGE"], reverse: true, limit: 1 })[0];
+						// A compaction triggered by the completed turn may still be running —
+						// the runtime is not idle until it finishes (it may deliver follow-ups
+						// queued while it ran).
+						if (this.reactor?.isCompacting) return;
+						// Scope to this prompt's thread so concurrent threads on the same
+						// store cannot stall (or prematurely settle) this wait.
+						const thread = threadId?.();
+						const lastMsg = this.store.query({ types: ["USER_MESSAGE"], thread_id: thread, reverse: true, limit: 1 })[0];
 						const lastCompleted = this.store.query({
 							types: ["AGENT_TURN_COMPLETED"],
+							thread_id: thread,
 							reverse: true,
 							limit: 1,
 						})[0];
@@ -443,7 +584,9 @@ export class EventSourcedRuntime {
 						resolve();
 					});
 				},
-				{ types: ["AGENT_TURN_COMPLETED"] },
+				// COMPACTION_END/ABORTED re-run the check so we don't hang when compaction
+				// outlives the last AGENT_TURN_COMPLETED.
+				{ types: ["AGENT_TURN_COMPLETED", "COMPACTION_END", "COMPACTION_ABORTED"] },
 			);
 			this._turnSubscription = unsub;
 		});
@@ -577,6 +720,10 @@ export class EventSourcedRuntime {
 	 * Dispose the runtime.
 	 */
 	dispose(): void {
+		// Cancel an in-flight idle compaction before the store goes away. Its
+		// remaining appends then fail closed inside _runIdleCompaction (which
+		// never rejects), so nothing escapes as an unhandled rejection here.
+		this._idleCompactionAbort?.abort();
 		this.sessionManager?.dispose();
 		if (this.ownsStore) {
 			(this.store as { close?: () => void }).close?.();

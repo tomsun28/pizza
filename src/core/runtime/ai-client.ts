@@ -8,6 +8,10 @@ import type {
 	ToolCall,
 } from "@earendil-works/pi-ai/compat";
 import type { LLMChunk, LLMClient, ModelConfig } from "./llm-types.js";
+import { annotateVagueError, wrapFetchWithDiagnostics } from "./network-diagnostics.js";
+
+/** Shared diagnostics-wrapped fetch so network failures are recorded. */
+const diagnosticsFetch = wrapFetchWithDiagnostics();
 
 export type AiStreamFn = (
 	model: Model<any>,
@@ -46,6 +50,11 @@ export function buildLlmClientFromStreamFn(
 		transport?: any;
 		onPayload?: any;
 		onResponse?: any;
+		/**
+		 * Optional fetch override for provider HTTP requests. Defaults to a
+		 * diagnostics-wrapped global fetch so transport failures can be annotated.
+		 */
+		fetch?: typeof globalThis.fetch;
 	},
 ): LLMClient {
 	return {
@@ -96,6 +105,10 @@ export function buildLlmClientFromStreamFn(
 					onResponse: options?.onResponse,
 					thinkingBudgets: options?.thinkingBudgets,
 					transport: options?.transport,
+					// Wrap provider HTTP in the diagnostics fetch so transport-level
+					// failures (DNS/TLS/refused/timeout) are recorded and can be
+					// attached to vague error messages like "Connection error.".
+					fetch: options?.fetch ?? diagnosticsFetch,
 					// Pass the live thinking level so pi-ai maps it into the provider
 					// payload (zai/openrouter/etc.). Without this, streamSimple sees
 					// options.reasoning === undefined and always emits thinking disabled.
@@ -204,7 +217,7 @@ export function buildLlmClientFromStreamFn(
 					: finalMessage.stopReason === "toolUse"
 						? "tool_use"
 						: (finalMessage.stopReason as any),
-				errorMessage: finalMessage.errorMessage,
+				errorMessage: annotateVagueError(finalMessage.errorMessage),
 			};
 		},
 	};

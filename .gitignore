@@ -57,3 +57,4 @@ docs/
 # tooling to read, but never tracked or pushed to PRs)
 /AGENTS.md
 /CLAUDE.md
+.pizza/

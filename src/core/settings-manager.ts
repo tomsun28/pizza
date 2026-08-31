@@ -1,5 +1,6 @@
-import type { Transport } from "@earendil-works/pi-ai/compat";
+import type { CacheRetention, Transport } from "@earendil-works/pi-ai/compat";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { ConfigFileVersionTracker } from "./config-file-version.js";
 import { homedir } from "os";
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
@@ -22,6 +23,18 @@ export interface RetrySettings {
 	maxRetries?: number; // default: 3
 	baseDelayMs?: number; // default: 2000 (exponential backoff: 2s, 4s, 8s)
 	maxDelayMs?: number; // default: 60000 (max server-requested delay before failing)
+}
+
+/**
+ * Per-category approval gates. These only take effect when `safeMode` is
+ * `"auto"` (the default when unset) — with `safeMode: true` every risky call
+ * is gated, and with an explicit `safeMode: false` nothing is gated.
+ */
+export interface ApprovalSettings {
+	writes?: boolean; // default: true  - approve before file writes
+	edits?: boolean; // default: true  - approve before file edits
+	shellModerate?: boolean; // default: false - approve before ordinary shell commands
+	unknown?: boolean; // default: true  - approve before unrecognized tools
 }
 
 export interface TerminalSettings {
@@ -47,6 +60,12 @@ export interface MarkdownSettings {
 }
 
 export type TransportSetting = Transport;
+
+/**
+ * Global prompt cache retention default. Per-provider/per-model
+ * `cacheRetention` in models.json takes precedence over this.
+ */
+export type CacheRetentionSetting = CacheRetention;
 
 /**
  * Package source for npm/git packages.
@@ -90,12 +109,20 @@ export interface Settings {
 	defaultModel?: string;
 	defaultThinkingLevel?: PersistableThinkingLevel;
 	transport?: TransportSetting; // default: "sse"
+	// Prompt cache retention default. Unset means pi-ai's own default ("short").
+	// Set to "none" for relay gateways that reject cache_control requests.
+	cacheRetention?: CacheRetentionSetting;
 	theme?: string;
 	compaction?: CompactionSettings;
 	branchSummary?: BranchSummarySettings;
 	retry?: RetrySettings;
 	hideThinkingBlock?: boolean;
-	safeMode?: boolean; // default: false - when true, risky tool calls require explicit approval (safe mode)
+	// Master toggle for tool approval. Default: false.
+	//   true   - every risky tool call requires explicit approval
+	//   false  - nothing is gated; tools auto-run
+	//   "auto" - defer to the per-category `approvals` gates below
+	safeMode?: boolean | "auto";
+	approvals?: ApprovalSettings; // per-category gates; only consulted when safeMode is "auto"
 	shellPath?: string; // Custom shell path (e.g., for Cygwin users on Windows)
 	quietStartup?: boolean;
 	shellCommandPrefix?: string; // Prefix prepended to every bash command (e.g., "shopt -s expand_aliases" for alias support)
@@ -160,6 +187,13 @@ export type SettingsScope = "global" | "project";
 
 export interface SettingsStorage {
 	withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void;
+	/**
+	 * Path backing a scope, when the storage is file-backed.
+	 *
+	 * Optional on purpose: in-memory storage has no file to watch, and returning
+	 * undefined disables change detection instead of forcing a fake path.
+	 */
+	getPath?(scope: SettingsScope): string | undefined;
 }
 
 export interface SettingsError {
@@ -174,6 +208,10 @@ export class FileSettingsStorage implements SettingsStorage {
 	constructor(cwd: string, agentDir: string) {
 		this.globalSettingsPath = join(agentDir, "settings.json");
 		this.projectSettingsPath = join(cwd, CONFIG_DIR_NAME, "settings.json");
+	}
+
+	getPath(scope: SettingsScope): string {
+		return scope === "global" ? this.globalSettingsPath : this.projectSettingsPath;
 	}
 
 	private acquireLockSyncWithRetry(path: string): () => void {
@@ -255,7 +293,12 @@ export class SettingsManager {
 	private storage: SettingsStorage;
 	private globalSettings: Settings;
 	private projectSettings: Settings;
-	private settings: Settings;
+	/** Merged view of global + project + overrides; read through the `settings` getter. */
+	private mergedSettings: Settings = {};
+	/** CLI/runtime overrides, reapplied after every reload so edits cannot drop them. */
+	private overrides: Partial<Settings> | undefined;
+	private versions = new ConfigFileVersionTracker();
+	private reloading = false;
 	private modifiedFields = new Set<keyof Settings>(); // Track global fields modified during session
 	private modifiedNestedFields = new Map<keyof Settings, Set<string>>(); // Track global nested field modifications
 	private modifiedProjectFields = new Set<keyof Settings>(); // Track project fields modified during session
@@ -279,7 +322,9 @@ export class SettingsManager {
 		this.globalSettingsLoadError = globalLoadError;
 		this.projectSettingsLoadError = projectLoadError;
 		this.errors = [...initialErrors];
-		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+		this.recomputeMerged();
+		this.recordVersion("global");
+		this.recordVersion("project");
 	}
 
 	/** Create a SettingsManager that loads from files */
@@ -383,35 +428,105 @@ export class SettingsManager {
 
 	async reload(): Promise<void> {
 		await this.writeQueue;
-		const globalLoad = SettingsManager.tryLoadFromStorage(this.storage, "global");
-		if (!globalLoad.error) {
-			this.globalSettings = globalLoad.settings;
-			this.globalSettingsLoadError = null;
-		} else {
-			this.globalSettingsLoadError = globalLoad.error;
-			this.recordError("global", globalLoad.error);
+		this.reloading = true;
+		try {
+			this.reloadScope("global");
+
+			this.modifiedFields.clear();
+			this.modifiedNestedFields.clear();
+			this.modifiedProjectFields.clear();
+			this.modifiedProjectNestedFields.clear();
+
+			this.reloadScope("project");
+			this.recomputeMerged();
+		} finally {
+			this.reloading = false;
 		}
-
-		this.modifiedFields.clear();
-		this.modifiedNestedFields.clear();
-		this.modifiedProjectFields.clear();
-		this.modifiedProjectNestedFields.clear();
-
-		const projectLoad = SettingsManager.tryLoadFromStorage(this.storage, "project");
-		if (!projectLoad.error) {
-			this.projectSettings = projectLoad.settings;
-			this.projectSettingsLoadError = null;
-		} else {
-			this.projectSettingsLoadError = projectLoad.error;
-			this.recordError("project", projectLoad.error);
-		}
-
-		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
 	}
 
 	/** Apply additional overrides on top of current settings */
 	applyOverrides(overrides: Partial<Settings>): void {
-		this.settings = deepMergeSettings(this.settings, overrides);
+		// Overrides are kept as their own layer instead of being folded into the
+		// merged snapshot: a hot reload rebuilds the merge from disk, and CLI
+		// overrides must outlive that rebuild.
+		this.overrides = this.overrides ? deepMergeSettings(this.overrides, overrides) : overrides;
+		this.recomputeMerged();
+	}
+
+	/** Rebuild the merged view from its layers: global < project < overrides. */
+	private recomputeMerged(): void {
+		const base = deepMergeSettings(this.globalSettings, this.projectSettings);
+		this.mergedSettings = this.overrides ? deepMergeSettings(base, this.overrides) : base;
+	}
+
+	private recordVersion(scope: SettingsScope): void {
+		this.versions.record(scope, this.storage.getPath?.(scope));
+	}
+
+	/** Load one scope from storage, keeping the last good values if it fails to parse. */
+	private reloadScope(scope: SettingsScope): void {
+		const load = SettingsManager.tryLoadFromStorage(this.storage, scope);
+		this.recordVersion(scope);
+
+		if (load.error) {
+			// A half-written or malformed file must not wipe working settings:
+			// record the error and keep serving what we already had.
+			if (scope === "global") {
+				this.globalSettingsLoadError = load.error;
+			} else {
+				this.projectSettingsLoadError = load.error;
+			}
+			this.recordError(scope, load.error);
+			return;
+		}
+
+		if (scope === "global") {
+			this.globalSettings = load.settings;
+			this.globalSettingsLoadError = null;
+		} else {
+			this.projectSettings = load.settings;
+			this.projectSettingsLoadError = null;
+		}
+	}
+
+	/**
+	 * The merged settings every getter reads. Each access first checks whether
+	 * settings.json changed on disk, so hand edits — or writes from another
+	 * running instance — take effect without a restart.
+	 */
+	private get settings(): Settings {
+		this.reloadIfChanged();
+		return this.mergedSettings;
+	}
+
+	private set settings(value: Settings) {
+		this.mergedSettings = value;
+	}
+
+	/**
+	 * Reload the scopes whose file changed since we last read or wrote it.
+	 *
+	 * Skipped while a save is pending: those in-memory edits have not reached
+	 * disk yet, so reloading would resurrect the old values and lose them.
+	 */
+	private reloadIfChanged(): void {
+		if (this.reloading) return;
+		if (!this.storage.getPath) return; // non-file storage has nothing to watch
+		if (this.modifiedFields.size > 0 || this.modifiedProjectFields.size > 0) return;
+
+		const scopes: SettingsScope[] = ["global", "project"];
+		const stale = scopes.filter((scope) => this.versions.hasChanged(scope, this.storage.getPath?.(scope)));
+		if (stale.length === 0) return;
+
+		this.reloading = true;
+		try {
+			for (const scope of stale) {
+				this.reloadScope(scope);
+			}
+			this.recomputeMerged();
+		} finally {
+			this.reloading = false;
+		}
 	}
 
 	/** Mark a global field as modified during this session */
@@ -457,6 +572,9 @@ export class SettingsManager {
 			.then(() => {
 				task();
 				this.clearModifiedScope(scope);
+				// Record our own write so the next read does not mistake it for an
+				// external edit and reload needlessly.
+				this.recordVersion(scope);
 			})
 			.catch((error) => {
 				this.recordError(scope, error);
@@ -503,7 +621,7 @@ export class SettingsManager {
 	}
 
 	private save(): void {
-		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+		this.recomputeMerged();
 
 		if (this.globalSettingsLoadError) {
 			return;
@@ -520,7 +638,7 @@ export class SettingsManager {
 
 	private saveProjectSettings(settings: Settings): void {
 		this.projectSettings = structuredClone(settings);
-		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+		this.recomputeMerged();
 
 		if (this.projectSettingsLoadError) {
 			return;
@@ -626,6 +744,17 @@ export class SettingsManager {
 		this.save();
 	}
 
+	/** Undefined means "not configured" so pi-ai keeps its own default. */
+	getCacheRetention(): CacheRetentionSetting | undefined {
+		return this.settings.cacheRetention;
+	}
+
+	setCacheRetention(retention: CacheRetentionSetting): void {
+		this.globalSettings.cacheRetention = retention;
+		this.markModified("cacheRetention");
+		this.save();
+	}
+
 	getCompactionEnabled(): boolean {
 		return this.settings.compaction?.enabled ?? true;
 	}
@@ -688,11 +817,61 @@ export class SettingsManager {
 		};
 	}
 
+	/**
+	 * Whether safe mode is explicitly ON. `"auto"` reports false here because the
+	 * UI toggle is binary — use {@link getSafeModeSetting} to read the raw value.
+	 */
 	getSafeMode(): boolean {
-		return this.settings.safeMode ?? false;
+		return this.settings.safeMode === true;
 	}
 
-	setSafeMode(enabled: boolean): void {
+	/**
+	 * Raw tri-state safe-mode setting: `true` | `false` | `undefined`.
+	 * `"auto"` maps to `undefined`, which tells the classifier to fall back to the
+	 * per-category `approvals` gates instead of forcing a blanket answer.
+	 *
+	 * DEFAULT CHANGED (security): an unset safeMode now defaults to "auto"
+	 * (per-category gates: writes/edits/unknown gated, moderate shell auto-runs)
+	 * instead of false (everything auto-runs, including dangerous shell).
+	 * The old default disabled approval for ALL risk levels — combined with
+	 * prompt-injection surfaces (tell, cron, file content) that was an
+	 * unauthenticated command-execution chain. Explicit `safeMode: false` in
+	 * settings.json still means what it says — only the unset default moved.
+	 * Headless callers that need the old behavior pass an explicit default via
+	 * {@link getSafeModeSettingWithDefault}.
+	 */
+	getSafeModeSetting(): boolean | undefined {
+		return this.getSafeModeSettingWithDefault("auto");
+	}
+
+	/**
+	 * Like {@link getSafeModeSetting} but with a caller-chosen default for when
+	 * settings.json does not set safeMode. Modes without an approval UI (print)
+	 * pass `false` to keep one-shot automation runnable; interactive/GUI/rpc
+	 * use the "auto" default.
+	 */
+	getSafeModeSettingWithDefault(defaultValue: boolean | "auto"): boolean | undefined {
+		const value = this.settings.safeMode ?? defaultValue;
+		return value === "auto" ? undefined : value;
+	}
+
+	/** Per-category approval gates; only consulted when safeMode is `"auto"`. */
+	getApprovalSettings(): {
+		writes: boolean;
+		edits: boolean;
+		shellModerate: boolean;
+		unknown: boolean;
+	} {
+		const approvals = this.settings.approvals;
+		return {
+			writes: approvals?.writes ?? true,
+			edits: approvals?.edits ?? true,
+			shellModerate: approvals?.shellModerate ?? false,
+			unknown: approvals?.unknown ?? true,
+		};
+	}
+
+	setSafeMode(enabled: boolean | "auto"): void {
 		this.globalSettings.safeMode = enabled;
 		this.markModified("safeMode");
 		this.save();

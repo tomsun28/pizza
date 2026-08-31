@@ -6,10 +6,8 @@
  * - Direct calls from modes that need bash execution
  */
 
-import { randomBytes } from "node:crypto";
 import { createWriteStream, type WriteStream } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { makePrivateLogPath, PRIVATE_LOG_MODE } from "../utils/temp-files.js";
 import stripAnsi from "strip-ansi";
 import { sanitizeBinaryOutput } from "../utils/shell.js";
 import type { BashOperations } from "./tools/bash.js";
@@ -65,9 +63,8 @@ export async function executeBashWithOperations(
 		if (tempFilePath) {
 			return;
 		}
-		const id = randomBytes(8).toString("hex");
-		tempFilePath = join(tmpdir(), `pizza-bash-${id}.log`);
-		tempFileStream = createWriteStream(tempFilePath);
+		tempFilePath = makePrivateLogPath("bash");
+		tempFileStream = createWriteStream(tempFilePath, { mode: PRIVATE_LOG_MODE });
 		for (const chunk of outputChunks) {
 			tempFileStream.write(chunk);
 		}

@@ -58,6 +58,7 @@ export async function runGuiModeWithFacade(facade: SessionFacade, options: GuiMo
 		void handleRequest(req, res, {
 			facade,
 			cwd: options.cwd,
+			host,
 			clients,
 			nextClientId: () => nextClientId++,
 		});
@@ -101,18 +102,75 @@ export async function runGuiModeWithFacade(facade: SessionFacade, options: GuiMo
 	return new Promise<never>(() => {});
 }
 
+/**
+ * Hostnames that always identify the local machine.
+ */
+export function isLoopbackHostname(hostname: string): boolean {
+	const h = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+	return h === "localhost" || h === "::1" || /^127(?:\.\d{1,3}){3}$/.test(h);
+}
+
+/**
+ * Guard against browser-driven cross-origin attacks (CSRF / DNS rebinding).
+ *
+ * The bridge has no authentication and drives an agent with full shell access,
+ * so a page at https://evil.com must not be able to POST to it. Two checks:
+ *
+ *  - `Host` must name this machine (or the host we were explicitly bound to),
+ *    which defeats DNS rebinding (`evil.com` resolving to 127.0.0.1).
+ *  - `Origin`, when present, must also be local. Browsers attach `Origin` to
+ *    every cross-origin POST, so this rejects the attack while leaving
+ *    non-browser clients (curl, scripts) — which send no `Origin` — working.
+ *
+ * Returns an error string when the request must be refused.
+ */
+export function checkRequestOrigin(req: IncomingMessage, boundHost: string): string | undefined {
+	const allowedHost = boundHost.toLowerCase();
+
+	const hostHeader = req.headers.host;
+	if (hostHeader) {
+		const hostname = new URL(`http://${hostHeader}`).hostname;
+		if (!isLoopbackHostname(hostname) && hostname.toLowerCase() !== allowedHost) {
+			return "Invalid Host header";
+		}
+	}
+
+	const origin = req.headers.origin;
+	// Some browsers send the literal "null" origin (sandboxed iframes, file://).
+	if (origin && origin !== "null") {
+		let originHostname: string;
+		try {
+			originHostname = new URL(origin).hostname;
+		} catch {
+			return "Invalid Origin header";
+		}
+		if (!isLoopbackHostname(originHostname) && originHostname.toLowerCase() !== allowedHost) {
+			return "Cross-origin request blocked";
+		}
+	}
+
+	return undefined;
+}
+
 async function handleRequest(
 	req: IncomingMessage,
 	res: ServerResponse,
 	context: {
 		facade: SessionFacade;
 		cwd: string;
+		host: string;
 		clients: Map<number, SseClient>;
 		nextClientId: () => number;
 	},
 ): Promise<void> {
 	const method = req.method ?? "GET";
 	const url = new URL(req.url ?? "/", "http://localhost");
+
+	const originError = checkRequestOrigin(req, context.host);
+	if (originError) {
+		sendJson(res, { success: false, error: originError }, 403);
+		return;
+	}
 
 	try {
 		if (method === "GET" && url.pathname === "/") {
@@ -146,6 +204,11 @@ async function handleRequest(
 		}
 
 		if (method === "POST" && url.pathname === "/api/prompt") {
+			const contentTypeError = checkJsonContentType(req);
+			if (contentTypeError) {
+				sendJson(res, { success: false, error: contentTypeError }, 415);
+				return;
+			}
 			const body = await readJsonBody(req);
 			const message = typeof body.message === "string" ? body.message.trim() : "";
 			const behavior = body.behavior;
@@ -170,6 +233,11 @@ async function handleRequest(
 		}
 
 		if (method === "POST" && url.pathname === "/api/abort") {
+			const contentTypeError = checkJsonContentType(req);
+			if (contentTypeError) {
+				sendJson(res, { success: false, error: contentTypeError }, 415);
+				return;
+			}
 			context.facade.abort();
 			sendJson(res, { success: true });
 			return;
@@ -225,6 +293,24 @@ function normalizeInitialImages(
 		data: image.data,
 		mime_type: image.mime_type ?? image.mimeType ?? "application/octet-stream",
 	}));
+}
+
+/**
+ * Require a JSON content type on state-changing requests.
+ *
+ * `application/json` is not a CORS-"simple" content type, so a cross-origin
+ * browser POST carrying it must first pass a preflight — which our missing
+ * CORS headers deny. Without this check an attacker page could POST
+ * `text/plain` containing JSON and skip the preflight entirely.
+ */
+export function checkJsonContentType(req: IncomingMessage): string | undefined {
+	const raw = req.headers["content-type"];
+	if (!raw) return "Content-Type: application/json is required";
+	const mime = raw.split(";", 1)[0]!.trim().toLowerCase();
+	if (mime !== "application/json") {
+		return "Content-Type: application/json is required";
+	}
+	return undefined;
 }
 
 function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
