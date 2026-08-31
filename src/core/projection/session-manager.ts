@@ -9,6 +9,14 @@ import type { EventStore } from "../event-store/store.js";
 import { isSessionStore, type SessionStore } from "../event-store/session-store.js";
 import type { SessionDescriptor, SessionIndex, ThreadDescriptor } from "./types.js";
 import { SessionProjection } from "./session-projection.js";
+import { randomBytes } from "node:crypto";
+
+/** 8-char crypto-random id suffix. Math.random() gave two concurrent
+ * processes (CLI + gateway) a realistic collision window on session ids;
+ * crypto randomness removes it. */
+function cryptoRandomSuffix(): string {
+	return randomBytes(6).toString("base64url").slice(0, 8).replace(/[-_]/g, "0");
+}
 
 export interface CreateProjectionSessionOptions {
 	parentSessionId?: string;
@@ -550,8 +558,7 @@ export class SessionManager {
 
 	private _generateSessionId(): string {
 		const timestamp = Date.now().toString(36);
-		const random = Math.random().toString(36).slice(2, 10);
-		return `sess_${timestamp}_${random}`;
+		return `sess_${timestamp}_${cryptoRandomSuffix()}`;
 	}
 
 	/** Create a thread record (no session). Used by createThread and createSession auto-thread fallback. The status defaults to active; pass background for scheduler threads. */
@@ -589,7 +596,6 @@ export class SessionManager {
 
 	private _generateThreadId(): string {
 		const timestamp = Date.now().toString(36);
-		const random = Math.random().toString(36).slice(2, 10);
-		return `thread_${timestamp}_${random}`;
+		return `thread_${timestamp}_${cryptoRandomSuffix()}`;
 	}
 }

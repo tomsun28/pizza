@@ -77,25 +77,18 @@ export class SqliteSessionStore implements SessionStore {
 				);
 			}
 
-			const validThreadIds = index.threads.map((t) => t.thread_id);
-			const validSessionIds = index.sessions.map((s) => s.session_id);
-			this._deleteStale("threads", "thread_id", validThreadIds);
-			this._deleteStale("sessions", "session_id", validSessionIds);
-
+			// Upsert-only, NO stale-row deletion. The in-memory index of one process
+			// is not the full picture: a concurrent process (CLI + gateway coexist on
+			// the same workspace by design) may have created sessions this process
+			// never loaded. Deleting "unknown" rows here silently destroyed the other
+			// process's sessions on every persist (last-writer-wins data loss).
+			// SessionManager never deletes sessions, so nothing legitimately relied
+			// on the old delete-stale behavior.
 			this.db.exec("commit");
 		} catch (error) {
 			this.db.exec("rollback");
 			throw error;
 		}
-	}
-
-	private _deleteStale(table: string, idColumn: string, validIds: string[]): void {
-		if (validIds.length === 0) {
-			this.db.exec(`delete from ${table}`);
-			return;
-		}
-		const placeholders = validIds.map(() => "?").join(", ");
-		this.db.prepare(`delete from ${table} where ${idColumn} not in (${placeholders})`).run(...validIds);
 	}
 
 	private _initSchema(): void {

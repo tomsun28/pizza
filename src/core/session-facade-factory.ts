@@ -41,6 +41,7 @@ import { SessionManager as ProjectionSessionManager } from "./projection/session
 import { DefaultResourceLoader, type ResourceLoader } from "./resource-loader.js";
 import type { LLMClient, ToolDefinition as RuntimeToolDefinition } from "./runtime/llm-types.js";
 import { buildLlmClientFromStreamFn, toModelConfig } from "./runtime/ai-client.js";
+import { recoverDanglingTurnState } from "./runtime/crash-recovery.js";
 import { DefaultRetryPolicy } from "./runtime/policies.js";
 import { EventSourcedRuntime } from "./runtime/runtime.js";
 import { SessionFacade } from "./session-facade.js";
@@ -388,6 +389,23 @@ export async function createSessionFacade(
 		workspaceId,
 		options.storagePath ?? getEventDatabasePath(workspaceId, options.agentDir),
 	);
+	// Compensate turn state left dangling by a crashed previous process
+	// (unclosed TOOL_EXECUTION_START, tool_calls with no result, missing
+	// AGENT_TURN_COMPLETED). Only safe when we are the sole workspace driver:
+	// with a concurrent live process an in-flight tool is indistinguishable
+	// from a crashed one.
+	if (workspaceLock || isMainAgent || options.storagePath === ":memory:") {
+		try {
+			const recovered = recoverDanglingTurnState(store);
+			if (recovered.compensated_tool_call_ids.length > 0) {
+				console.warn(
+					`Recovered ${recovered.compensated_tool_call_ids.length} tool call(s) interrupted by a previous crash.`,
+				);
+			}
+		} catch (error) {
+			console.warn(`Crash recovery scan failed: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
 	const sessionManager = new ProjectionSessionManager(
 		store,
 		store,
