@@ -373,17 +373,25 @@ export class EventSourcedRuntime {
 	 * Execute a compaction outside any prompt cycle. Mirrors the reactor's
 	 * _onCompactionRequested handling (START → policy.compact → END/ABORTED)
 	 * so projections see the same event shapes regardless of who ran it.
+	 *
+	 * NEVER rejects: dispose() may close the store while a compaction is in
+	 * flight (shutdown between two of its appends), and every append below
+	 * then throws "database is not open". A rejection here used to escape as
+	 * an unhandled promise rejection (vitest fails the run on it). A
+	 * compaction that dies at shutdown is simply abandoned — the
+	 * COMPACTION_REQUESTED event stays in the log and the next run can
+	 * compact again.
 	 */
 	private async _runIdleCompaction(causedBy: string, reason: "manual" | "threshold" | "overflow", tokenCount: number): Promise<void> {
 		const abortController = new AbortController();
 		this._idleCompactionAbort = abortController;
-		this.store.append({
-			actor_id: "compactor",
-			type: "COMPACTION_START",
-			payload: { token_count: tokenCount },
-			caused_by: causedBy,
-		});
 		try {
+			this.store.append({
+				actor_id: "compactor",
+				type: "COMPACTION_START",
+				payload: { token_count: tokenCount },
+				caused_by: causedBy,
+			});
 			const policy = this._buildCompactionPolicy(this.getProjection());
 			const outcome = await policy.compact(reason, abortController.signal);
 			this.store.append({
@@ -399,16 +407,24 @@ export class EventSourcedRuntime {
 			});
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
-			this.store.append({
-				actor_id: "compactor",
-				type: "COMPACTION_ABORTED",
-				payload: {
-					reason: abortController.signal.aborted ? "user_cancelled" : "error",
-					message: msg,
-					token_count: tokenCount,
-				},
-				caused_by: causedBy,
-			});
+			try {
+				this.store.append({
+					actor_id: "compactor",
+					type: "COMPACTION_ABORTED",
+					payload: {
+						reason: abortController.signal.aborted ? "user_cancelled" : "error",
+						message: msg,
+						token_count: tokenCount,
+					},
+					caused_by: causedBy,
+				});
+			} catch (appendErr) {
+				// The store is already closed (runtime disposed mid-compaction) —
+				// there is nothing left to record the abort on. Expected at
+				// shutdown; not an error.
+				const appendMsg = appendErr instanceof Error ? appendErr.message : String(appendErr);
+				console.warn(`Idle compaction failed (${msg}) and its COMPACTION_ABORTED event could not be recorded: ${appendMsg}`);
+			}
 		}
 	}
 
@@ -704,6 +720,10 @@ export class EventSourcedRuntime {
 	 * Dispose the runtime.
 	 */
 	dispose(): void {
+		// Cancel an in-flight idle compaction before the store goes away. Its
+		// remaining appends then fail closed inside _runIdleCompaction (which
+		// never rejects), so nothing escapes as an unhandled rejection here.
+		this._idleCompactionAbort?.abort();
 		this.sessionManager?.dispose();
 		if (this.ownsStore) {
 			(this.store as { close?: () => void }).close?.();

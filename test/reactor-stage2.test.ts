@@ -653,6 +653,62 @@ describe("Reactor stage-2: policies + queues", () => {
 		runtime.dispose();
 	});
 
+	it("dispose during an idle compaction leaves no unhandled rejection", async () => {
+		const cwd = makeTempDir();
+		let releaseCompact: (() => void) | undefined;
+
+		const runtime = new EventSourcedRuntime({
+			cwd,
+			agentDir: cwd,
+			toolRegistry: emptyRegistry,
+			llmClient: {
+				async complete(): Promise<LLMResponse> {
+					throw new Error("not used");
+				},
+			},
+			systemPrompt: "",
+			model: { provider: "test", model_id: "test" },
+			tools: [],
+			compactionPolicy: {
+				estimateContextTokens: () => 0,
+				contextWindow: () => 1000,
+				threshold: () => 1,
+				isOverflow: () => false,
+				async compact() {
+					// Block until the test has disposed the runtime, then fail —
+					// forcing the catch path below to append on a closed store.
+					await new Promise<void>((resolve) => {
+						releaseCompact = resolve;
+					});
+					throw new Error("compaction failed after dispose");
+				},
+			},
+		});
+
+		const unhandled: unknown[] = [];
+		const onUnhandled = (reason: unknown): void => {
+			unhandled.push(reason);
+		};
+		process.on("unhandledRejection", onUnhandled);
+		try {
+			runtime.compact({ token_count: 100 });
+			expect(releaseCompact).toBeTypeOf("function");
+
+			// Close the store while the compaction is in flight, then let the
+			// failure surface. Before the fix, the COMPACTION_ABORTED append in
+			// the catch path threw "database is not open" and the rejection
+			// escaped _runIdleCompaction as an unhandled rejection.
+			runtime.dispose();
+			releaseCompact!();
+			await new Promise((resolve) => setImmediate(resolve));
+			await new Promise((resolve) => setImmediate(resolve));
+
+			expect(unhandled).toEqual([]);
+		} finally {
+			process.off("unhandledRejection", onUnhandled);
+		}
+	});
+
 	// ────────────────────────────────────────────────────────────────────────
 	// Compaction policy
 	// ────────────────────────────────────────────────────────────────────────
