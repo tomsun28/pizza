@@ -162,7 +162,15 @@ async function resolveSessionPath(sessionArg: string, cwd: string, agentDir: str
 	const localMatches = localSessions.filter((s) => s.id.startsWith(sessionArg) || s.path === sessionArg);
 
 	if (localMatches.length >= 1) {
-		return { type: "local", path: localMatches[0].path };
+		const chosen = localMatches.find((s) => s.id === sessionArg) ?? localMatches[0];
+		if (localMatches.length > 1 && chosen.id !== sessionArg) {
+			console.error(
+				chalk.yellow(
+					`Warning: "${sessionArg}" matches ${localMatches.length} sessions (${localMatches.map((s) => s.id.slice(0, 12)).join(", ")}…) — using ${chosen.id}. Use a longer prefix to disambiguate.`,
+				),
+			);
+		}
+		return { type: "local", path: chosen.path };
 	}
 
 	// Try global search across all projects
@@ -170,7 +178,14 @@ async function resolveSessionPath(sessionArg: string, cwd: string, agentDir: str
 	const globalMatches = allSessions.filter((s) => s.id.startsWith(sessionArg) || s.path === sessionArg);
 
 	if (globalMatches.length >= 1) {
-		const match = globalMatches[0];
+		const match = globalMatches.find((s) => s.id === sessionArg) ?? globalMatches[0];
+		if (globalMatches.length > 1 && match.id !== sessionArg) {
+			console.error(
+				chalk.yellow(
+					`Warning: "${sessionArg}" matches ${globalMatches.length} sessions across projects — using ${match.id} (${match.cwd}). Use a longer prefix to disambiguate.`,
+				),
+			);
+		}
 		return { type: "global", path: match.path, cwd: match.cwd };
 	}
 
@@ -606,6 +621,35 @@ export async function main(args: string[], options?: MainOptions) {
 		process.exit(0);
 	}
 
+	// Shared createSessionFacade() options for all four app modes (rpc /
+	// interactive / gui / print). Defined as a closure so each mode reads the
+	// same resolved CLI/session state.
+	const buildFacadeOptions = () => ({
+		cwd: target.cwd,
+		agentDir: sessionStorageAgentDir,
+		authStorage,
+		settingsManager,
+		modelRegistry,
+		resourceLoader,
+		model: sessionOptions.model,
+		thinkingLevel: sessionOptions.thinkingLevel,
+		tools: sessionOptions.tools,
+		customTools: sessionOptions.customTools,
+		storagePath: parsed.noSession ? ":memory:" : undefined,
+		workspaceId: target.workspaceId,
+		sessionId: target.sessionId,
+		isContinuing: parsed.continue ?? target.hasExistingSession,
+		forkFrom: target.forkFrom
+			? {
+					...target.forkFrom,
+					agentDir: sessionStorageAgentDir,
+				}
+			: undefined,
+		isMainAgent,
+		mainDir,
+		memoryDir,
+	});
+
 	if (appMode === "rpc") {
 		initTheme(settingsManager.getTheme(), false);
 		time("initTheme");
@@ -616,31 +660,7 @@ export async function main(args: string[], options?: MainOptions) {
 		}
 		time("createSessionFacade.setup");
 
-		const created = await createSessionFacade({
-			cwd: target.cwd,
-			agentDir: sessionStorageAgentDir,
-			authStorage,
-			settingsManager,
-			modelRegistry,
-			resourceLoader,
-			model: sessionOptions.model,
-			thinkingLevel: sessionOptions.thinkingLevel,
-			tools: sessionOptions.tools,
-			customTools: sessionOptions.customTools,
-			storagePath: parsed.noSession ? ":memory:" : undefined,
-			workspaceId: target.workspaceId,
-			sessionId: target.sessionId,
-			isContinuing: parsed.continue ?? target.hasExistingSession,
-			forkFrom: target.forkFrom
-				? {
-						...target.forkFrom,
-						agentDir: sessionStorageAgentDir,
-					}
-				: undefined,
-			isMainAgent,
-			mainDir,
-			memoryDir,
-		});
+		const created = await createSessionFacade(buildFacadeOptions());
 		applyCliThinkingClampToFacade(created, parsed.thinking !== undefined || cliThinkingFromModel);
 		time("createSessionFacade");
 
@@ -678,31 +698,7 @@ export async function main(args: string[], options?: MainOptions) {
 		}
 		time("createSessionFacade.setup");
 
-		const created = await createSessionFacade({
-			cwd: target.cwd,
-			agentDir: sessionStorageAgentDir,
-			authStorage,
-			settingsManager,
-			modelRegistry,
-			resourceLoader,
-			model: sessionOptions.model,
-			thinkingLevel: sessionOptions.thinkingLevel,
-			tools: sessionOptions.tools,
-			customTools: sessionOptions.customTools,
-			storagePath: parsed.noSession ? ":memory:" : undefined,
-			workspaceId: target.workspaceId,
-			sessionId: target.sessionId,
-			isContinuing: parsed.continue ?? target.hasExistingSession,
-			forkFrom: target.forkFrom
-				? {
-						...target.forkFrom,
-						agentDir: sessionStorageAgentDir,
-					}
-				: undefined,
-			isMainAgent,
-			mainDir,
-			memoryDir,
-		});
+		const created = await createSessionFacade(buildFacadeOptions());
 		applyCliThinkingClampToFacade(created, parsed.thinking !== undefined || cliThinkingFromModel);
 		time("createSessionFacade");
 
@@ -762,31 +758,7 @@ export async function main(args: string[], options?: MainOptions) {
 		}
 		time("createSessionFacade.setup");
 
-		const created = await createSessionFacade({
-			cwd: target.cwd,
-			agentDir: sessionStorageAgentDir,
-			authStorage,
-			settingsManager,
-			modelRegistry,
-			resourceLoader,
-			model: sessionOptions.model,
-			thinkingLevel: sessionOptions.thinkingLevel,
-			tools: sessionOptions.tools,
-			customTools: sessionOptions.customTools,
-			storagePath: parsed.noSession ? ":memory:" : undefined,
-			workspaceId: target.workspaceId,
-			sessionId: target.sessionId,
-			isContinuing: parsed.continue ?? target.hasExistingSession,
-			forkFrom: target.forkFrom
-				? {
-						...target.forkFrom,
-						agentDir: sessionStorageAgentDir,
-					}
-				: undefined,
-			isMainAgent,
-			mainDir,
-			memoryDir,
-		});
+		const created = await createSessionFacade(buildFacadeOptions());
 		applyCliThinkingClampToFacade(created, parsed.thinking !== undefined || cliThinkingFromModel);
 		time("createSessionFacade");
 
@@ -834,31 +806,7 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 	time("createSessionFacade.setup");
 
-	const created = await createSessionFacade({
-		cwd: target.cwd,
-		agentDir: sessionStorageAgentDir,
-		authStorage,
-		settingsManager,
-		modelRegistry,
-		resourceLoader,
-		model: sessionOptions.model,
-		thinkingLevel: sessionOptions.thinkingLevel,
-		tools: sessionOptions.tools,
-		customTools: sessionOptions.customTools,
-		storagePath: parsed.noSession ? ":memory:" : undefined,
-		workspaceId: target.workspaceId,
-		sessionId: target.sessionId,
-		isContinuing: parsed.continue ?? target.hasExistingSession,
-		forkFrom: target.forkFrom
-			? {
-					...target.forkFrom,
-					agentDir: sessionStorageAgentDir,
-				}
-			: undefined,
-		isMainAgent,
-		mainDir,
-		memoryDir,
-	});
+	const created = await createSessionFacade(buildFacadeOptions());
 	applyCliThinkingClampToFacade(created, parsed.thinking !== undefined || cliThinkingFromModel);
 	time("createSessionFacade");
 
