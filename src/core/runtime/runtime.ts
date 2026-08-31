@@ -208,6 +208,7 @@ export class EventSourcedRuntime {
 			this.reactor?.stop();
 			this.reactor = null;
 			this._isProcessing = false;
+			this._resolveSettled = undefined;
 			this._resolveIdleWaiters();
 		}
 	}
@@ -255,11 +256,9 @@ export class EventSourcedRuntime {
 			payload: {},
 		});
 		this.reactor?.interrupt();
-		// The _waitUntilSettled subscription will resolve when AGENT_TURN_COMPLETED fires.
-		// But if no turn is running (or the turn fails before starting), we resolve immediately.
-		if (!this._isProcessing && this._resolveSettled) {
-			this._resolveSettled();
-		}
+		// The _waitUntilSettled subscription resolves when AGENT_TURN_COMPLETED fires;
+		// when idle there is no pending settled promise (_resolveSettled is cleared in
+		// prompt()'s finally), so nothing else to do here.
 	}
 
 	/**
@@ -271,9 +270,12 @@ export class EventSourcedRuntime {
 			// Idle: there is no turn to interrupt and no live reactor to pick up a
 			// bare USER_MESSAGE — run it as a normal prompt cycle so it is actually
 			// answered. If we lose a race with a concurrent prompt(), queue it as a
-			// follow-up instead.
-			this.prompt(text, images, files).catch(() => {
-				this.followUp(text, images, files);
+			// follow-up instead. Only the already-processing race is downgraded —
+			// real prompt failures (LLM/tool errors) must not be silently re-queued.
+			this.prompt(text, images, files).catch((err: unknown) => {
+				if (err instanceof Error && err.message.includes("already processing")) {
+					this.followUp(text, images, files);
+				}
 			});
 			return;
 		}

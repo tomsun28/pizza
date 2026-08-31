@@ -68,8 +68,11 @@ export class SqliteEventStore implements EventStore, SessionStore {
 		// captured by the subsequent AGENT_MESSAGE_END event (whose payload.content
 		// holds the full LLM response), so persisting chunks is pure redundancy.
 		// Historical replay / context rebuild / compaction all read END, never CHUNK.
+		// Chunks must NOT consume a sequence number: they are never inserted, so
+		// advancing _nextSequence here would fork the in-memory counter away from
+		// the DB max used by _appendAutoSequence / appendBatch.
 		if (partial.type === "AGENT_MESSAGE_CHUNK") {
-			const event = this._normalizeEvent(partial);
+			const event = this._normalizeEvent(partial, false);
 			this._notify(event);
 			return event;
 		}
@@ -329,9 +332,9 @@ export class SqliteEventStore implements EventStore, SessionStore {
 		}
 	}
 
-	private _normalizeEvent(partial: EventAppendInput): EventBase {
+	private _normalizeEvent(partial: EventAppendInput, consumeSequence = true): EventBase {
 		const sequence = partial.sequence ?? this._nextSequence;
-		if (sequence >= this._nextSequence) {
+		if (consumeSequence && sequence >= this._nextSequence) {
 			this._nextSequence = sequence + 1;
 		}
 		return {

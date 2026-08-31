@@ -220,12 +220,14 @@ export class Reactor {
 	 * Replay USER_FOLLOWUP_QUEUED events that were appended while the reactor was idle.
 	 *
 	 * A follow-up is replayed only when ALL of these hold:
-	 *   1. It was queued during THIS process run — i.e. its timestamp is at or after the
+	 *   1. It was queued during THIS process run — i.e. its log sequence is after the
 	 *      most recent RUNTIME_STARTED. The follow-up event is durable, but the in-memory
 	 *      queue it backs is not; a follow-up left over from a previous run has no live
 	 *      buffer to belong to, and replaying it would resurrect "ghost" user messages
 	 *      days later. (runtime_id is a constant in local mode, so the RUNTIME_STARTED
-	 *      timestamp is what actually distinguishes process runs.)
+	 *      position in the log is what actually distinguishes process runs. Sequence is
+	 *      used instead of timestamp: wall clocks can go backwards and same-millisecond
+	 *      restarts would mis-classify, while the log sequence is strictly monotonic.)
 	 *   2. It has not already been delivered: no USER_MESSAGE references it via caused_by.
 	 *   3. It has not been explicitly dropped: no USER_FOLLOWUP_DROPPED event lists its id.
 	 */
@@ -250,14 +252,14 @@ export class Reactor {
 		// The most recent RUNTIME_STARTED marks the start of this process run. Follow-ups
 		// queued before it belong to a previous run whose in-memory buffer is gone.
 		const lastStarted = this.config.store.query({ types: ["RUNTIME_STARTED"], reverse: true, limit: 1 })[0];
-		const runStartedAt = lastStarted?.timestamp ?? 0;
+		const runStartedSeq = lastStarted?.sequence ?? -1;
 
 		for (const f of followups) {
 			if (deliveredCausedBy.has(f.event_id)) continue;
 			if (droppedIds.has(f.event_id)) continue;
 			// Only replay follow-ups queued during this process run; stale ones from a
 			// previous run are abandoned (their in-memory buffer no longer exists).
-			if (runStartedAt > 0 && f.timestamp < runStartedAt) continue;
+			if (runStartedSeq >= 0 && f.sequence < runStartedSeq) continue;
 			const p = f.payload as { content: string | unknown[]; images?: unknown[] };
 			this.followUpQueue.push({ content: p.content, images: p.images, sourceEventId: f.event_id, kind: "followUp" });
 		}
@@ -1281,8 +1283,6 @@ export class Reactor {
 		const retryResult = this._scheduleRetry(event, payload.error, payload.retryable);
 		if (retryResult === "scheduled") return;
 
-		const attempt = this._attemptCount(event.event_id);
-
 		// Emit turn end before completion
 		this._emit({
 			actor_id: "coder_agent",
@@ -1445,13 +1445,16 @@ export class Reactor {
 				});
 				return;
 			}
+			// A failed compaction must NOT emit COMPACTION_END: projections treat END
+			// as a context boundary, and an empty first_kept_event_id would truncate
+			// the entire pre-compaction context (falling back to sequence + 1).
 			this._emit({
 				actor_id: "compactor",
-				type: "COMPACTION_END",
+				type: "COMPACTION_ABORTED",
 				payload: {
-					summary: `Compaction failed: ${msg}`,
-					first_kept_event_id: "",
-					tokens_before: 0,
+					reason: "error",
+					message: msg,
+					token_count: payload.token_count,
 				},
 				caused_by: event.event_id,
 			});
