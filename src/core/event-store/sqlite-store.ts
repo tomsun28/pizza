@@ -154,8 +154,16 @@ export class SqliteEventStore implements EventStore, SessionStore {
 	}
 
 	/** Update workspace meta.json last_accessed_at when a message event is appended. */
+	private _lastMetaTouch = 0;
+
 	private _touchMetaOnMessage(eventType: string): void {
 		if (eventType !== "USER_MESSAGE" && eventType !== "AGENT_MESSAGE_START") return;
+		// Throttle: last_accessed_at only feeds workspace-list recency sorting.
+		// Without this, every message did a synchronous read+parse+write of
+		// meta.json inside the append hot path.
+		const now = Date.now();
+		if (now - this._lastMetaTouch < 60_000) return;
+		this._lastMetaTouch = now;
 		try {
 			const metaPath = getWorkspaceMetaPath(this.workspace_id);
 			const raw = readFileSync(metaPath, "utf8");

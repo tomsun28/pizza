@@ -8,10 +8,6 @@
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { type Api, type ImageContent, type Model, getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
-
-function supportsXhigh(model: Model<Api>): boolean {
-	return getSupportedThinkingLevels(model).includes("xhigh" as any);
-}
 import chalk from "chalk";
 import { type Args, type Mode, parseArgs, printHelp } from "../packages/cli/args.js";
 import { processFileArguments } from "../packages/cli/file-processor.js";
@@ -49,6 +45,10 @@ import { handleBuiltinCommand } from "./builtin-cli.js";
 import { handleGatewayCommand } from "./gateway-cli.js";
 import { handleAuthCommand } from "./auth-cli.js";
 import { isLocalPath } from "./utils/paths.js";
+
+function supportsXhigh(model: Model<Api>): boolean {
+	return getSupportedThinkingLevels(model).includes("xhigh" as any);
+}
 
 /**
  * Read all content from piped stdin.
@@ -209,7 +209,6 @@ async function promptConfirm(message: string): Promise<boolean> {
 
 function buildSessionOptions(
 	parsed: Args,
-	hasExistingSession: boolean,
 	modelRegistry: ModelRegistry,
 	settingsManager: SettingsManager,
 ): {
@@ -303,12 +302,11 @@ async function createCliSessionSetup(options: {
 	parsed: Args;
 	resolvedPaths: ResolvedCliResourcePaths;
 	extensionFactories?: ExtensionFactory[];
-	hasExistingSession: boolean;
 	isMainAgent?: boolean;
 	mainDir?: string;
 	memoryDir?: string;
 }): Promise<CliSessionSetup> {
-	const { cwd, agentDir, authStorage, parsed, resolvedPaths, extensionFactories, hasExistingSession } = options;
+	const { cwd, agentDir, authStorage, parsed, resolvedPaths, extensionFactories } = options;
 	const services = await createSessionServices({
 		cwd,
 		agentDir,
@@ -350,7 +348,6 @@ async function createCliSessionSetup(options: {
 		diagnostics: sessionOptionDiagnostics,
 	} = buildSessionOptions(
 		parsed,
-		hasExistingSession,
 		modelRegistry,
 		settingsManager,
 	);
@@ -599,7 +596,6 @@ export async function main(args: string[], options?: MainOptions) {
 		parsed,
 		resolvedPaths,
 		extensionFactories: options?.extensionFactories,
-		hasExistingSession: target.hasExistingSession,
 		isMainAgent,
 		mainDir,
 		memoryDir,
