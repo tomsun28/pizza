@@ -255,7 +255,10 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 	// ── agent pool management ─────────────────────────────────────────────
 
 	function makeEnv(): Record<string, string> {
-		return { PIZZA_AGENT_DIR: agentDir };
+		// PIZZA_HEADLESS: gateway sub-agents have no human attached — the rpc
+		// facade must not install a waiting approval handler (gated tool calls
+		// auto-reject with guidance instead of hanging the turn forever).
+		return { PIZZA_AGENT_DIR: agentDir, PIZZA_HEADLESS: "1" };
 	}
 
 	/** Find or spawn the RpcClient for `cwd`. */

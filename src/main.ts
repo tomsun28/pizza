@@ -623,8 +623,11 @@ export async function main(args: string[], options?: MainOptions) {
 
 	// Shared createSessionFacade() options for all four app modes (rpc /
 	// interactive / gui / print). Defined as a closure so each mode reads the
-	// same resolved CLI/session state.
-	const buildFacadeOptions = () => ({
+	// same resolved CLI/session state. Per-mode safety posture goes in extras:
+	// print has no approval UI so it keeps auto-run (a one-shot the user
+	// explicitly typed); gateway-spawned rpc sub-agents are headless and must
+	// fail closed instead of hanging on approvals.
+	const buildFacadeOptions = (extras?: { safeModeDefault?: boolean | "auto"; approvalUi?: boolean }) => ({
 		cwd: target.cwd,
 		agentDir: sessionStorageAgentDir,
 		authStorage,
@@ -648,6 +651,7 @@ export async function main(args: string[], options?: MainOptions) {
 		isMainAgent,
 		mainDir,
 		memoryDir,
+		...extras,
 	});
 
 	if (appMode === "rpc") {
@@ -660,7 +664,12 @@ export async function main(args: string[], options?: MainOptions) {
 		}
 		time("createSessionFacade.setup");
 
-		const created = await createSessionFacade(buildFacadeOptions());
+		// Gateway-spawned sub-agents (PIZZA_HEADLESS=1) have no human to answer
+		// approval dialogs: install no approval handler so gated tool calls are
+		// auto-rejected with guidance (fail closed) instead of hanging the turn.
+		// Desktop-GUI rpc keeps the default: its approve dialog resolves over rpc.
+		const headless = isTruthyEnvFlag(process.env.PIZZA_HEADLESS);
+		const created = await createSessionFacade(buildFacadeOptions(headless ? { approvalUi: false } : undefined));
 		applyCliThinkingClampToFacade(created, parsed.thinking !== undefined || cliThinkingFromModel);
 		time("createSessionFacade");
 
@@ -806,7 +815,10 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 	time("createSessionFacade.setup");
 
-	const created = await createSessionFacade(buildFacadeOptions());
+	// Print mode is a one-shot command the user explicitly typed, with no UI
+	// to answer approval prompts — keep the auto-run default. An explicit
+	// safeMode in settings.json still wins over this default.
+	const created = await createSessionFacade(buildFacadeOptions({ safeModeDefault: false }));
 	applyCliThinkingClampToFacade(created, parsed.thinking !== undefined || cliThinkingFromModel);
 	time("createSessionFacade");
 

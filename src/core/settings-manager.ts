@@ -26,9 +26,9 @@ export interface RetrySettings {
 }
 
 /**
- * Per-category approval gates. These only take effect when `safeMode` is set to
- * `"auto"` — with `safeMode: true` every risky call is gated, and with
- * `safeMode: false` (the default) nothing is gated.
+ * Per-category approval gates. These only take effect when `safeMode` is
+ * `"auto"` (the default when unset) — with `safeMode: true` every risky call
+ * is gated, and with an explicit `safeMode: false` nothing is gated.
  */
 export interface ApprovalSettings {
 	writes?: boolean; // default: true  - approve before file writes
@@ -829,9 +829,29 @@ export class SettingsManager {
 	 * Raw tri-state safe-mode setting: `true` | `false` | `undefined`.
 	 * `"auto"` maps to `undefined`, which tells the classifier to fall back to the
 	 * per-category `approvals` gates instead of forcing a blanket answer.
+	 *
+	 * DEFAULT CHANGED (security): an unset safeMode now defaults to "auto"
+	 * (per-category gates: writes/edits/unknown gated, moderate shell auto-runs)
+	 * instead of false (everything auto-runs, including dangerous shell).
+	 * The old default disabled approval for ALL risk levels — combined with
+	 * prompt-injection surfaces (tell, cron, file content) that was an
+	 * unauthenticated command-execution chain. Explicit `safeMode: false` in
+	 * settings.json still means what it says — only the unset default moved.
+	 * Headless callers that need the old behavior pass an explicit default via
+	 * {@link getSafeModeSettingWithDefault}.
 	 */
 	getSafeModeSetting(): boolean | undefined {
-		const value = this.settings.safeMode ?? false;
+		return this.getSafeModeSettingWithDefault("auto");
+	}
+
+	/**
+	 * Like {@link getSafeModeSetting} but with a caller-chosen default for when
+	 * settings.json does not set safeMode. Modes without an approval UI (print)
+	 * pass `false` to keep one-shot automation runnable; interactive/GUI/rpc
+	 * use the "auto" default.
+	 */
+	getSafeModeSettingWithDefault(defaultValue: boolean | "auto"): boolean | undefined {
+		const value = this.settings.safeMode ?? defaultValue;
 		return value === "auto" ? undefined : value;
 	}
 

@@ -37,11 +37,32 @@ describe("SettingsManager — safeMode tri-state", () => {
 		writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
 	}
 
-	it("defaults to safe mode off", () => {
+	it("defaults to \"auto\" (per-category gates) when safeMode is unset", () => {
 		writeSettings({});
 		const manager = SettingsManager.create(projectDir, agentDir);
+		// Binary UI toggle: not explicitly on.
 		expect(manager.getSafeMode()).toBe(false);
-		expect(manager.getSafeModeSetting()).toBe(false);
+		// Classifier receives undefined (= defer to per-category approvals).
+		// SECURITY: the old default was false — auto-run EVERYTHING including
+		// dangerous shell. An unset safeMode now gates writes/edits/unknown.
+		expect(manager.getSafeModeSetting()).toBeUndefined();
+	});
+
+	it("headless callers can keep the legacy auto-run default explicitly", () => {
+		writeSettings({});
+		const manager = SettingsManager.create(projectDir, agentDir);
+		expect(manager.getSafeModeSettingWithDefault(false)).toBe(false);
+		expect(manager.getSafeModeSettingWithDefault("auto")).toBeUndefined();
+	});
+
+	it("an explicit settings.json value beats any caller default", () => {
+		writeSettings({ safeMode: true });
+		const manager = SettingsManager.create(projectDir, agentDir);
+		expect(manager.getSafeModeSettingWithDefault(false)).toBe(true);
+
+		writeSettings({ safeMode: false });
+		const manager2 = SettingsManager.create(projectDir, agentDir);
+		expect(manager2.getSafeModeSettingWithDefault("auto")).toBe(false);
 	});
 
 	it("maps \"auto\" to undefined so the classifier defers to per-category gates", () => {

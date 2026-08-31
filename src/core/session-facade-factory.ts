@@ -104,6 +104,22 @@ export interface CreateSessionFacadeOptions {
 	/** Context token budget. Default: model.contextWindow ?? 128000. */
 	contextBudget?: number;
 
+	/**
+	 * Default safe-mode when settings.json does not set one. "auto" (default)
+	 * gates writes/edits/unknown via per-category approvals; false restores
+	 * unconditional auto-run. Modes without an approval UI (print) pass false
+	 * so one-shot automation is not blocked.
+	 */
+	safeModeDefault?: boolean | "auto";
+	/**
+	 * Whether a UI capable of resolving approvals is attached (TUI dialog,
+	 * desktop GUI via rpc approve). When false (headless: gateway sub-agents),
+	 * NO waiting approval handler is installed — the reactor then fails closed,
+	 * auto-rejecting gated tool calls with a guidance error instead of hanging
+	 * forever on an approval nobody can answer. Default: true.
+	 */
+	approvalUi?: boolean;
+
 	/** Whether this session is the persistent (main) agent. */
 	isMainAgent?: boolean;
 	/** Main agent working directory (defaults to cwd when isMainAgent). */
@@ -866,13 +882,14 @@ export async function createSessionFacade(
 		systemPrompt,
 		model: toModelConfig(model ?? ({ provider: "none", id: "none" } as Model<any>), thinkingLevel),
 		tools: activeToolDefinitions.map(toRuntimeToolDefinition),
-		// Safe mode is the master toggle for tool approval. When off (default),
-		// tools auto-run with no approval gate. When on, risky tool calls block
-		// until the user explicitly approves them (USER_APPROVAL / USER_REJECTION).
-		// When set to "auto", getSafeModeSetting() returns undefined and the
-		// per-category require_approval_* gates below decide instead.
+		// Safe mode is the master toggle for tool approval. Unset defaults to
+		// "auto" (per-category gates below decide; getSafeModeSettingWithDefault
+		// returns undefined for auto). Explicit true gates every risky call;
+		// explicit false auto-runs everything. Print mode passes
+		// safeModeDefault: false — a one-shot user-invoked command must not
+		// block on approvals it has no UI to answer.
 		classifierConfig: {
-			safe_mode: settingsManager.getSafeModeSetting(),
+			safe_mode: settingsManager.getSafeModeSettingWithDefault(options.safeModeDefault ?? "auto"),
 			require_approval_writes: approvalSettings.writes,
 			require_approval_edits: approvalSettings.edits,
 			require_approval_shell_moderate: approvalSettings.shellModerate,
@@ -881,11 +898,17 @@ export async function createSessionFacade(
 		// The facade has no built-in approval dialog; the UI (TUI / web / desktop)
 		// discovers pending approvals via the INTENT_TOOL_CALL event and resolves
 		// them through runtime.approve()/reject(). This no-op handler keeps the
-		// reactor waiting so safe mode can be toggled live.
-		approvalHandler: {
-			requestApproval: () => {},
-			cancelApproval: () => {},
-		},
+		// reactor waiting so safe mode can be toggled live. Headless callers
+		// (approvalUi: false — gateway sub-agents) get NO handler: the reactor
+		// then auto-rejects gated calls with a guidance error (fail closed)
+		// instead of waiting forever on an approval nobody can answer.
+		approvalHandler:
+			options.approvalUi === false
+				? undefined
+				: {
+						requestApproval: () => {},
+						cancelApproval: () => {},
+					},
 		retryAssistantErrorCompletions: true,
 		retryPolicy: new DefaultRetryPolicy({ capDelayMs: settingsManager.getRetrySettings().maxDelayMs }),
 		contextBudget: options.contextBudget ?? model?.contextWindow ?? 128000,
