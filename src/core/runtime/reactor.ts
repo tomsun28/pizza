@@ -811,6 +811,7 @@ export class Reactor {
 					tool_call_id: toolCall.id,
 					tool_name: toolCall.name,
 					arguments: toolCall.arguments,
+					assistant_message_event_id: event.event_id,
 					requires_approval: classification.requires_approval,
 					classification,
 				},
@@ -1017,38 +1018,15 @@ export class Reactor {
 			}
 		}
 
-		// Find the tracker for this tool call's assistant message
-		// Walk up the causal chain from the TOOL_EXECUTION_END event
-		const causedBy = event.caused_by;
-
-		// The caused_by points to the INTENT_TOOL_CALL event.
-		// We need to find the INTENT_TOOL_CALL → AGENT_MESSAGE_END chain.
-		// Actually, the causal chain in EventStore should give us this.
-		// For now, find the tracker by looking up the chain:
-		const chain = causedBy ? this.config.store.getCausalChain(event.event_id) : [];
-
-		// Find the closest AGENT_MESSAGE_END in the causal chain. Consecutive
-		// tool-use turns include older assistant messages earlier in the chain.
-		let assistantMessageEventId: string | undefined;
-		for (let i = chain.length - 1; i >= 0; i--) {
-			const e = chain[i]!;
-			if (e.type === "AGENT_MESSAGE_END") {
-				assistantMessageEventId = e.event_id;
-				break;
-			}
-		}
-
-		let tracker = assistantMessageEventId ? this.turnTrackers.get(assistantMessageEventId) : undefined;
-		if (!tracker || !tracker.expectedToolCallIds.has(payload.tool_call_id)) {
-			assistantMessageEventId = undefined;
-			for (const [messageEventId, tracker] of this.turnTrackers) {
-				if (tracker.expectedToolCallIds.has(payload.tool_call_id)) {
-					assistantMessageEventId = messageEventId;
-					break;
-				}
-			}
-			tracker = assistantMessageEventId ? this.turnTrackers.get(assistantMessageEventId) : undefined;
-		}
+		// Locate the tracker via the INTENT_TOOL_CALL event (caused_by), which
+		// carries the assistant_message_event_id directly — no causal-chain walk,
+		// no cross-tracker tool_call_id scan (provider ids may collide).
+		const intentEvent = event.caused_by ? this.config.store.get(event.caused_by) : undefined;
+		const assistantMessageEventId =
+			intentEvent?.type === "INTENT_TOOL_CALL"
+				? (intentEvent.payload as { assistant_message_event_id?: string }).assistant_message_event_id
+				: undefined;
+		const tracker = assistantMessageEventId ? this.turnTrackers.get(assistantMessageEventId) : undefined;
 
 		if (!tracker || !assistantMessageEventId) return;
 		if (tracker.received.some((result) => result.tool_call_id === payload.tool_call_id)) return;

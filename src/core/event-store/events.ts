@@ -176,6 +176,11 @@ export interface IntentToolCallEvent extends EventBase {
 		tool_call_id: string;
 		tool_name: string;
 		arguments: Record<string, unknown>;
+		/** The AGENT_MESSAGE_END event that proposed this tool call. Lets
+		 * TOOL_EXECUTION_END locate its TurnTracker directly instead of walking
+		 * the causal chain (which breaks across forks) or scanning all trackers
+		 * by tool_call_id (which mis-attributes on provider id collisions). */
+		assistant_message_event_id: string;
 		/** Whether user approval is required */
 		requires_approval: boolean;
 		/** Classification result */
