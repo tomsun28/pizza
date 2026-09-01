@@ -81,6 +81,16 @@ describe("SessionProjection", () => {
 		});
 		store.append({
 			actor_id: "runtime",
+			type: "AGENT_MESSAGE_END",
+			payload: {
+				content: [{ type: "tool_call", id: "call_1", name: "read", arguments: { path: "file.ts" } }],
+				model: { provider: "anthropic", model_id: "claude-sonnet" },
+				usage: { input: 10, output: 20, cache_read: 0, cache_write: 0, total: 30, cost: 0.001 },
+				stop_reason: "tool_use",
+			},
+		});
+		store.append({
+			actor_id: "runtime",
 			type: "TOOL_EXECUTION_END",
 			payload: {
 				tool_call_id: "call_1",
@@ -94,8 +104,11 @@ describe("SessionProjection", () => {
 		const projection = new SessionProjection(store, createDescriptor());
 		const context = projection.buildContext();
 
-		expect(context.messages).toHaveLength(2);
-		expect(context.messages[1].role).toBe("toolResult");
+		// user, assistant (tool_use), toolResult — the context sanitizer keeps
+		// the tool_use → tool_result pairing intact.
+		expect(context.messages).toHaveLength(3);
+		expect(context.messages[1].role).toBe("assistant");
+		expect(context.messages[2].role).toBe("toolResult");
 	});
 
 	it("should include compaction events once when building context", () => {

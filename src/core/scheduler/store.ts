@@ -16,6 +16,7 @@
 import {
 	existsSync,
 	mkdirSync,
+	readdirSync,
 	readFileSync,
 	renameSync,
 	unlinkSync,
@@ -32,21 +33,20 @@ interface TasksFile {
 	tasks: ScheduledTask[];
 }
 
-function getSchedulerDir(scope: "main" | "workspace", workspaceId?: string): string {
-	if (scope === "main") {
-		// Resolved lazily so the import doesn't require a home dir.
-		const home = process.env.PIZZA_HOME ?? join(
-			process.env.HOME ?? process.env.USERPROFILE ?? "/tmp",
-			".pizza",
-		);
-		return join(home, "main", "scheduler");
-	}
-	if (!workspaceId) throw new Error("workspaceId is required for workspace scope");
-	const home = process.env.PIZZA_HOME ?? join(
+function getPizzaHome(): string {
+	return process.env.PIZZA_HOME ?? join(
 		process.env.HOME ?? process.env.USERPROFILE ?? "/tmp",
 		".pizza",
 	);
-	return join(home, "workspaces", workspaceId, "scheduler");
+}
+
+export function getSchedulerDir(scope: "main" | "workspace", workspaceId?: string): string {
+	if (scope === "main") {
+		// Resolved lazily so the import doesn't require a home dir.
+		return join(getPizzaHome(), "main", "scheduler");
+	}
+	if (!workspaceId) throw new Error("workspaceId is required for workspace scope");
+	return join(getPizzaHome(), "workspaces", workspaceId, "scheduler");
 }
 
 function ensureDir(dir: string): void {
@@ -174,4 +174,78 @@ export function readRuns(
 /** Test-only: get the directory path for a scope without creating it. */
 export function getSchedulerDirForTest(scope: "main" | "workspace", workspaceId?: string): string {
 	return getSchedulerDir(scope, workspaceId);
+}
+
+/**
+ * Re-read one task straight from disk. Used by the engine right before a
+ * fire so that external edits (another process pausing/deleting the task
+ * by rewriting tasks.json) win over the stale in-memory copy.
+ * Returns undefined when the task no longer exists on disk.
+ */
+export function readTaskFresh(
+	scope: "main" | "workspace",
+	workspaceId: string | undefined,
+	taskId: string,
+): ScheduledTask | undefined {
+	return readTasks(scope, workspaceId).find((t) => t.id === taskId);
+}
+
+export interface ScopedTask {
+	task: ScheduledTask;
+	scope: "main" | "workspace";
+	workspaceId?: string;
+}
+
+/**
+ * Scan tasks across ALL scopes (main + every workspace dir). Read-only —
+ * powers `_cron list --all` so tasks are never invisible just because they
+ * belong to a different scope than the calling session.
+ */
+export function readTasksAllScopes(): ScopedTask[] {
+	const out: ScopedTask[] = [];
+	for (const task of readTasks("main")) {
+		out.push({ task, scope: "main" });
+	}
+	const wsRoot = join(getPizzaHome(), "workspaces");
+	let entries: string[] = [];
+	try {
+		entries = existsSync(wsRoot) ? readdirSync(wsRoot) : [];
+	} catch {
+		return out;
+	}
+	for (const dir of entries) {
+		if (!existsSync(join(wsRoot, dir, "scheduler", "tasks.json"))) continue;
+		for (const task of readTasks("workspace", dir)) {
+			out.push({ task, scope: "workspace", workspaceId: dir });
+		}
+	}
+	return out;
+}
+
+/**
+ * Locate a task by id in ANY scope and apply `mutate` to it, persisting the
+ * result. `mutate` returning null means "delete the task". Enables cross-scope
+ * pause/delete: the active engine in the owning process re-reads tasks.json
+ * before each fire (see readTaskFresh), so the change takes effect at the
+ * next tick without IPC.
+ */
+export function mutateTaskAnyScope(
+	taskId: string,
+	mutate: (task: ScheduledTask) => ScheduledTask | null,
+): { found: false } | { found: true; scope: "main" | "workspace"; workspaceId?: string; deleted: boolean } {
+	for (const entry of readTasksAllScopes()) {
+		if (entry.task.id !== taskId) continue;
+		const all = readTasks(entry.scope, entry.workspaceId);
+		const idx = all.findIndex((t) => t.id === taskId);
+		if (idx < 0) continue;
+		const next = mutate(all[idx]!);
+		if (next === null) {
+			all.splice(idx, 1);
+		} else {
+			all[idx] = next;
+		}
+		writeTasks(entry.scope, entry.workspaceId, all);
+		return { found: true, scope: entry.scope, workspaceId: entry.workspaceId, deleted: next === null };
+	}
+	return { found: false };
 }

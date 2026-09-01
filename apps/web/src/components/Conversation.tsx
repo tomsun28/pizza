@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useRef } from "react";
+import { memo, useState, useEffect, useLayoutEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { highlightText } from "@/lib/highlight";
@@ -70,10 +70,18 @@ const COLLAPSE_LINES = 5;
 
 function useCopy(): [boolean, (text: string) => void] {
 	const [copied, setCopied] = useState(false);
+	const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	// Clear the pending reset on unmount so we never set state on a dead component.
+	useEffect(() => {
+		return () => {
+			if (timerRef.current) clearTimeout(timerRef.current);
+		};
+	}, []);
 	const copy = (text: string) => {
 		void navigator.clipboard.writeText(text);
 		setCopied(true);
-		setTimeout(() => setCopied(false), 1500);
+		if (timerRef.current) clearTimeout(timerRef.current);
+		timerRef.current = setTimeout(() => setCopied(false), 1500);
 	};
 	return [copied, copy];
 }
@@ -220,7 +228,7 @@ function ApprovalSection({
 	);
 }
 
-function ToolCard({
+const ToolCard = memo(function ToolCard({
 	item,
 	onResolveApproval,
 	highlight,
@@ -291,7 +299,7 @@ function ToolCard({
 			</div>
 		</div>
 	);
-}
+});
 
 function AssistantActions({ text, visible, timestamp }: { text: string; visible: boolean; timestamp?: number }) {
 	const { t } = useTranslation();
@@ -344,7 +352,7 @@ function AssistantActions({ text, visible, timestamp }: { text: string; visible:
 	);
 }
 
-function UserBubble({ item, highlight, highlightActive }: { item: TimelineItem; highlight?: string; highlightActive?: boolean }) {
+const UserBubble = memo(function UserBubble({ item, highlight, highlightActive }: { item: TimelineItem; highlight?: string; highlightActive?: boolean }) {
 	const { t } = useTranslation();
 	const [copied, copy] = useCopy();
 	const [hover, setHover] = useState(false);
@@ -431,10 +439,10 @@ function UserBubble({ item, highlight, highlightActive }: { item: TimelineItem; 
 			)}
 		</div>
 	);
-}
+});
 
 /** Small inline notice for system-originated events (e.g. scheduled task fired). */
-function SystemNotice({ item }: { item: TimelineItem }) {
+const SystemNotice = memo(function SystemNotice({ item }: { item: TimelineItem }) {
 	const ts = item.timestamp ? new Date(item.timestamp).toLocaleString() : "";
 	return (
 		<div className="my-3 flex items-center justify-center gap-2 text-[11px] text-muted">
@@ -446,9 +454,9 @@ function SystemNotice({ item }: { item: TimelineItem }) {
 			<span className="h-px flex-1 bg-border/60" />
 		</div>
 	);
-}
+});
 
-function AssistantMessage({ item, highlight, highlightActive }: { item: TimelineItem; highlight?: string; highlightActive?: boolean }) {
+const AssistantMessage = memo(function AssistantMessage({ item, highlight, highlightActive }: { item: TimelineItem; highlight?: string; highlightActive?: boolean }) {
 	const { t } = useTranslation();
 	const [hover, setHover] = useState(false);
 	return (
@@ -504,7 +512,7 @@ function AssistantMessage({ item, highlight, highlightActive }: { item: Timeline
 			</div>
 		</div>
 	);
-}
+});
 
 /**
  * Progressive rendering: when a large history is loaded (e.g. switching to a

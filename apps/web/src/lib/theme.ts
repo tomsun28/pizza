@@ -4,9 +4,7 @@ export type Theme = "light" | "dark";
 
 const STORAGE_KEY = "pizza-theme";
 
-function isTauri(): boolean {
-	return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
+import { isTauri } from "./utils";
 
 async function syncWindowBackground(theme: Theme) {
 	if (!isTauri()) return;

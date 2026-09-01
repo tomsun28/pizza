@@ -34,6 +34,7 @@
  */
 
 import type { EventBase, EventType } from "../event-store/types.js";
+import { generateRunId, TurnState, type FollowUpEntry, type TurnTracker } from "./turn-state.js";
 import type { EventStore, EventAppendInput } from "../event-store/store.js";
 import type {
 	ApprovalHandler,
@@ -56,6 +57,10 @@ import { DefaultRetryPolicy, NoopCompactionPolicy } from "./policies.js";
 
 /** Reactor configuration */
 export interface ReactorConfig {
+	/** Shared turn-level state (follow-ups, retries, trackers, approvals).
+	 * When omitted the reactor owns a private instance — the runtime passes
+	 * its shared one so queued follow-ups survive reactor restarts. */
+	turnState?: TurnState;
 	store: EventStore;
 	projection: SessionProjection;
 	llmClient: LLMClient;
@@ -124,22 +129,9 @@ function hashArguments(args: unknown): string {
 // Tool Call Tracking (join-pattern for parallel tool execution)
 // ============================================================================
 
-/**
- * Tracks outstanding tool executions for a single assistant message.
- * Emits TOOL_RESULTS_AGGREGATED once all expected calls have finished.
- */
-interface TurnTracker {
-	assistantMessageEventId: string;
-	expectedCount: number;
-	expectedToolCallIds: Set<string>;
-	received: Array<{ tool_call_id: string; tool_name: string; result: ToolExecutionResult; is_error: boolean }>;
-	abortSignal?: AbortSignal;
-}
-
 export class Reactor {
 	private config: ReactorConfig;
 	private abortController: AbortController | undefined;
-	private turnTrackers: Map<string, TurnTracker> = new Map();
 	private handlers: EventHandlerMap = {};
 	private unsubscribers: Array<() => void> = [];
 	private _isRunning = false;
@@ -149,28 +141,24 @@ export class Reactor {
 	private retryPolicy: RetryPolicy;
 	/** Active compaction policy. */
 	private compactionPolicy: CompactionPolicy;
-	/** Pending follow-up messages (delivered after current turn completes without interrupt). */
-	private followUpQueue: Array<{
-		content: string | unknown[];
-		images?: unknown[];
-		sourceEventId?: string;
-		/** Origin: steer (interrupt-with-content) or plain follow-up queueing. */
-		kind: "steer" | "followUp";
-	}> = [];
+
+	// ── Turn-level state: owned by TurnState, accessed through delegating
+	// getters so handler code keeps reading naturally while every mutation
+	// funnels through one explicitly-owned, log-replayable object. ─────────
+	private readonly turnState: TurnState;
+
+	private get turnTrackers():Map<string,TurnTracker> { return this.turnState.turnTrackers; }
+	private get followUpQueue():TurnState["followUpQueue"] { return this.turnState.followUpQueue; }
+	private get retryTimers():TurnState["retryTimers"] { return this.turnState.retryTimers; }
+	private get _abortedByUser():boolean { return this.turnState.abortedByUser; }
+	private set _abortedByUser(v:boolean) { this.turnState.abortedByUser = v; }
+	private get _turnInFlight():boolean { return this.turnState.turnInFlight; }
+	private set _turnInFlight(v:boolean) { this.turnState.turnInFlight = v; }
+	private get _toolRoundSignatures():string[][] { return this.turnState.toolRoundSignatures; }
+	private set _toolRoundSignatures(v:string[][]) { this.turnState.toolRoundSignatures = v; }
+
 	/** Aborter for the current compaction run (if any). */
 	private compactionAbort: AbortController | undefined;
-	/** Retry timers waiting to re-enter the turn loop. */
-	private retryTimers = new Map<string, {
-		timeout: ReturnType<typeof setTimeout>;
-		attempt: number;
-		errorMessage: string;
-	}>();
-	/** Set when abort() is called with no new content — next turn completion should discard queued follow-ups. */
-	private _abortedByUser = false;
-	/** True while a turn (or its retry backoff) is in flight — queued follow-ups are delivered only when false. */
-	private _turnInFlight = false;
-	/** Signatures (tool name + argument hash) for each consecutive tool-use round within the current prompt cycle. */
-	private _toolRoundSignatures: string[][] = [];
 	/**
 	 * Stream-idle watchdog: if no AGENT_MESSAGE_CHUNK arrives within this
 	 * many ms, the LLM call is aborted so the reactor emits LLM_CALL_FAILED
@@ -183,6 +171,10 @@ export class Reactor {
 		this.config = config;
 		this.retryPolicy = config.retryPolicy ?? new DefaultRetryPolicy();
 		this.compactionPolicy = config.compactionPolicy ?? new NoopCompactionPolicy();
+		// Shared (runtime-owned) or per-reactor turn state. The runtime passes
+		// one instance so follow-ups queued outside a prompt cycle survive
+		// reactor restarts, and so replay can be driven centrally.
+		this.turnState = config.turnState ?? new TurnState(generateRunId());
 		this._registerAllHandlers();
 	}
 
@@ -232,37 +224,10 @@ export class Reactor {
 	 *   3. It has not been explicitly dropped: no USER_FOLLOWUP_DROPPED event lists its id.
 	 */
 	private _replayPendingFollowUps(): void {
-		const followups = this.config.store.query({ types: ["USER_FOLLOWUP_QUEUED"] });
-		if (followups.length === 0) return;
-
-		// Already-delivered follow-ups: a USER_MESSAGE carries the follow-up id as caused_by.
-		const userMessages = this.config.store.query({ types: ["USER_MESSAGE"] });
-		const deliveredCausedBy = new Set(
-			userMessages.map((m) => m.caused_by).filter((id): id is string => !!id),
-		);
-
-		// Explicitly dropped follow-ups (e.g. cleared by a user interrupt).
-		const dropped = this.config.store.query({ types: ["USER_FOLLOWUP_DROPPED"] });
-		const droppedIds = new Set<string>();
-		for (const d of dropped) {
-			const p = d.payload as { dropped_event_ids?: string[] };
-			for (const id of p.dropped_event_ids ?? []) droppedIds.add(id);
-		}
-
-		// The most recent RUNTIME_STARTED marks the start of this process run. Follow-ups
-		// queued before it belong to a previous run whose in-memory buffer is gone.
-		const lastStarted = this.config.store.query({ types: ["RUNTIME_STARTED"], reverse: true, limit: 1 })[0];
-		const runStartedSeq = lastStarted?.sequence ?? -1;
-
-		for (const f of followups) {
-			if (deliveredCausedBy.has(f.event_id)) continue;
-			if (droppedIds.has(f.event_id)) continue;
-			// Only replay follow-ups queued during this process run; stale ones from a
-			// previous run are abandoned (their in-memory buffer no longer exists).
-			if (runStartedSeq >= 0 && f.sequence < runStartedSeq) continue;
-			const p = f.payload as { content: string | unknown[]; images?: unknown[] };
-			this.followUpQueue.push({ content: p.content, images: p.images, sourceEventId: f.event_id, kind: "followUp" });
-		}
+		// Delegated to TurnState: run_id-scoped (or legacy sequence-scoped)
+		// requeue of undelivered follow-ups. Crash compensation of dangling
+		// turns runs once at startup (workspace lock held), not per reactor.
+		this.turnState.replayFollowUpsFromLog(this.config.store);
 	}
 
 	/** Stop the reactor. Clears all subscriptions. */
@@ -424,7 +389,17 @@ export class Reactor {
 
 	/** Clear pending follow-ups (e.g. on user-explicit cancel). */
 	clearFollowUpQueue(): void {
-		this.followUpQueue = [];
+		this.followUpQueue.length = 0;
+	}
+
+	/** Take ONE pending follow-up by its source event id (per-item cancel/steer). */
+	takeFollowUp(sourceEventId: string): FollowUpEntry | undefined {
+		return this.turnState.removeFollowUp(sourceEventId);
+	}
+
+	/** Move a queued entry to the front of the queue ("send now" semantics). */
+	promoteFollowUpToFront(sourceEventId: string): boolean {
+		return this.turnState.moveFollowUpToFront(sourceEventId);
 	}
 
 	// =========================================================================
@@ -436,6 +411,32 @@ export class Reactor {
 	private async _onUserMessage(event: EventBase): Promise<void> {
 		const payload = event.payload as { content: unknown; images?: unknown };
 		if (this._shouldInterrupt()) return;
+
+		// A turn is already in flight (LLM streaming, tool running, retry
+		// pending, or compaction): starting another reactor turn here would
+		// interleave two turns in one thread — their events interleave in the
+		// log and a long-running tool's result lands after other turns'
+		// messages, breaking the tool_use → tool_result adjacency that strict
+		// providers (Anthropic/Bedrock) require. Queue as a follow-up instead;
+		// _onAgentTurnCompleted drains it when the current turn settles.
+		if (this._turnInFlight || this.retryTimers.size > 0 || this.compactionAbort !== undefined) {
+			// Durable queue marker referencing the raw message; the queued-event
+			// handler queues it and the turn-completion drain delivers it.
+			this._emit({
+				actor_id: "user",
+				type: "USER_FOLLOWUP_QUEUED",
+				payload: {
+					content: payload.content,
+					images: payload.images,
+					reason: "turn_in_flight",
+					user_message_event_id: event.event_id,
+					run_id: this.turnState.runId,
+				},
+				caused_by: event.event_id,
+			});
+			return;
+		}
+
 
 		// A turn starts here — queued follow-ups must wait for its completion.
 		this._turnInFlight = true;
@@ -550,8 +551,14 @@ export class Reactor {
 	// ─── USER_FOLLOWUP_QUEUED ───────────────────────────────────────────────
 
 	private async _onUserFollowupQueued(event: EventBase): Promise<void> {
-		const payload = event.payload as { content: string | unknown[]; images?: unknown[] };
-		this.followUpQueue.push({ content: payload.content, images: payload.images, sourceEventId: event.event_id, kind: "followUp" });
+		const payload = event.payload as { content: string | unknown[]; images?: unknown[]; user_message_event_id?: string };
+		this.followUpQueue.push({
+			content: payload.content,
+			images: payload.images,
+			sourceEventId: event.event_id,
+			kind: "followUp",
+			userMessageEventId: payload.user_message_event_id,
+		});
 		// If the reactor is idle (no turn, retry, or compaction in flight) the queue is
 		// never drained by _onAgentTurnCompleted — deliver immediately instead, otherwise
 		// the message strands in the queue and the runtime's settled promise hangs.
@@ -822,10 +829,9 @@ export class Reactor {
 
 	// ─── INTENT_TOOL_CALL ──────────────────────────────────────────────────
 
-	private readonly _pendingApprovals = new Map<
-		string,
-		{ resolve: (approved: boolean) => void; tool_call_id: string; tool_name: string; arguments: Record<string, unknown> }
-	>();
+	private get _pendingApprovals() {
+		return this.turnState.pendingApprovals;
+	}
 
 	/**
 	 * Resolve every pending approval as rejected and notify the UI to dismiss its
@@ -1168,7 +1174,7 @@ export class Reactor {
 					caused_by: event.event_id,
 				});
 			}
-			this.followUpQueue = [];
+			this.followUpQueue.length = 0;
 			this._abortedByUser = false;
 			return;
 		}
@@ -1220,6 +1226,26 @@ export class Reactor {
 		if (this.followUpQueue.length === 0) return;
 		this.abortController = new AbortController();
 		const next = this.followUpQueue.shift()!;
+		// Queued from a raw USER_MESSAGE that arrived mid-turn: the content is
+		// already in the log (and the context). Start a turn for it directly —
+		// appending another USER_MESSAGE would duplicate it in the context.
+		if (next.userMessageEventId) {
+			this._turnInFlight = true;
+			this._toolRoundSignatures = [];
+			this._emit({
+				actor_id: "coder_agent",
+				type: "AGENT_THINKING_START",
+				payload: { model: this.config.model.model_id },
+				caused_by: next.userMessageEventId,
+			});
+			this._emit({
+				actor_id: "coder_agent",
+				type: "AGENT_TURN_REQUESTED",
+				payload: { reason: "user_message" },
+				caused_by: next.userMessageEventId,
+			});
+			return;
+		}
 		this._emit({
 			actor_id: "user",
 			type: "USER_MESSAGE",
@@ -1335,9 +1361,11 @@ export class Reactor {
 			}
 		}, delayMs);
 		this.retryTimers.set(retryScheduled.event_id, {
+			scheduled_event_id: retryScheduled.event_id,
 			timeout,
 			attempt: nextAttempt,
 			errorMessage: error,
+			retry: () => {},
 		});
 		return "scheduled";
 	}

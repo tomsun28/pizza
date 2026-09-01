@@ -874,6 +874,16 @@ fn spawn_background_sidecar(
 }
 
 pub fn start_scheduler_sidecar_guard(app: AppHandle) {
+	// Gateway mode: the gateway daemon owns scheduled workspaces — its
+	// scheduler guard scans tasks.json scopes, spawns pooled agents for any
+	// scheduled cwd, and pins them against idle eviction. Spawning raw
+	// sidecars here would produce a SECOND agent per workspace (invisible to
+	// the pool) whose pid dies with the GUI's memory — the orphan-process /
+	// double-SchedulerEngine bug. Legacy sidecar mode still needs the loop.
+	if gateway_mode_enabled() {
+		log_file("scheduler_guard: gateway mode — guard is owned by the gateway daemon; not spawning sidecars");
+		return;
+	}
 	thread::spawn(move || loop {
 		let cwds = scheduled_cwds_to_keep_alive();
 		for cwd in cwds {

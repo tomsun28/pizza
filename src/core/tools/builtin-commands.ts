@@ -96,6 +96,8 @@ export type ParsedBuiltinToolInput =
 				once?: boolean;
 				newSession?: boolean;
 				verbose?: boolean;
+				all?: boolean;
+				maxRuns?: number;
 			};
 	  }
 	  |
@@ -565,6 +567,8 @@ function parseCronInput(args: string[], heredoc?: string): {
 	once?: boolean;
 	newSession?: boolean;
 	verbose?: boolean;
+	all?: boolean;
+	maxRuns?: number;
 } {
 	let action: CronAction | undefined;
 	let taskId: string | undefined;
@@ -575,6 +579,8 @@ function parseCronInput(args: string[], heredoc?: string): {
 	let once: boolean | undefined;
 	let newSession: boolean | undefined;
 	let verbose: boolean | undefined;
+	let all: boolean | undefined;
+	let maxRuns: number | undefined;
 	const positionalPrompt: string[] = [];
 
 	for (let i = 0; i < args.length; i++) {
@@ -595,6 +601,15 @@ function parseCronInput(args: string[], heredoc?: string): {
 			newSession = true;
 		} else if (arg === "--verbose" || arg === "-v") {
 			verbose = true;
+		} else if (arg === "--all") {
+			all = true;
+		} else if (arg === "--max-runs") {
+			const raw = args[++i];
+			const parsed = raw === undefined ? Number.NaN : Number(raw);
+			if (!Number.isFinite(parsed) || parsed < 0) {
+				throw new Error(`cron: --max-runs expects a non-negative number, got "${raw}"`);
+			}
+			maxRuns = parsed;
 		} else {
 			positionalPrompt.push(arg);
 		}
@@ -637,7 +652,7 @@ function parseCronInput(args: string[], heredoc?: string): {
 		throw new Error(`cron: action required. Valid actions: ${CRON_ACTIONS.join(", ")}`);
 	}
 
-	return { action, taskId, schedule, cronExpr, prompt, name, once, newSession, verbose };
+	return { action, taskId, schedule, cronExpr, prompt, name, once, newSession, verbose, all, maxRuns };
 }
 
 function parseEditInput(
@@ -997,7 +1012,8 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"  pause/resume toggle; delete removes; run fires it immediately.",
 				"",
 				"Actions:",
-				"  list                 Show all scheduled tasks. Add --verbose to inline each prompt.",
+				"  list                 Show all scheduled tasks. Add --verbose to inline each prompt;",
+				"                       add --all to include EVERY scope (main + all workspaces).",
 				"  show <taskId>        Show one task in full (prompt body + complete schedule).",
 				"  create               Schedule a recurring prompt (needs --schedule and --prompt).",
 				"  update --task <id>   Edit a task in place. Pass --schedule/--cron-expr and/or",
@@ -1014,6 +1030,8 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"  --name, -n         Optional task name.",
 				"  --task, -t         Task id (for show/update/pause/resume/delete/run).",
 				"  --verbose, -v      list only: inline each task prompt body.",
+				"  --all              list only: show tasks from all scopes, not just this one.",
+				"  --max-runs         create/update: auto-disable after N total runs (safety cap; 0 clears).",
 				"  --once             Run exactly once, then auto-disable.",
 				"  --new-session      Dispatch each fire into a fresh session (default: pinned).",
 				"  <<EOF              Heredoc form for --prompt (multi-line).",
@@ -1022,6 +1040,8 @@ export function getBuiltinCommandHelp(command: string): string | undefined {
 				"Examples:",
 				"  _cron list",
 				"  _cron list --verbose",
+				"  _cron list --all",
+				"  _cron create --schedule 10m --max-runs 50 --prompt \"drive the refactor\" ",
 				"  _cron show st_abc123",
 				"  _cron create --schedule 30m --name \"self-review\" --prompt \"summarize recent changes\"",
 				"  _cron create --cron-expr \"0 9 * * 1-5\" --prompt \"standup\" --new-session",

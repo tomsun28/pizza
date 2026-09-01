@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { PanelRight, PanelBottom } from "lucide-react";
 import { usePersistedState } from "@/lib/usePersistedState";
 import { cn } from "@/lib/utils";
+import { Z } from "@/lib/z-index";
 import { ResizeHandle } from "./ResizeHandle";
 import RightDock from "./RightDock";
 import BottomDock from "./BottomDock";
@@ -49,7 +50,7 @@ export default function WorkspacePane({
 				{/* The toggles float over the MAIN view's top-right corner (not the
 				    whole pane) so they never overlap the right dock's tab strip. */}
 				<div className="relative min-w-0 flex-1 overflow-hidden">
-					<div className="absolute right-2 top-2 z-40 flex items-center gap-1">
+					<div className={cn("absolute right-2 top-2 flex items-center gap-1", Z.chrome)}>
 						<button
 							onClick={() => setBottomOpen((v) => !v)}
 							className={cn(

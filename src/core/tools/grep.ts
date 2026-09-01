@@ -6,7 +6,6 @@ import { spawn } from "child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { minimatch } from "minimatch";
 import path from "path";
-import { keyHint } from "../../../packages/tui/components/keybinding-hints.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { resolveToCwd } from "./path-utils.js";
@@ -20,6 +19,7 @@ import {
 	truncateHead,
 	truncateLine,
 } from "./truncate.js";
+import { toolRenderBridge as tui } from "./render-bridge.js";
 
 const grepSchema = Type.Object({
 	pattern: Type.String({ description: "Search pattern (regex or literal string)" }),
@@ -147,7 +147,7 @@ function formatGrepResult(
 		const remaining = lines.length - maxLines;
 		text += `\n${displayLines.map((line) => theme.fg("toolOutput", line)).join("\n")}`;
 		if (remaining > 0) {
-			text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")})`;
+			text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${tui().keyHint("app.tools.expand", "to expand")})`;
 		}
 	}
 

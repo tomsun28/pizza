@@ -5,7 +5,8 @@
 import type { AgentMessage } from "../agent/types.js";
 import type { ImageContent, Model, TextContent, ToolResultMessage } from "@earendil-works/pi-ai/compat";
 import type { KeyId } from "@earendil-works/pi-tui";
-import { type Theme, theme } from "../../../packages/tui/theme/theme.js";
+import type { Theme } from "../../../packages/tui/theme/theme.js";
+import { toolRenderBridge } from "../tools/render-bridge.js";
 import type { ResourceDiagnostic } from "../diagnostics.js";
 import type { EventBase } from "../event-store/types.js";
 import type { EventStore } from "../event-store/store.js";
@@ -209,7 +210,9 @@ const noOpUIContext: ExtensionUIContext = {
 	editor: async () => undefined,
 	setEditorComponent: () => {},
 	get theme() {
-		return theme;
+		// Headless processes get the plain fallback theme; UI hosts install the
+		// real one via installToolRenderBridge().
+		return toolRenderBridge().theme as Theme;
 	},
 	getAllThemes: () => [],
 	getTheme: () => undefined,

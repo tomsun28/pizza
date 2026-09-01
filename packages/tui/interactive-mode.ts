@@ -159,7 +159,7 @@ import { ExtensionEditorComponent } from "./components/extension-editor.js";
 import { ExtensionInputComponent } from "./components/extension-input.js";
 import { ExtensionSelectorComponent } from "./components/extension-selector.js";
 import { FooterComponent } from "./components/footer.js";
-import { keyText } from "./components/keybinding-hints.js";
+import { keyHint, keyText } from "./components/keybinding-hints.js";
 import { LoginDialogComponent } from "./components/login-dialog.js";
 import { ModelSelectorComponent } from "./components/model-selector.js";
 import { OAuthSelectorComponent } from "./components/oauth-selector.js";
@@ -169,12 +169,17 @@ import { ToolExecutionComponent } from "./components/tool-execution.js";
 import { TreeSelectorComponent } from "./components/tree-selector.js";
 import { UserMessageComponent } from "./components/user-message.js";
 import { UserMessageSelectorComponent } from "./components/user-message-selector.js";
+import { renderDiff } from "./components/diff.js";
+import { truncateToVisualLines } from "./components/visual-truncate.js";
+import { installToolRenderBridge } from "../../src/core/tools/render-bridge.js";
 import {
   getAvailableThemes,
   getAvailableThemesWithPaths,
   getEditorTheme,
+  getLanguageFromPath,
   getMarkdownTheme,
   getThemeByName,
+  highlightCode,
   initTheme,
   onThemeChange,
   setRegisteredThemes,
@@ -185,6 +190,17 @@ import {
   type ThemeColor,
   theme,
 } from "./theme/theme.js";
+
+// Give core tool renderers their real TUI implementations. Headless entry
+// points never run this module, so they keep the plain fallback bridge.
+installToolRenderBridge({
+  theme,
+  keyHint: (keybinding, description) => keyHint(keybinding as Keybinding, description),
+  truncateToVisualLines,
+  renderDiff,
+  highlightCode,
+  getLanguageFromPath,
+});
 
 /** Interface for components that can be expanded/collapsed */
 interface Expandable {

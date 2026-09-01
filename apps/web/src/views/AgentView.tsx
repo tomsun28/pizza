@@ -4,8 +4,9 @@ import { useTranslation } from "react-i18next";
 import { sendCommandAwait, subscribeEvents, subscribeSidecarExit } from "@/lib/transport";
 import type { RpcSessionState, TypedEvent } from "@/lib/types";
 import { Conversation, type TimelineItem } from "@/components/Conversation";
+import { Tooltip } from "@/components/Tooltip";
 import { ChatSearch } from "@/components/ChatSearch";
-import { Search, X } from "lucide-react";
+import { ArrowUp, Search, X } from "lucide-react";
 import { textMatches } from "@/lib/highlight";
 import { Composer, type ComposerImage, type LoadedFileAttachment } from "@/components/Composer";
 import { EmptyState, Spinner } from "@/components/ui";
@@ -30,9 +31,18 @@ function isInternalContinuationSessionEvent(event: TypedEvent): boolean {
 	);
 }
 
+/** A follow-up queued behind the running turn, shown in the pending strip. */
+interface QueuedMsg {
+	/** USER_FOLLOWUP_QUEUED event id — the cancel handle (sourceEventId). */
+	id: string;
+	text: string;
+	images?: string[];
+}
+
 const CHAT_RENDER_EVENT_TYPES = new Set<string>([
 	"USER_MESSAGE",
 	"USER_FOLLOWUP_QUEUED",
+	"USER_FOLLOWUP_DROPPED",
 	"AGENT_MESSAGE_START",
 	"AGENT_MESSAGE_CHUNK",
 	"AGENT_MESSAGE_END",
@@ -276,6 +286,12 @@ export default function AgentView({
 	const { t } = useTranslation();
 	const [items, setItems] = useState<TimelineItem[]>([]);
 	const [error, setError] = useState("");
+	// Follow-ups queued while the agent is streaming. These are NOT part of
+	// the conversation yet — they render in a pending strip above the composer
+	// (with a per-item cancel), not as timeline bubbles. An entry leaves the
+	// strip when its USER_MESSAGE arrives (delivered) or when a
+	// USER_FOLLOWUP_DROPPED lists it (cancelled/cleared).
+	const [queuedMsgs, setQueuedMsgs] = useState<QueuedMsg[]>([]);
 	// True while history is being fetched from the sidecar (get_messages).
 	// Shows a loading indicator instead of the empty state so the user gets
 	// visual feedback that data is loading, which is especially important on
@@ -294,16 +310,36 @@ export default function AgentView({
 	const itemsByWs = useRef<Map<string, TimelineItem[]>>(new Map());
 	const seenIdsByWs = useRef<Map<string, Set<string>>>(new Map());
 	const activeAssistantByWs = useRef<Map<string, string | null>>(new Map());
+	const queuedMsgsByWs = useRef<Map<string, QueuedMsg[]>>(new Map());
+	const queuedMsgsRef = useRef<QueuedMsg[]>([]);
 	const itemsRef = useRef<TimelineItem[]>([]);
 	const stateRef = useRef<RpcSessionState | null>(state);
 	itemsRef.current = items;
 	stateRef.current = state;
+	queuedMsgsRef.current = queuedMsgs;
 	const prevWsRef = useRef<string | null>(null);
 
 	// Keep latest t in a ref so closures created in effects can read it
 	// without re-subscribing on every language change.
 	const tRef = useRef(t);
 	useEffect(() => { tRef.current = t; }, [t]);
+
+	// Hydrate the pending strip from the sidecar (runtime queue is the source
+	// of truth — live events keep it in sync afterwards). Called on history
+	// load so a reload/workspace revisit doesn't lose queued messages.
+	const refreshQueued = useCallback(async () => {
+		try {
+			const r = await sendCommandAwait<{ entries: Array<{ kind: string; text: string; sourceEventId?: string }> }>({ type: "get_queued_messages" }, 10000);
+			const entries = r.data?.entries ?? [];
+			setQueuedMsgs(
+				entries
+					.filter((e) => e.kind === "followUp" && typeof e.sourceEventId === "string")
+					.map((e) => ({ id: e.sourceEventId as string, text: e.text })),
+			);
+		} catch {
+			// Older sidecar without the command — leave the strip as-is.
+		}
+	}, []);
 
 	// --- Session-switch reload (jump/fork from BranchTreeExplorer) ---
 	// When the active session changes via SESSION_FORKED or SESSION_JUMPED,
@@ -338,6 +374,7 @@ export default function AgentView({
 				const messages = (data?.messages as Array<Record<string, unknown>> | undefined) ?? [];
 				const history = buildTimelineFromMessages(messages, tRef.current);
 				if (!cancelled) setItems(history);
+				void refreshQueued();
 				onRefreshState?.();
 			} catch {
 				// Silently ignore — the empty state will show.
@@ -346,7 +383,7 @@ export default function AgentView({
 			}
 		})();
 		return () => { cancelled = true; };
-	}, [workspace, onRefreshState]);
+	}, [workspace, onRefreshState, refreshQueued]);
 
 	// Save/restore conversation on workspace switch.
 	useEffect(() => {
@@ -358,11 +395,13 @@ export default function AgentView({
 				itemsByWs.current.set(prevWs, itemsRef.current);
 				seenIdsByWs.current.set(prevWs, seenIdsRef.current);
 				activeAssistantByWs.current.set(prevWs, activeAssistantRef.current);
+				queuedMsgsByWs.current.set(prevWs, queuedMsgsRef.current);
 			}
 			// Restore conversation for the new workspace.
 			setItems(itemsByWs.current.get(newWs) ?? []);
 			seenIdsRef.current = seenIdsByWs.current.get(newWs) ?? new Set();
 			activeAssistantRef.current = activeAssistantByWs.current.get(newWs) ?? null;
+			setQueuedMsgs(queuedMsgsByWs.current.get(newWs) ?? []);
 			setError("");
 			prevWsRef.current = newWs;
 		}
@@ -388,6 +427,7 @@ export default function AgentView({
 				if (!cancelled && history.length > 0) {
 					setItems(history);
 				}
+				if (!cancelled) void refreshQueued();
 			} catch {
 				// Silently ignore — history will load on next workspace switch.
 			} finally {
@@ -395,7 +435,7 @@ export default function AgentView({
 			}
 		})();
 		return () => { cancelled = true; };
-	}, [sidecarReady, workspace]);
+	}, [sidecarReady, workspace, refreshQueued]);
 
 	// Track whether the user is pinned to the bottom of the scroll area.
 	// Key insight: we must distinguish "user actively scrolled up" from
@@ -502,6 +542,15 @@ export default function AgentView({
 			}
 		};
 
+		const updateQueued = (fn: (prev: QueuedMsg[]) => QueuedMsg[]) => {
+			if (isForCurrent) {
+				setQueuedMsgs(fn);
+			} else {
+				const cached = queuedMsgsByWs.current.get(eventCwd) ?? [];
+				queuedMsgsByWs.current.set(eventCwd, fn(cached));
+			}
+		};
+
 		// INTENT_TOOL_CALL and TOOL_EXECUTION_START share the same tool_call_id.
 		// Upsert so we don't create duplicate cards / clashing React keys.
 		const toolCardUpsert = (
@@ -549,41 +598,42 @@ export default function AgentView({
 				const files = messageFiles(event.payload);
 				// When a queued follow-up is drained, the reactor emits a real
 				// USER_MESSAGE whose caused_by points at the USER_FOLLOWUP_QUEUED
-				// event we already rendered as a (queued) user bubble. Promote
-				// that bubble in place (swap its id + clear the queued flag)
-				// instead of appending a duplicate.
+				// event sitting in the pending strip. Remove it from the strip —
+				// the message now enters the conversation as a normal bubble.
 				const causedBy = typeof event.caused_by === "string" ? event.caused_by : undefined;
 				const ts = typeof event.timestamp === "number" ? event.timestamp : undefined;
-				updateItems((prev) => {
-					if (causedBy) {
-						const idx = prev.findIndex((it) => it.id === causedBy && it.queued);
-						if (idx >= 0) {
-							const next = [...prev];
-							next[idx] = { ...next[idx]!, id: event.event_id, queued: false, status: "", timestamp: ts };
-							return next;
-						}
-					}
-					return [
-						...prev,
-						{ id: event.event_id, role: "user", title: tRef.current("common.you"), text, status: "", images: images.length > 0 ? images : undefined, files: files.length > 0 ? files : undefined, timestamp: ts },
-					];
-				});
+				if (causedBy) {
+					updateQueued((prev) => prev.filter((q) => q.id !== causedBy));
+				}
+				updateItems((prev) => [
+					...prev,
+					{ id: event.event_id, role: "user", title: tRef.current("common.you"), text, status: "", images: images.length > 0 ? images : undefined, files: files.length > 0 ? files : undefined, timestamp: ts },
+				]);
 				break;
 			}
 			case "USER_FOLLOWUP_QUEUED": {
 				// A follow-up sent while the agent is running is queued and only
 				// delivered (as a real USER_MESSAGE) after the current turn ends.
-				// Render it immediately as a "queued" user bubble so the user gets
-				// feedback; it is promoted in place when the drained USER_MESSAGE
-				// arrives (matched via caused_by).
+				// It is NOT part of the conversation yet — show it in the pending
+				// strip above the composer where it can still be cancelled. It
+				// moves into the timeline when the drained USER_MESSAGE arrives
+				// (matched via caused_by above).
 				const text = messageText(event.payload);
 				const images = messageImages(event.payload);
-				const files = messageFiles(event.payload);
-				const ts = typeof event.timestamp === "number" ? event.timestamp : undefined;
-				updateItems((prev) => [
+				updateQueued((prev) => [
 					...prev,
-					{ id: event.event_id, role: "user", title: tRef.current("common.you"), text, status: "", images: images.length > 0 ? images : undefined, files: files.length > 0 ? files : undefined, queued: true, timestamp: ts },
+					{ id: event.event_id, text, images: images.length > 0 ? images : undefined },
 				]);
+				break;
+			}
+			case "USER_FOLLOWUP_DROPPED": {
+				// Queue entries were cancelled (per-item) or cleared (bulk) —
+				// remove them from the pending strip.
+				const dropped = (event.payload as { dropped_event_ids?: unknown })?.dropped_event_ids;
+				if (Array.isArray(dropped)) {
+					const ids = new Set(dropped.filter((d): d is string => typeof d === "string"));
+					if (ids.size > 0) updateQueued((prev) => prev.filter((q) => !ids.has(q.id)));
+				}
 				break;
 			}
 			case "AGENT_MESSAGE_START": {
@@ -889,6 +939,32 @@ export default function AgentView({
 		[state?.isStreaming],
 	);
 
+	const handleSteerQueued = useCallback(async (id: string) => {
+		// Optimistic removal from the strip — on success the content re-enters
+		// the flow as a steer (interrupts the turn, delivered right after it
+		// settles, rendered as a normal user bubble by its USER_MESSAGE).
+		setQueuedMsgs((prev) => prev.filter((q) => q.id !== id));
+		try {
+			const r = await sendCommandAwait<{ promoted: boolean }>({ type: "steer_queued_message", sourceEventId: id }, 10000);
+			if (!r.data?.promoted) void refreshQueued();
+		} catch {
+			void refreshQueued();
+		}
+	}, [refreshQueued]);
+
+	const handleCancelQueued = useCallback(async (id: string) => {
+		// Optimistic removal — the USER_FOLLOWUP_DROPPED event confirms it, and
+		// refreshQueued() re-syncs on any mismatch (e.g. the entry was already
+		// drained into the turn before the cancel reached the agent).
+		setQueuedMsgs((prev) => prev.filter((q) => q.id !== id));
+		try {
+			const r = await sendCommandAwait<{ removed: boolean }>({ type: "cancel_queued_message", sourceEventId: id }, 10000);
+			if (!r.data?.removed) void refreshQueued();
+		} catch {
+			void refreshQueued();
+		}
+	}, [refreshQueued]);
+
 	const handleAbort = useCallback(async () => {
 		try {
 			await sendCommandAwait({ type: "abort" }, 5000);
@@ -1092,6 +1168,45 @@ export default function AgentView({
 						{error.split("\n").map((line, i) => (
 							<div key={i} className={i === 0 ? "" : "mt-0.5 text-xs opacity-70"}>
 								{line}
+							</div>
+						))}
+					</div>
+				</div>
+			)}
+			{queuedMsgs.length > 0 && (
+				<div className="mx-auto w-full max-w-3xl px-6 pb-1.5">
+					<div className="flex flex-col gap-1">
+						{queuedMsgs.map((q) => (
+							<div
+								key={q.id}
+								className="group flex items-center gap-2 rounded-md border border-border/60 bg-surface-2/60 px-3 py-1.5"
+							>
+								<span className="shrink-0 rounded-sm bg-accent/15 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-accent">
+									{t("conversation.queued")}
+								</span>
+								<span className="min-w-0 flex-1 truncate text-sm text-muted" title={q.text}>
+									{q.text}
+								</span>
+								<Tooltip label={t("conversation.steerQueued")}>
+									<button
+										type="button"
+										onClick={() => handleSteerQueued(q.id)}
+										className="shrink-0 rounded p-0.5 text-muted opacity-60 transition-opacity hover:bg-surface-2 hover:text-accent group-hover:opacity-100"
+										aria-label={t("conversation.steerQueued")}
+									>
+										<ArrowUp size={14} />
+									</button>
+								</Tooltip>
+								<Tooltip label={t("conversation.cancelQueued")}>
+									<button
+										type="button"
+										onClick={() => handleCancelQueued(q.id)}
+										className="shrink-0 rounded p-0.5 text-muted opacity-60 transition-opacity hover:bg-surface-2 hover:text-fg group-hover:opacity-100"
+										aria-label={t("conversation.cancelQueued")}
+									>
+										<X size={14} />
+									</button>
+								</Tooltip>
 							</div>
 						))}
 					</div>

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useLocation, useOutletContext } from "react-router-dom";
 import { PageHeader, Card, Badge, Button, MoreMenu } from "@/components/ui";
+import { confirmDialog } from "@/lib/confirm";
 import { cn } from "@/lib/utils";
 import {
 	fetchSkillsSh,
@@ -190,7 +191,13 @@ function SkillsTab() {
 	}, []);
 
 	const handleDelete = useCallback(async (name: string) => {
-		if (!confirm(t("plugins.skills.deleteConfirm", { name }))) return;
+		const ok = await confirmDialog({
+			title: t("common.delete"),
+			message: t("plugins.skills.deleteConfirm", { name }),
+			confirmLabel: t("common.delete"),
+			danger: true,
+		});
+		if (!ok) return;
 		setBusyName(name);
 		try {
 			await deleteSkill(name);
@@ -677,7 +684,14 @@ function ChannelsTab() {
 	const handleDelete = useCallback(
 		async (id: string) => {
 			const ch = channels.find((c) => c.id === id);
-			if (!ch || !confirm(t("channels.confirmDelete", { name: ch.name }))) return;
+			if (!ch) return;
+			const ok = await confirmDialog({
+				title: t("common.delete"),
+				message: t("channels.confirmDelete", { name: ch.name }),
+				confirmLabel: t("common.delete"),
+				danger: true,
+			});
+			if (!ok) return;
 			setBusyId(id);
 			try {
 				await deleteChannel(id);

@@ -19,6 +19,7 @@ import {
 	Search,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Z } from "@/lib/z-index";
 
 export type MentionCategory = "file" | "branch" | "workspace" | "skill" | "schedule";
 
@@ -114,7 +115,7 @@ export function MentionMenu({
 
 	if (itemCount === 0) {
 		return (
-			<div className="absolute bottom-full left-0 z-50 mb-2 w-80 rounded-xl border border-border bg-surface p-3 shadow-xl">
+			<div className={cn("absolute bottom-full left-0 mb-2 w-80 rounded-xl border border-border bg-surface p-3 shadow-xl", Z.menu)}>
 				<div className="flex items-center gap-2 text-xs text-muted">
 					<Search className="h-3.5 w-3.5" />
 					<span>{t("mention.noResults")}</span>
@@ -125,7 +126,7 @@ export function MentionMenu({
 
 	return (
 		<div
-			className="absolute bottom-full left-0 z-50 mb-2 max-h-72 w-80 overflow-y-auto rounded-xl border border-border bg-surface p-1 shadow-xl"
+			className={cn("absolute bottom-full left-0 mb-2 max-h-72 w-80 overflow-y-auto rounded-xl border border-border bg-surface p-1 shadow-xl", Z.menu)}
 		>
 			{rows.map((row) => {
 				if (row.kind === "header") {

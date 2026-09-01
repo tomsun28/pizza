@@ -810,6 +810,15 @@ export async function runRpcModeWithFacade(
 				facade.followUp(command.message, toEventImages(command.images), toEventFiles(command.files));
 				return success(id, "follow_up");
 
+			case "get_queued_messages":
+				return success(id, "get_queued_messages", { entries: facade.getQueuedEntries() });
+
+			case "cancel_queued_message":
+				return success(id, "cancel_queued_message", { removed: facade.cancelQueuedMessage(command.sourceEventId) });
+
+			case "steer_queued_message":
+				return success(id, "steer_queued_message", { promoted: facade.steerQueuedMessage(command.sourceEventId) });
+
 			case "abort":
 				facade.abort();
 				return success(id, "abort");

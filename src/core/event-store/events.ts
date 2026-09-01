@@ -329,13 +329,38 @@ export interface BranchSummaryEvent extends EventBase {
 // Session Lifecycle Events
 // ============================================================================
 
-/** Session created */
+/**
+ * Session created.
+ *
+ * The payload carries the full descriptor so the session index is a pure
+ * projection of the log: replaying SESSION_* / THREAD_* events rebuilds the
+ * index without the snapshot. Older logs may lack the descriptor fields
+ * (start_event_id etc.); the reducer falls back to the event envelope
+ * (event_id / thread_id / timestamp) for those.
+ */
 export interface SessionCreatedEvent extends EventBase {
 	type: "SESSION_CREATED";
 	payload: {
 		session_id: string;
 		name?: string;
 		created_by: "user_explicit" | "fork" | "schedule";
+		parent_session_id?: string;
+		context_parent_session_id?: string;
+		/** Context window start boundary (event_id or "ORIGIN"). */
+		start_event_id?: string;
+		summary_event_id?: string;
+		created_at?: number;
+		/** Previously active session closed by this creation (its end boundary becomes this event). */
+		closes_session_id?: string;
+		/** Present when this creation also created a new thread record. */
+		thread?: {
+			thread_id: string;
+			name?: string;
+			created_at: number;
+			status: "active" | "background" | "closed";
+		};
+		/** Cross-workspace fork provenance (zero-copy fork; see SessionDescriptor.source_ref). */
+		source_ref?: { workspace_id: string; session_id: string; fork_at_event_id: string };
 	};
 }
 
@@ -355,6 +380,16 @@ export interface SessionForkedEvent extends EventBase {
 		new_session_id: string;
 		parent_session_id?: string;
 		fork_at_event_id: string;
+		/** Full descriptor fields for index replay (absent in older logs). */
+		name?: string;
+		start_event_id?: string;
+		summary_event_id?: string;
+		context_parent_session_id?: string;
+		created_at?: number;
+		/** Session whose end boundary was closed at this fork (absent when none). */
+		closes_session_id?: string;
+		/** Cross-workspace fork provenance (zero-copy fork; see SessionDescriptor.source_ref). */
+		source_ref?: { workspace_id: string; session_id: string; fork_at_event_id: string };
 	};
 }
 
@@ -367,6 +402,28 @@ export interface SessionJumpedEvent extends EventBase {
 		/** When the target was closed, the new session created to reopen it. */
 		reopened_as?: string;
 		reason?: string;
+		direct?: boolean;
+		background?: boolean;
+		/** Session whose end boundary was closed by this jump (absent when none). */
+		closes_session_id?: string;
+	};
+}
+
+/** Session renamed (index projection event). */
+export interface SessionRenamedEvent extends EventBase {
+	type: "SESSION_RENAMED";
+	payload: {
+		session_id: string;
+		name: string;
+	};
+}
+
+/** Thread status changed (e.g. background thread promoted to active). */
+export interface ThreadStatusChangedEvent extends EventBase {
+	type: "THREAD_STATUS_CHANGED";
+	payload: {
+		thread_id: string;
+		status: "active" | "background" | "closed";
 	};
 }
 
@@ -608,6 +665,8 @@ export type TypedEvent =
 	| SessionBoundaryInferredEvent
 	| SessionForkedEvent
 	| SessionJumpedEvent
+	| SessionRenamedEvent
+	| ThreadStatusChangedEvent
 	| SessionEntryAppendedEvent
 	| CompactionStartEvent
 	| CompactionEndEvent

@@ -14,7 +14,10 @@
     "backToAgent": "Back to Agent",
     "back": "Back",
     "forward": "Forward",
-    "continue": "Continue"
+    "continue": "Continue",
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "notice": "Notice"
   },
   "layout": {
     "brandTagline": "Create together.",
@@ -218,6 +221,8 @@
     "thoughtProcess": "Thought process",
     "running": "running…",
     "queued": "queued…",
+    "cancelQueued": "Remove — delete from queue, won't be sent",
+    "steerQueued": "Send now — interrupts the current run",
     "goodResponse": "Good response",
     "badResponse": "Bad response",
     "attachment": "attachment"

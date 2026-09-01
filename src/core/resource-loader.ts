@@ -3,6 +3,8 @@ import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import chalk from "chalk";
 import { CONFIG_DIR_NAME, getBuiltinSkillsDir, getMainDir, getMainMemoryDir } from "../config.js";
+// Deliberate tui import: loadThemeFromPath is pure config parsing (reads a
+// theme JSON file), not rendering — no terminal/ANSI dependency at call time.
 import { loadThemeFromPath, type Theme } from "../../packages/tui/theme/theme.js";
 import type { ResourceDiagnostic } from "./diagnostics.js";
 

@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, ChevronDown, EllipsisVertical } from "lucide-react";
+import { Check, ChevronDown, EllipsisVertical, X } from "lucide-react";
 import {
 	PixelAlert,
 	PixelBadge as PxlBadge,
@@ -13,6 +13,8 @@ import {
 } from "@pxlkit/ui-kit";
 import { cn } from "@/lib/utils";
 import { toggleTheme, useTheme } from "@/lib/theme";
+import { setConfirmHostHandler, type ConfirmRequest } from "@/lib/confirm";
+import { Z } from "@/lib/z-index";
 
 const toneMap: Record<string, Tone> = {
 	neutral: "neutral",
@@ -299,7 +301,7 @@ function FloatingDialog({
 		"max-w-md";
 
 	return (
-		<div className="fixed inset-0 z-[80] flex items-start justify-center p-4 pt-[15vh]" onClick={onClose}>
+		<div className={cn("fixed inset-0 flex items-start justify-center p-4 pt-[15vh]", Z.modal)} onClick={onClose}>
 			<div
 				className={cn(
 					"relative w-full rounded-lg border border-border bg-surface shadow-2xl",
@@ -315,7 +317,7 @@ function FloatingDialog({
 						aria-label="Close"
 						className="flex h-6 w-6 items-center justify-center rounded-md border border-border text-muted transition-colors hover:bg-surface-2 hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
 					>
-						✕
+						<X className="h-3.5 w-3.5" />
 					</button>
 				</div>
 				<div className="px-4 py-4 text-sm text-muted">{children}</div>
@@ -448,7 +450,7 @@ export function ContextMenu({ x, y, items, onDismiss }: ContextMenuProps) {
 
 	return (
 		<div
-			className="fixed z-50 min-w-52 rounded-md border border-border bg-surface-2 py-1 shadow-lg"
+			className={cn("fixed min-w-52 rounded-md border border-border bg-surface-2 py-1 shadow-lg", Z.menu)}
 			style={{ left: clampedX, top: clampedY }}
 			onMouseDown={(e) => e.stopPropagation()}
 		>
@@ -516,23 +518,47 @@ export function MoreMenu({
 	items,
 	disabled,
 	title,
+	icon,
+	triggerClassName,
+	open,
+	onOpenChange,
 }: {
 	items: ContextMenuItem[];
 	disabled?: boolean;
 	title?: string;
+	/** Custom trigger icon; defaults to a vertical ellipsis. */
+	icon?: ReactNode;
+	/** Replaces the default trigger button styling entirely. */
+	triggerClassName?: string;
+	/** Controlled open state (optional); pair with onOpenChange. */
+	open?: boolean;
+	onOpenChange?: (open: boolean) => void;
 }) {
 	const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
 	const wrapRef = useRef<HTMLDivElement>(null);
+	// Keep the latest callback in a ref so the outside-click effect below
+	// doesn't rebind listeners when the parent passes an inline arrow.
+	const onOpenChangeRef = useRef(onOpenChange);
+	onOpenChangeRef.current = onOpenChange;
+
+	// Controlled mode: parent closes the menu by flipping `open` to false.
+	useEffect(() => {
+		if (open === false) setPos(null);
+	}, [open]);
 
 	useEffect(() => {
 		if (!pos) return;
+		const close = () => {
+			setPos(null);
+			onOpenChangeRef.current?.(false);
+		};
 		const onDown = (e: MouseEvent) => {
 			// Clicks on the trigger (inside wrapRef) fall through to its onClick,
 			// which toggles the menu closed — same as the sidebar workspace menu.
-			if (!wrapRef.current?.contains(e.target as Node)) setPos(null);
+			if (!wrapRef.current?.contains(e.target as Node)) close();
 		};
 		const onKey = (e: KeyboardEvent) => {
-			if (e.key === "Escape") setPos(null);
+			if (e.key === "Escape") close();
 		};
 		window.addEventListener("mousedown", onDown);
 		window.addEventListener("keydown", onKey);
@@ -561,13 +587,27 @@ export function MoreMenu({
 						below + estHeight <= window.innerHeight - 8
 							? below
 							: Math.max(8, rect.top - estHeight - 4);
-					setPos((p) => (p ? null : { x: rect.right - CONTEXT_MENU_MIN_WIDTH, y }));
+					setPos((p) => {
+						const next = p ? null : { x: rect.right - CONTEXT_MENU_MIN_WIDTH, y };
+						onOpenChange?.(next !== null);
+						return next;
+					});
 				}}
-				className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border text-muted transition-colors hover:bg-surface-2 hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40"
+				className={triggerClassName ?? "flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border text-muted transition-colors hover:bg-surface-2 hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40"}
 			>
-				<EllipsisVertical className="h-3.5 w-3.5" />
+				{icon ?? <EllipsisVertical className="h-3.5 w-3.5" />}
 			</button>
-			{pos && <ContextMenu x={pos.x} y={pos.y} items={items} onDismiss={() => setPos(null)} />}
+			{pos && (
+				<ContextMenu
+					x={pos.x}
+					y={pos.y}
+					items={items}
+					onDismiss={() => {
+						setPos(null);
+						onOpenChange?.(false);
+					}}
+				/>
+			)}
 		</div>
 	);
 }
@@ -600,7 +640,10 @@ export function Select({
 	size?: "sm" | "md";
 }) {
 	const [open, setOpen] = useState(false);
+	// Index of the keyboard-highlighted option while the popup is open.
+	const [activeIndex, setActiveIndex] = useState(-1);
 	const wrapRef = useRef<HTMLDivElement>(null);
+	const listRef = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
 		if (!open) return;
@@ -618,6 +661,60 @@ export function Select({
 		};
 	}, [open]);
 
+	// Keep the keyboard-highlighted option scrolled into view.
+	useEffect(() => {
+		if (!open || activeIndex < 0) return;
+		const el = listRef.current?.children[activeIndex] as HTMLElement | undefined;
+		el?.scrollIntoView({ block: "nearest" });
+	}, [open, activeIndex]);
+
+	const openMenu = () => {
+		const selectedIdx = options.findIndex((o) => o.value === value);
+		setActiveIndex(selectedIdx >= 0 ? selectedIdx : 0);
+		setOpen(true);
+	};
+
+	const handleTriggerKeyDown = (e: ReactKeyboardEvent) => {
+		if (!open) {
+			if (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter" || e.key === " ") {
+				e.preventDefault();
+				openMenu();
+			}
+			return;
+		}
+		switch (e.key) {
+			case "ArrowDown":
+				e.preventDefault();
+				setActiveIndex((i) => Math.min(i + 1, options.length - 1));
+				break;
+			case "ArrowUp":
+				e.preventDefault();
+				setActiveIndex((i) => Math.max(i - 1, 0));
+				break;
+			case "Home":
+				e.preventDefault();
+				setActiveIndex(0);
+				break;
+			case "End":
+				e.preventDefault();
+				setActiveIndex(options.length - 1);
+				break;
+			case "Enter":
+			case " ": {
+				e.preventDefault();
+				const opt = options[activeIndex];
+				if (opt) {
+					onChange(opt.value);
+					setOpen(false);
+				}
+				break;
+			}
+			case "Tab":
+				setOpen(false);
+				break;
+		}
+	};
+
 	const current = options.find((o) => o.value === value);
 	const heightClass = size === "sm" ? "h-8" : "h-9";
 	const textClass = size === "sm" ? "text-xs" : "text-sm";
@@ -626,9 +723,13 @@ export function Select({
 		<div ref={wrapRef} className="relative" title={title}>
 			<button
 				type="button"
-				onClick={() => setOpen((o) => !o)}
+				role="combobox"
+				aria-expanded={open}
+				aria-haspopup="listbox"
+				onClick={() => (open ? setOpen(false) : openMenu())}
+				onKeyDown={handleTriggerKeyDown}
 				className={cn(
-					"flex w-full items-center justify-between gap-2 rounded-lg border px-3 text-left transition-colors",
+					"flex w-full items-center justify-between gap-2 rounded-lg border px-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
 					heightClass,
 					textClass,
 					open
@@ -647,13 +748,17 @@ export function Select({
 				/>
 			</button>
 			{open && (
-				<div className="absolute left-0 right-0 top-full z-30 mt-1 max-h-60 overflow-y-auto rounded-xl border border-border bg-surface p-1 shadow-lg">
-					{options.map((o) => {
+				<div ref={listRef} role="listbox" className={cn("absolute left-0 right-0 top-full mt-1 max-h-60 overflow-y-auto rounded-xl border border-border bg-surface p-1 shadow-lg", Z.menu)}>
+					{options.map((o, i) => {
 						const selected = o.value === value;
+						const highlighted = i === activeIndex;
 						return (
 							<button
 								key={o.value}
 								type="button"
+								role="option"
+								aria-selected={selected}
+								onMouseEnter={() => setActiveIndex(i)}
 								onClick={() => {
 									onChange(o.value);
 									setOpen(false);
@@ -663,7 +768,9 @@ export function Select({
 									textClass,
 									selected
 										? "bg-accent/10 text-fg"
-										: "text-muted hover:bg-surface-2 hover:text-fg",
+										: highlighted
+											? "bg-surface-2 text-fg"
+											: "text-muted hover:bg-surface-2 hover:text-fg",
 								)}
 							>
 								<span className="min-w-0 flex-1">
@@ -679,5 +786,67 @@ export function Select({
 				</div>
 			)}
 		</div>
+	);
+}
+
+/* ------------------------------------------------------------------------- *
+ * ConfirmHost — renders confirmDialog()/alertDialog() requests (lib/confirm)
+ * as app-styled modals. Mount exactly once near the app root.
+ * ------------------------------------------------------------------------- */
+
+/** Mount once (e.g. in App). Renders the currently pending confirm request. */
+export function ConfirmHost() {
+	const { t } = useTranslation();
+	const [req, setReq] = useState<ConfirmRequest | null>(null);
+	// Queue further requests while one is open so none are dropped.
+	const queueRef = useRef<ConfirmRequest[]>([]);
+
+	useEffect(() => {
+		setConfirmHostHandler((r) => {
+			setReq((cur) => {
+				if (cur) {
+					queueRef.current.push(r);
+					return cur;
+				}
+				return r;
+			});
+		});
+		return () => {
+			setConfirmHostHandler(null);
+		};
+	}, []);
+
+	const settle = (ok: boolean) => {
+		req?.resolve(ok);
+		setReq(queueRef.current.shift() ?? null);
+	};
+
+	if (!req) return null;
+
+	return (
+		<Modal
+			open
+			onClose={() => settle(!!req.alert)}
+			title={req.title ?? (req.alert ? t("common.notice") : t("common.confirm"))}
+			size="sm"
+			footer={
+				<>
+					{!req.alert && (
+						<Button tone="neutral" variant="outline" size="sm" onClick={() => settle(false)}>
+							{req.cancelLabel ?? t("common.cancel")}
+						</Button>
+					)}
+					<Button
+						tone={req.danger ? "danger" : "accent"}
+						size="sm"
+						onClick={() => settle(true)}
+					>
+						{req.confirmLabel ?? (req.alert ? t("common.continue") : t("common.confirm"))}
+					</Button>
+				</>
+			}
+		>
+			<p className="whitespace-pre-wrap text-sm leading-relaxed text-fg">{req.message}</p>
+		</Modal>
 	);
 }

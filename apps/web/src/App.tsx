@@ -8,11 +8,9 @@ import SettingsView from "@/views/SettingsView";
 import PluginsView from "@/views/PluginsView";
 import { subscribeSidecarExit, subscribeEvents, initSidecar, sendCommandAwait, listWorkspaces, restartSidecar, stopMainAgent } from "@/lib/transport";
 import { BrandIcon } from "@/components/BrandIcon";
+import { ConfirmHost } from "@/components/ui";
 import type { RpcSessionState, WorkspaceMeta } from "@/lib/types";
-
-function isTauri(): boolean {
-	return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
+import { isTauri } from "@/lib/utils";
 
 function isMainAgentConflictError(message: string): boolean {
 	return message.includes("Another main agent instance is already running");
@@ -384,6 +382,7 @@ function AppInner() {
 
 	return (
 		<PxlKitSurfaceProvider surface="pixel">
+			<ConfirmHost />
 			<Routes>
 					<Route
 						element={

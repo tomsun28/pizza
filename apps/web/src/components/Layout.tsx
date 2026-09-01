@@ -3,11 +3,14 @@ import { Settings as SettingsIcon, Plus, Folder, MessageSquare, MoreHorizontal, 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { StatusDot, ThemeToggle, Button } from "./ui";
+import { StatusDot, ThemeToggle, Button, MoreMenu, type ContextMenuItem } from "./ui";
+import { confirmDialog, alertDialog } from "@/lib/confirm";
 import { BrandIcon } from "./BrandIcon";
 import WorkspacePane from "./WorkspacePane";
-import { cn } from "@/lib/utils";
+import { cn, isTauri, hasMacTrafficLights } from "@/lib/utils";
 import { deleteWorkspace, revealWorkspace } from "@/lib/transport";
+import { clearComposerDraft } from "@/lib/composer-drafts";
+import { Z } from "@/lib/z-index";
 import type { RpcSessionState, WorkspaceMeta } from "@/lib/types";
 
 const PINNED_KEY = "pizza:pinned-workspaces";
@@ -28,62 +31,6 @@ function setPinnedWorkspaces(ids: Set<string>): void {
 	try {
 		localStorage.setItem(PINNED_KEY, JSON.stringify([...ids]));
 	} catch { /* ignore */ }
-}
-
-function WorkspaceMenu({ ws, isActive: _isActive, onPin, isPinned, onDelete, onClose }: {
-	ws: WorkspaceMeta;
-	isActive: boolean;
-	onPin: () => void;
-	isPinned: boolean;
-	onDelete: () => void;
-	onClose: () => void;
-}) {
-	const { t } = useTranslation();
-	const menuRef = useRef<HTMLDivElement>(null);
-
-	useEffect(() => {
-		function handleClickOutside(e: MouseEvent) {
-			if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-				onClose();
-			}
-		}
-		document.addEventListener("mousedown", handleClickOutside);
-		return () => document.removeEventListener("mousedown", handleClickOutside);
-	}, [onClose]);
-
-	return (
-		<div
-			ref={menuRef}
-			className="absolute right-0 top-full z-50 mt-1 w-40 rounded-md border border-border bg-surface-2 shadow-lg"
-			onClick={(e) => e.stopPropagation()}
-		>
-			<button
-				onClick={() => { onPin(); onClose(); }}
-				className="flex w-full items-center gap-2 rounded-t-md px-3 py-2 text-left font-mono text-xs text-fg hover:bg-accent/10 hover:text-accent transition-colors"
-			>
-				<Pin className={cn("h-3.5 w-3.5 shrink-0", isPinned ? "text-accent" : "text-muted")} />
-				<span>{isPinned ? t("layout.unpin") : t("layout.pinToTop")}</span>
-			</button>
-			<button
-				onClick={() => { void revealWorkspace(ws.cwd); onClose(); }}
-				className="flex w-full items-center gap-2 px-3 py-2 text-left font-mono text-xs text-fg hover:bg-accent/10 hover:text-accent transition-colors"
-			>
-				<FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted" />
-				<span>{t("layout.revealInFiles")}</span>
-			</button>
-			<button
-				onClick={() => { onDelete(); onClose(); }}
-				className="flex w-full items-center gap-2 rounded-b-md px-3 py-2 text-left font-mono text-xs text-danger hover:bg-danger/10 transition-colors"
-			>
-				<Trash2 className="h-3.5 w-3.5 shrink-0" />
-				<span>{t("common.delete")}</span>
-			</button>
-		</div>
-	);
-}
-
-function isTauri(): boolean {
-	return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
 function basename(path: string): string {
@@ -133,6 +80,16 @@ export default function Layout({
 	streamingCwds?: Set<string>;
 }) {
 	const { t } = useTranslation();
+	// macOS overlay title bar needs left padding so the collapse/expand
+	// buttons clear the traffic lights; other platforms have a normal title
+	// bar and need no reserved space. Evaluated once — platform never changes.
+	const macPad = hasMacTrafficLights();
+	// Re-render every 30s so the "x min ago" workspace timestamps stay fresh.
+	const [, setClockTick] = useState(0);
+	useEffect(() => {
+		const id = setInterval(() => setClockTick((n) => n + 1), 30_000);
+		return () => clearInterval(id);
+	}, []);
 	const online = sidecarReady && sidecarExitCode === null;
 	const isMainChat = isMainChatCwd(workspace);
 	const [pinned, setPinned] = useState<Set<string>>(getPinnedWorkspaces);
@@ -173,15 +130,44 @@ export default function Layout({
 
 	const handleDelete = useCallback(async (ws: WorkspaceMeta) => {
 		const name = basename(ws.cwd);
-		if (!confirm(t("layout.deleteWorkspaceConfirm", { name }))) return;
+		const ok = await confirmDialog({
+			title: t("common.delete"),
+			message: t("layout.deleteWorkspaceConfirm", { name }),
+			confirmLabel: t("common.delete"),
+			danger: true,
+		});
+		if (!ok) return;
 		try {
 			await deleteWorkspace(ws.workspace_id);
+			clearComposerDraft(ws.cwd);
 			onDeleteWorkspace?.(ws.workspace_id);
 		} catch (e) {
 			console.error("[workspace] delete error:", e);
-			alert(t("layout.deleteWorkspaceFailed", { error: e instanceof Error ? e.message : String(e) }));
+			void alertDialog({ title: t("common.error"), message: t("layout.deleteWorkspaceFailed", { error: e instanceof Error ? e.message : String(e) }), danger: true });
 		}
 	}, [onDeleteWorkspace, t]);
+
+	/** Menu entries for a workspace row — rendered by the shared MoreMenu
+	 *  (viewport clamping, Escape and outside-click dismissal built in). */
+	const workspaceMenuItems = useCallback((ws: WorkspaceMeta, isPinned: boolean): ContextMenuItem[] => [
+		{
+			icon: Pin,
+			label: isPinned ? t("layout.unpin") : t("layout.pinToTop"),
+			onClick: () => togglePin(ws),
+		},
+		{
+			icon: FolderOpen,
+			label: t("layout.revealInFiles"),
+			onClick: () => void revealWorkspace(ws.cwd),
+		},
+		{ divider: true },
+		{
+			icon: Trash2,
+			label: t("common.delete"),
+			danger: true,
+			onClick: () => void handleDelete(ws),
+		},
+	], [t, togglePin, handleDelete]);
 
 	const sortedWorkspaces = workspaces
 		? [...workspaces].sort((a, b) => {
@@ -198,7 +184,11 @@ export default function Layout({
 			{!showSidebar && (
 				<button
 					onClick={toggleCollapsed}
-					className="fixed left-[76px] top-[6px] z-50 flex h-8 w-8 items-center justify-center rounded-lg text-muted/50 transition-colors hover:bg-surface-2 hover:text-muted active:bg-surface-2"
+					className={cn(
+						"fixed top-[6px] flex h-8 w-8 items-center justify-center rounded-lg text-muted/50 transition-colors hover:bg-surface-2 hover:text-muted active:bg-surface-2",
+						Z.chrome,
+						macPad ? "left-[76px]" : "left-2",
+					)}
 					title={t("layout.showSidebar")}
 				>
 					<PanelLeft className="h-4 w-4" />
@@ -208,7 +198,7 @@ export default function Layout({
 			{/* Left-edge hover strip: reveals the sidebar as a floating overlay while collapsed */}
 			{collapsed && (
 				<div
-					className="fixed inset-y-0 left-0 z-30 w-2"
+					className={cn("fixed inset-y-0 left-0 w-2", Z.overlay)}
 					onMouseEnter={() => { clearHoverTimer(); setHovered(true); }}
 				/>
 			)}
@@ -217,14 +207,14 @@ export default function Layout({
 				onMouseLeave={() => { if (collapsed) { clearHoverTimer(); hoverTimerRef.current = setTimeout(() => setHovered(false), 150); } }}
 				className={cn(
 					"flex w-64 flex-col border-r border-border bg-surface transition-all duration-150",
-					floating ? "absolute inset-y-0 left-0 z-40 shadow-2xl" : "",
+					floating ? cn("absolute inset-y-0 left-0 shadow-2xl", Z.chrome) : "",
 					!showSidebar ? "pointer-events-none w-0 -translate-x-full overflow-hidden opacity-0" : "",
 				)}
 			>
 				{/* Top bar — aligns with the macOS traffic lights; holds the collapse button */}
 				<div
 					data-tauri-drag-region
-					className="flex h-11 shrink-0 items-center pl-[76px] pr-2"
+					className={cn("flex h-11 shrink-0 items-center pr-2", macPad ? "pl-[76px]" : "pl-2")}
 				>
 					<button
 						data-no-drag
@@ -352,27 +342,18 @@ export default function Layout({
 											{online && (isActive || streamingCwds?.has(ws.cwd)) && (
 												<span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", (isActive ? state?.isStreaming : true) ? "bg-accent animate-pulse" : "bg-success")} />
 											)}
-											<button
-												onClick={(e) => {
-													e.stopPropagation();
-													setMenuOpenId(isMenuOpen ? null : ws.workspace_id);
-												}}
-												className="ml-auto flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted opacity-0 transition-opacity hover:text-fg hover:bg-surface-3 group-hover:opacity-100"
+											<MoreMenu
 												title={t("layout.moreActions")}
-											>
-												<MoreHorizontal className="h-3.5 w-3.5" />
-											</button>
-										</div>
-										{isMenuOpen && (
-											<WorkspaceMenu
-												ws={ws}
-												isActive={isActive}
-												onPin={() => togglePin(ws)}
-												isPinned={isPinned}
-												onDelete={() => void handleDelete(ws)}
-												onClose={() => setMenuOpenId(null)}
+												icon={<MoreHorizontal className="h-3.5 w-3.5" />}
+												triggerClassName={cn(
+													"ml-auto flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted transition-opacity hover:text-fg hover:bg-surface-2 group-hover:opacity-100",
+													isMenuOpen ? "opacity-100" : "opacity-0",
+												)}
+												open={isMenuOpen}
+												onOpenChange={(open) => setMenuOpenId(open ? ws.workspace_id : null)}
+												items={workspaceMenuItems(ws, isPinned)}
 											/>
-										)}
+										</div>
 									</div>
 								);
 							})}

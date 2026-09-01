@@ -30,7 +30,22 @@ import type { ConcurrencyPolicy, ScheduledTask, ScheduledTaskSummary, ScheduledT
 import { SessionLockManager, type AcquireResult } from "./locks.js";
 import { cronNextRun } from "./cron.js";
 import { defaultTaskName, generateTaskId, validateScheduleSpec } from "./types.js";
-import { appendRun, readRuns, readTasks, writeTasks } from "./store.js";
+import { appendRun, getSchedulerDir, readRuns, readTaskFresh, readTasks, writeTasks } from "./store.js";
+import { SchedulerScopeLock } from "./scope-lock.js";
+
+/**
+ * Node's setTimeout clamps delays above 2^31-1 ms (~24.8 days) to 1ms.
+ * Waits longer than this are chunked: sleep MAX_TIMEOUT_MS, then recompute
+ * the remaining delay (scheduleOne re-entry).
+ */
+const MAX_TIMEOUT_MS = 2_147_000_000; // just under 2^31-1, ~24.85 days
+
+/**
+ * fireTask refuses fires that arrive more than this many ms before their
+ * scheduled time — a timer that somehow fired early (clock jump, clamped
+ * overflow on an old build) reschedules instead of running the task early.
+ */
+const EARLY_FIRE_TOLERANCE_MS = 60_000;
 
 // --- nextRunAt: the heart of the engine -------------------------------------
 
@@ -225,6 +240,14 @@ export class SchedulerEngine {
 	private stopped = false;
 	/** Tracks whether the engine has been disposed. */
 	private disposed = false;
+	/**
+	 * Cross-process singleton guard. Only the lock holder schedules timers;
+	 * passive engines still serve CRUD (writes land in tasks.json and the
+	 * active engine re-reads the file before each fire).
+	 */
+	private scopeLock: SchedulerScopeLock;
+	/** True when another live process owns this scope's dispatch loop. */
+	private passive = false;
 
 	constructor(opts: SchedulerEngineOptions) {
 		this.scope = opts.scope;
@@ -239,6 +262,20 @@ export class SchedulerEngine {
 		this.locks.onTimeout = (taskId, sessionId) => {
 			this.handleTimeout(taskId, sessionId);
 		};
+		this.scopeLock = new SchedulerScopeLock(getSchedulerDir(this.scope, this.workspaceId), this.now);
+		// If the heartbeat discovers another process took the lock over (e.g.
+		// this process was suspended long enough to look dead), demote to
+		// passive: cancel all timers so we never double-dispatch against the
+		// new owner. CRUD keeps working (writes land in tasks.json).
+		this.scopeLock.onLost = () => {
+			if (this.disposed || this.passive) return;
+			this.passive = true;
+			for (const t of this.timers.values()) clearTimeout(t);
+			this.timers.clear();
+			console.warn(
+				`[scheduler] scope ${this.scope}${this.workspaceId ? `:${this.workspaceId}` : ""} lock lost to pid ${this.scopeLock.holderPid()}; demoted to passive`,
+			);
+		};
 	}
 
 	// --- lifecycle ---
@@ -249,6 +286,17 @@ export class SchedulerEngine {
 		const stored = readTasks(this.scope, this.workspaceId);
 		this.tasks.clear();
 		for (const t of stored) this.tasks.set(t.id, t);
+		// Cross-process guard: if another live process already dispatches for
+		// this scope, stay passive — no timers, no double-fire. CRUD is still
+		// served from this engine and lands in tasks.json.
+		if (!this.scopeLock.tryAcquire()) {
+			this.passive = true;
+			console.warn(
+				`[scheduler] scope ${this.scope}${this.workspaceId ? `:${this.workspaceId}` : ""} is owned by pid ${this.scopeLock.holderPid()}; running passive (no dispatch)`,
+			);
+			return;
+		}
+		this.passive = false;
 		this.scheduleAll();
 		this.catchUpMissedRuns();
 	}
@@ -273,6 +321,7 @@ export class SchedulerEngine {
 		}
 		this.timers.clear();
 		this.locks.dispose();
+		this.scopeLock.release();
 		this.emitter.removeAllListeners();
 	}
 
@@ -365,6 +414,7 @@ export class SchedulerEngine {
 		sessionTarget?: SessionTarget;
 		concurrencyPolicy?: ConcurrencyPolicy;
 		timeoutMinutes?: number;
+		maxRuns?: number;
 	}): { ok: true; task: ScheduledTaskSummary } | { ok: false; error: string } {
 		const validation = validateScheduleSpec(input.schedule);
 		if (validation) return { ok: false, error: validation };
@@ -386,6 +436,7 @@ export class SchedulerEngine {
 			sessionTarget: input.sessionTarget,
 			concurrencyPolicy: input.concurrencyPolicy,
 			timeoutMinutes: input.timeoutMinutes,
+			maxRuns: input.maxRuns,
 		};
 		// Persist schedule.endAt / startAt into the embedded schedule so the
 		// nextRunAt helper reads a consistent shape.
@@ -413,6 +464,7 @@ export class SchedulerEngine {
 			sessionTarget?: SessionTarget | null;
 			concurrencyPolicy?: ConcurrencyPolicy | null;
 			timeoutMinutes?: number | null;
+			maxRuns?: number | null;
 		},
 	): { ok: true; task: ScheduledTaskSummary } | { ok: false; error: string } {
 		const existing = this.tasks.get(id);
@@ -444,6 +496,7 @@ export class SchedulerEngine {
 		if (patch.sessionTarget === null) delete next.sessionTarget;
 		if (patch.concurrencyPolicy === null) delete next.concurrencyPolicy;
 		if (patch.timeoutMinutes === null) delete next.timeoutMinutes;
+		if (patch.maxRuns === null) delete next.maxRuns;
 
 		this.tasks.set(id, next);
 		this.persist();
@@ -539,15 +592,26 @@ export class SchedulerEngine {
 	}
 
 	private scheduleOne(task: ScheduledTask): void {
-		if (!task.enabled || this.disposed) return;
+		if (!task.enabled || this.disposed || this.passive) return;
+		if (this.capReached(task)) return;
 		if (unsupportedSessionTargetReason(task)) return;
 		const next = nextRunAt(task, this.now());
 		if (next === null) return;
 		const delay = Math.max(0, next - this.now());
-		const timer = setTimeout(() => {
-			this.timers.delete(task.id);
-			void this.fireTask(task, next, /*manual*/ false);
-		}, delay);
+		// Node clamps setTimeout delays above 2^31-1 ms (~24.8 days) to 1ms,
+		// which would fire a far-future task (monthly schedules, distant
+		// startAt) immediately — and the post-run reschedule would loop the
+		// same way. Chunk long waits: sleep MAX_TIMEOUT_MS, then recompute.
+		const timer = delay > MAX_TIMEOUT_MS
+			? setTimeout(() => {
+					this.timers.delete(task.id);
+					const current = this.tasks.get(task.id);
+					if (current) this.scheduleOne(current);
+				}, MAX_TIMEOUT_MS)
+			: setTimeout(() => {
+					this.timers.delete(task.id);
+					void this.fireTask(task, next, /*manual*/ false);
+				}, delay);
 		// Don't keep the event loop alive solely for a scheduled fire.
 		if (typeof (timer as { unref?: () => void }).unref === "function") {
 			(timer as { unref: () => void }).unref();
@@ -566,8 +630,40 @@ export class SchedulerEngine {
 	 */
 	private async fireTask(task: ScheduledTask, at: number, manual: boolean): Promise<void> {
 		if (this.disposed) return;
-		const current = this.tasks.get(task.id) ?? task;
+		// Guard against early fires (timer overflow clamping, wall-clock jumps):
+		// if the scheduled time is still in the future, put the task back on a
+		// timer instead of running it ahead of schedule.
+		if (!manual && at > this.now() + EARLY_FIRE_TOLERANCE_MS) {
+			const current = this.tasks.get(task.id);
+			if (current) this.scheduleOne(current);
+			return;
+		}
+		// Re-read the task from disk right before firing. External edits
+		// (another process pausing/deleting via tasks.json, _cron acting
+		// cross-scope) must win over our stale in-memory copy — otherwise a
+		// disabled task keeps firing until restart AND our persist() after the
+		// run silently reverts the external change.
+		const fresh = readTaskFresh(this.scope, this.workspaceId, task.id);
+		if (!fresh) {
+			// Deleted externally — drop it from memory and stop rescheduling.
+			this.cancelTimer(task.id);
+			this.tasks.delete(task.id);
+			return;
+		}
+		if (!fresh.enabled && !manual) {
+			// Paused externally — sync memory and skip this fire.
+			this.cancelTimer(task.id);
+			this.tasks.set(task.id, fresh);
+			return;
+		}
+		this.tasks.set(task.id, fresh);
+		const current = fresh;
 		if (unsupportedSessionTargetReason(current)) return;
+		// maxRuns safety cap: refuse to fire once the cap is reached.
+		if (!manual && this.capReached(current)) {
+			this.disableForCap(current, at);
+			return;
+		}
 		const sessionId = this.resolveTargetSessionId(current);
 		const policy: ConcurrencyPolicy = current.concurrencyPolicy ?? "skip";
 
@@ -663,11 +759,17 @@ export class SchedulerEngine {
 
 			const updated = this.tasks.get(current.id)!;
 			if (updated.enabled && !this.disposed) {
-				const stillValid = !updated.schedule.endAt || updated.schedule.endAt > this.now();
-				if (stillValid) this.scheduleOne(updated);
-				else if (manual === false) {
-					this.tasks.set(updated.id, { ...updated, enabled: false });
-					this.persist();
+				if (this.capReached(updated)) {
+					// maxRuns reached after this run — auto-disable instead of
+					// rescheduling, so runaway recurring tasks die on their own.
+					this.disableForCap(updated, this.now());
+				} else {
+					const stillValid = !updated.schedule.endAt || updated.schedule.endAt > this.now();
+					if (stillValid) this.scheduleOne(updated);
+					else if (manual === false) {
+						this.tasks.set(updated.id, { ...updated, enabled: false });
+						this.persist();
+					}
 				}
 			}
 		} catch (e) {
@@ -701,6 +803,26 @@ export class SchedulerEngine {
 				void this.fireTask(next, this.now(), /*manual*/ false);
 			});
 		}
+	}
+
+	/** True when the task has a maxRuns cap and has already hit it. */
+	private capReached(task: ScheduledTask): boolean {
+		return typeof task.maxRuns === "number" && task.maxRuns > 0 && (task.runCount ?? 0) >= task.maxRuns;
+	}
+
+	/** Disable a task that hit its maxRuns cap and record why. */
+	private disableForCap(task: ScheduledTask, at: number): void {
+		this.cancelTimer(task.id);
+		this.tasks.set(task.id, { ...task, enabled: false, updatedAt: this.now() });
+		this.persist();
+		const run: ScheduledTaskRun = {
+			taskId: task.id,
+			at,
+			status: "skipped",
+			reason: `maxRuns cap reached (${task.runCount ?? 0}/${task.maxRuns}); task auto-disabled`,
+		};
+		appendRun(this.scope, this.workspaceId, run);
+		this.emit({ type: "task.completed", payload: run });
 	}
 
 	private emit(event: { type: keyof SchedulerEngineEvents; payload: unknown }): void {

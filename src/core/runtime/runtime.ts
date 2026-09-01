@@ -20,6 +20,7 @@ import { SessionProjection } from "../projection/session-projection.js";
 import { TimelineProjection, type TimelineQueryOptions } from "../projection/timeline-projection.js";
 import { IntentClassifier, type ClassifierConfig } from "../intent/classifier.js";
 import { Reactor } from "./reactor.js";
+import { generateRunId, TurnState } from "./turn-state.js";
 import type { CheckpointRef, RuntimeAdapter, RuntimeStatus } from "./types.js";
 import { LocalRuntimeAdapter } from "./local-runtime.js";
 import { CompactionEngine, type CompactionEngineSettings } from "../compaction/compaction-engine.js";
@@ -104,6 +105,9 @@ export class EventSourcedRuntime {
 	/** Agent data directory */
 	get agentDir(): string { return this.config.agentDir ?? getAgentDir(); }
 	private _isProcessing = false;
+	/** Shared turn-level state across reactor lifecycles (follow-ups, retries,
+	 * trackers, approvals). Survives per-prompt reactor restarts. */
+	private readonly turnState = new TurnState(generateRunId());
 	/** In-flight compaction started while no reactor was alive (idle /compact). */
 	private _idleCompaction: Promise<void> | undefined;
 	private _idleCompactionAbort: AbortController | undefined;
@@ -141,7 +145,15 @@ export class EventSourcedRuntime {
 		this.store.append({
 			actor_id: "runtime",
 			type: "RUNTIME_STARTED",
-			payload: { runtime_id: this.runtimeAdapter.runtime_id, kind: this.runtimeAdapter.kind, cwd: config.cwd },
+			payload: {
+				runtime_id: this.runtimeAdapter.runtime_id,
+				kind: this.runtimeAdapter.kind,
+				cwd: config.cwd,
+				// Unique per boot: short-lived turn-state events (e.g.
+				// USER_FOLLOWUP_QUEUED) reference it so replay can tell this
+				// run's queue entries from previous runs' dead buffers.
+				run_id: this.turnState.runId,
+			},
 		});
 	}
 
@@ -168,6 +180,7 @@ export class EventSourcedRuntime {
 			const projection = this.getProjection();
 
 			this.reactor = new Reactor({
+				turnState: this.turnState,
 				store: this.store,
 				projection,
 				llmClient: this.config.llmClient,
@@ -331,6 +344,69 @@ export class EventSourcedRuntime {
 	}
 
 	/**
+	 * Cancel ONE queued follow-up by its source event id. Removes it from the
+	 * in-memory queue and records a USER_FOLLOWUP_DROPPED event so reactor
+	 * restarts do not resurrect it. Returns true when an entry was removed.
+	 */
+	cancelQueuedFollowUp(sourceEventId: string): boolean {
+		return this._takeQueuedFollowUp(sourceEventId, "user_cancel") !== undefined;
+	}
+
+	/**
+	 * Promote ONE queued follow-up to a steer: remove it from the queue (with a
+	 * USER_FOLLOWUP_DROPPED so it cannot be resurrected or double-delivered) and
+	 * re-inject its content via steer() — which interrupts the running turn and
+	 * delivers the message immediately after it settles. Returns false when the
+	 * entry is gone (already drained into a turn or cancelled) — in that case
+	 * nothing is injected: the message is either already being answered or was
+	 * deliberately removed.
+	 */
+	steerQueuedFollowUp(sourceEventId: string): boolean {
+		const entry = this._takeQueuedFollowUp(sourceEventId, "promoted_to_steer");
+		if (!entry) return false;
+		if (!this._isProcessing) {
+			// Idle: nothing to interrupt — same fallback as steer(-while-idle).
+			const text = typeof entry.content === "string"
+				? entry.content
+				: entry.content
+					.map((b) => (b && typeof b === "object" && "text" in b && typeof (b as { text: unknown }).text === "string" ? (b as { text: string }).text : ""))
+					.filter(Boolean)
+					.join("\n");
+			this.steer(text, entry.images as ImageContent[] | undefined);
+			return true;
+		}
+		// Mid-turn: append USER_INTERRUPT ourselves (steer path) so we know the
+		// event id. Store subscribers run synchronously, so by the time append
+		// returns, the reactor has re-queued the content at the END of the
+		// follow-up queue keyed by this event id — promote it to the FRONT,
+		// otherwise "send NOW" would paradoxically run last behind every other
+		// queued message (the drain delivers front-first).
+		const interruptEvent = this.store.append({
+			actor_id: "user",
+			type: "USER_INTERRUPT",
+			payload: { content: entry.content, images: entry.images, reason: "steer" },
+		});
+		this.reactor?.promoteFollowUpToFront(interruptEvent.event_id);
+		return true;
+	}
+
+	/** Atomically remove a queued entry by source event id, recording WHY. */
+	private _takeQueuedFollowUp(
+		sourceEventId: string,
+		reason: "user_cancel" | "promoted_to_steer",
+	): import("./turn-state.js").FollowUpEntry | undefined {
+		const entry = this.reactor?.takeFollowUp(sourceEventId);
+		if (entry) {
+			this.store.append({
+				actor_id: "runtime",
+				type: "USER_FOLLOWUP_DROPPED",
+				payload: { dropped_event_ids: [sourceEventId], reason },
+			});
+		}
+		return entry;
+	}
+
+	/**
 	 * Queue a follow-up message — delivered after the current turn naturally completes.
 	 * If the runtime is not processing, queues it for the next prompt.
 	 */
@@ -338,7 +414,7 @@ export class EventSourcedRuntime {
 		this.store.append({
 			actor_id: "user",
 			type: "USER_FOLLOWUP_QUEUED",
-			payload: { content: text, images, files },
+			payload: { content: text, images, files, run_id: this.turnState.runId },
 		});
 	}
 

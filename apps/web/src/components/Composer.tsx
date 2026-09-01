@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from "react";
 import { ArrowUp, Square, Mic, Plus, ChevronDown, Check, X, Loader2, Shield, ShieldCheck, Paperclip, Sparkles, MessageSquarePlus, FolderOpen, Clock } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { cn } from "@/lib/utils";
+import { cn, isTauri } from "@/lib/utils";
 import {
 	loadFileAttachment,
 	loadPathAttachments,
@@ -19,10 +19,7 @@ import type { RpcSessionState, RpcContextUsage, RpcTokenUsage, ModelInfo } from 
 import type { WorkspaceMeta, ScheduledTaskSummary } from "@/lib/types";
 import { resolveScheduleScope } from "@/lib/schedule-scope";
 import { COMPOSER_PREFILL_EVENT, type ComposerPrefillDetail } from "@/lib/composer-prefill";
-
-function isTauri(): boolean {
-	return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
+import { Z } from "@/lib/z-index";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
 
@@ -120,7 +117,7 @@ function ContextRing({
 				/>
 			</svg>
 			{hover && (
-				<div className="absolute bottom-full right-0 z-30 mb-2 w-max max-w-[16rem] rounded-lg border border-border bg-surface px-3 py-2 text-[11px] text-fg shadow-lg">
+				<div className={cn("absolute bottom-full right-0 mb-2 w-max max-w-[16rem] rounded-lg border border-border bg-surface px-3 py-2 text-[11px] text-fg shadow-lg", Z.menu)}>
 					{tooltipLines.map((line, i) => (
 						<div key={i} className={i === 0 ? "font-medium" : "text-muted"}>
 							{line}
@@ -176,48 +173,7 @@ interface SpeechRecognition extends EventTarget {
 }
 
 
-// Module-level per-workspace draft store. Survives Composer unmounts (the
-// workspace-switch loading screen unmounts the whole AgentView), so unsent
-// input is restored when the user switches back. Images/files are kept in
-// memory only; plain text is also mirrored to localStorage so drafts survive
-// an app restart.
-interface ComposerDraft {
-	input: string;
-	images: ComposerImage[];
-	files: LoadedFileAttachment[];
-}
-
-const draftsByWs = new Map<string, ComposerDraft>();
-const DRAFT_STORAGE_KEY = "pizza.composer.drafts";
-
-function saveDraft(ws: string, draft: Pick<ComposerDraft, "input" | "images" | "files">) {
-	draftsByWs.set(ws, { input: draft.input, images: draft.images, files: draft.files });
-	try {
-		const stored: Record<string, string> = JSON.parse(localStorage.getItem(DRAFT_STORAGE_KEY) ?? "{}");
-		if (draft.input.trim()) {
-			stored[ws] = draft.input;
-		} else {
-			delete stored[ws];
-		}
-		localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(stored));
-	} catch {
-		// localStorage unavailable (private mode/quota) — memory store still works.
-	}
-}
-
-function loadDraft(ws: string): ComposerDraft {
-	const memory = draftsByWs.get(ws);
-	if (memory) return memory;
-	// No in-memory draft (e.g. app restarted): fall back to persisted text.
-	let input = "";
-	try {
-		const stored: Record<string, string> = JSON.parse(localStorage.getItem(DRAFT_STORAGE_KEY) ?? "{}");
-		input = stored[ws] ?? "";
-	} catch {
-		// ignore
-	}
-	return { input, images: [], files: [] };
-}
+import { saveDraft, loadDraft } from "@/lib/composer-drafts";
 
 export function Composer({
 	sidecarReady,
@@ -275,7 +231,6 @@ export function Composer({
 		setImages(restored.images);
 		setFiles(restored.files);
 		prevWsRef.current = newWs;
-		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [workspace]);
 	// Save the draft when the Composer unmounts (e.g. the workspace-switch
 	// loading screen) so nothing typed is lost.
@@ -284,7 +239,6 @@ export function Composer({
 			const ws = prevWsRef.current;
 			if (ws) saveDraft(ws, draftStateRef.current);
 		};
-		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
 	const [models, setModels] = useState<ModelInfo[]>([]);
 	const [recording, setRecording] = useState(false);
@@ -1257,7 +1211,7 @@ ${insert}`;
 									<Plus className="h-4 w-4" />
 								</button>
 								{plusMenuOpen && (
-									<div className="absolute bottom-full left-0 z-50 mb-2 w-64 rounded-xl border border-border bg-surface p-1 shadow-xl">
+									<div className={cn("absolute bottom-full left-0 mb-2 w-64 rounded-xl border border-border bg-surface p-1 shadow-xl", Z.menu)}>
 										<button
 											type="button"
 											onClick={() => void handleNewSession()}
@@ -1358,7 +1312,7 @@ ${insert}`;
 									<ChevronDown className="h-3 w-3" />
 								</button>
 								{approvalMenuOpen && (
-									<div className="absolute bottom-full left-0 z-20 mb-2 w-56 rounded-xl border border-border bg-surface p-1 shadow-lg">
+									<div className={cn("absolute bottom-full left-0 mb-2 w-56 rounded-xl border border-border bg-surface p-1 shadow-lg", Z.menu)}>
 										<button
 											type="button"
 											onClick={() => void handleApprovalPolicyChange(false)}
@@ -1415,7 +1369,7 @@ ${insert}`;
 									<ChevronDown className="h-3.5 w-3.5" />
 								</button>
 								{modelMenuOpen && visibleModels.length > 0 && (
-									<div className="absolute bottom-full right-0 z-20 mb-2 max-h-80 w-64 overflow-y-auto rounded-xl border border-border bg-surface p-1 shadow-lg">
+									<div className={cn("absolute bottom-full right-0 mb-2 max-h-80 w-64 overflow-y-auto rounded-xl border border-border bg-surface p-1 shadow-lg", Z.menu)}>
 										{visibleModels.map((m) => {
 											const key = `${m.provider}:${m.id}`;
 											const selected = displayedModel
@@ -1470,7 +1424,7 @@ ${insert}`;
 								</div>
 							)}
 							{modelMenuOpen && visibleModels.length === 0 && models.length > 0 && (
-									<div className="absolute bottom-full right-0 z-20 mb-2 w-64 rounded-xl border border-border bg-surface p-1 shadow-lg">
+									<div className={cn("absolute bottom-full right-0 mb-2 w-64 rounded-xl border border-border bg-surface p-1 shadow-lg", Z.menu)}>
 										<a
 											href="/#/settings"
 											className="block rounded-lg bg-surface-2 px-2.5 py-1.5 text-center text-[11px] text-accent hover:opacity-80"

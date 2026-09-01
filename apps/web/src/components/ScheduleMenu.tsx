@@ -15,6 +15,7 @@ import { ScheduleForm } from "@/components/ScheduleDialog";
 import { describeSchedule, formatNextRun } from "@/components/schedule-utils";
 import { resolveScheduleScope } from "@/lib/schedule-scope";
 import { cn } from "@/lib/utils";
+import { Z } from "@/lib/z-index";
 
 /** What the popover is currently showing. */
 type View = { kind: "list" } | { kind: "edit"; task: ScheduledTaskSummary | null };
@@ -197,7 +198,8 @@ export function ScheduleMenu({
 			{open && (
 				<div
 					className={cn(
-						"absolute bottom-full left-0 z-50 mb-2 rounded-xl border border-border bg-surface shadow-xl",
+						"absolute bottom-full left-0 mb-2 rounded-xl border border-border bg-surface shadow-xl",
+						Z.menu,
 						view.kind === "edit" ? "w-[36rem] p-3" : "w-96 p-1",
 					)}
 				>
