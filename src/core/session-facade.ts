@@ -88,6 +88,34 @@ export class SessionFacade {
 		};
 	}
 
+	/**
+	 * Queued entries WITH their source event ids — the id is the handle for
+	 * per-item cancellation (GUI pending strip). Entries queued without a
+	 * source event (rare: legacy replay) have no id and cannot be cancelled
+	 * individually.
+	 */
+	getQueuedEntries(): Array<{ kind: "steer" | "followUp"; text: string; sourceEventId?: string }> {
+		return this.runtime.pendingFollowUps.map((e) => ({
+			kind: e.kind,
+			text: queuedContentToText(e.content),
+			sourceEventId: e.sourceEventId,
+		}));
+	}
+
+	/** Cancel ONE queued entry by source event id. True when removed. */
+	cancelQueuedMessage(sourceEventId: string): boolean {
+		return this.runtime.cancelQueuedFollowUp(sourceEventId);
+	}
+
+	/**
+	 * Promote ONE queued entry to a steer: interrupt the running turn and
+	 * deliver it now instead of waiting for the turn to finish. True when the
+	 * entry was found and injected.
+	 */
+	steerQueuedMessage(sourceEventId: string): boolean {
+		return this.runtime.steerQueuedFollowUp(sourceEventId);
+	}
+
 	/** Clear the runtime's pending queue; returns the cleared texts by kind. */
 	clearQueuedMessages(): { steering: string[]; followUp: string[] } {
 		const cleared = this.runtime.clearQueuedFollowUps();

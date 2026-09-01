@@ -2,6 +2,8 @@ import type { AgentState } from "../agent/types.js";
 import { readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { APP_NAME, getExportTemplateDir } from "../../config.js";
+// Deliberate tui import: HTML export needs the real theme color values (pure
+// data lookup, no terminal rendering), so this stays outside the render bridge.
 import { getResolvedThemeColors, getThemeExportColors } from "../../../packages/tui/theme/theme.js";
 import type { ToolDefinition } from "../extensions/types.js";
 import type { SessionEntry, SessionHeader } from "../types/session-types.js";

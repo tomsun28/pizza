@@ -17,6 +17,7 @@
  */
 
 import { type Server, type Socket, createServer } from "node:net";
+import { chmodSync, unlinkSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import { platform } from "node:os";
 import { join } from "node:path";
@@ -24,6 +25,7 @@ import { homedir } from "node:os";
 import { RpcClient } from "../rpc/rpc-client.js";
 import { resolveCliSpawn } from "../rpc/cli-spawn.js";
 import { listKnownWorkspaces } from "../../src/core/event-store/workspace.js";
+import { normalizeCwd, scheduledCwdsOnDisk } from "./scheduler-guard.js";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
 import {
 	type GatewayResponse,
@@ -49,6 +51,22 @@ export function gatewaySocketPath(socketBasename = "gateway"): string {
 	// Default to ~/.pizza so the gateway is shared across all agents.
 	const configRoot = join(homedir(), ".pizza");
 	return join(configRoot, `${socketBasename}.sock`);
+}
+
+/**
+ * Restrict the Unix socket to the owning user (0600). The socket fronts
+ * agents with full shell access and has no in-band authentication — with a
+ * permissive umask (e.g. 0) the default listen() mode would let ANY local
+ * user connect. No-op on Windows (named pipes use ACLs, and chmod on a pipe
+ * path is meaningless).
+ */
+function restrictSocketPermissions(path: string): void {
+	if (platform() === "win32") return;
+	try {
+		chmodSync(path, 0o600);
+	} catch {
+		// Best-effort: default umask (022) already denies other-user write.
+	}
 }
 
 /** Options for {@link createGatewayServer}. */
@@ -110,6 +128,14 @@ export interface GatewayServerOptions {
 	 * (or a non-spawn owner) — it is memoized per cwd by the pool.
 	 */
 	createAgent?: (cwd: string) => AgentConnection;
+	/**
+	 * Scheduler-guard interval (ms): every tick the gateway scans all scheduler
+	 * scopes on disk, spawns an agent for any cwd with runnable scheduled tasks
+	 * that has none, and pins scheduled agents against idle eviction. The
+	 * gateway daemon outlives the GUI, so scheduled tasks keep firing without
+	 * orphan sidecar processes. Default: 60_000. 0 disables.
+	 */
+	schedulerGuardInterval?: number;
 }
 
 /** One entry in the agent process pool, keyed by workspace cwd. */
@@ -164,11 +190,14 @@ export interface GatewayServerEvents {
 export function createGatewayServer(options: GatewayServerOptions): GatewayServer {
 	const socketPath = options.socketPath ?? gatewaySocketPath();
 	const agentDir = options.agentDir;
-	const mainDir = options.mainDir;
+	// Normalized once: spawnAgent compares `cwd === mainDir` strictly, and
+	// resolveDestination now returns normalized cwds — both sides must match.
+	const mainDir = options.mainDir === undefined ? undefined : normalizeCwd(options.mainDir);
 	const gatewayVersion = options.version ?? "unknown";
 	const agentIdleTimeout = options.agentIdleTimeout ?? 10 * 60_000;
 	const healthCheckInterval = options.agentHealthCheckInterval ?? 60_000;
 	const healthCheckTimeout = options.agentHealthTimeout ?? 10_000;
+	const schedulerGuardInterval = options.schedulerGuardInterval ?? 60_000;
 	const emitter = new EventEmitter();
 
 	const pool = new Map<string, PoolEntry>();
@@ -235,10 +264,19 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 			trimmed.startsWith("..") ||
 			trimmed.startsWith(".")
 		) {
-			const expanded = trimmed.startsWith("~/")
-				? join(homedir(), trimmed.slice(2))
-				: trimmed;
-			return expanded.replace(/\\/g, "/");
+			// Expand ~ and ~/... to the home directory.
+			const expanded =
+				trimmed === "~"
+					? homedir()
+					: trimmed.startsWith("~/")
+						? join(homedir(), trimmed.slice(2))
+						: trimmed;
+			// Normalize (resolve + forward slashes) so the pool key is canonical:
+			// /a/b, /a/b/ and /a/../a/b must map to ONE agent. Divergent keys
+			// spawn a second agent for the same workspace, which loses the
+			// single-instance lock race and tears down the winner (same failure
+			// family the `spawning` map guards against).
+			return normalizeCwd(expanded);
 		}
 		// Otherwise treat as a workspace name (last path component).
 		const workspaces = listKnownWorkspaces(agentDir, mainDir);
@@ -246,7 +284,7 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 		for (const ws of workspaces) {
 			const lastComponent = ws.cwd.replace(/\/+$/, "").split("/").pop() ?? ws.cwd;
 			if (lastComponent.toLowerCase() === lower) {
-				return ws.cwd.replace(/\\/g, "/");
+				return normalizeCwd(ws.cwd);
 			}
 		}
 		return null;
@@ -261,11 +299,31 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 		return { PIZZA_AGENT_DIR: agentDir, PIZZA_HEADLESS: "1" };
 	}
 
+	/** In-flight spawns keyed by cwd — dedupes concurrent getOrCreateAgent
+	 * calls. Without this, the scheduler-guard tick and a channel rpc arriving
+	 * in the same window both spawn an agent for the same cwd; the loser of
+	 * the single-instance lock race dies instantly, its teardown evicts the
+	 * WINNER from the pool (same key), and every subsequent rpc repeats the
+	 * cycle against the now-orphaned lock holder — the frontend hangs on
+	 * "Agent process stopped" forever. */
+	const spawning = new Map<string, Promise<PoolEntry>>();
+
 	/** Find or spawn the RpcClient for `cwd`. */
 	async function getOrCreateAgent(cwd: string): Promise<PoolEntry> {
 		const existing = pool.get(cwd);
 		if (existing) return existing;
+		const inFlight = spawning.get(cwd);
+		if (inFlight) return inFlight;
+		const spawnPromise = spawnAgent(cwd).finally(() => {
+			spawning.delete(cwd);
+		});
+		spawning.set(cwd, spawnPromise);
+		return spawnPromise;
+	}
 
+	/** Actually spawn the agent process and register the pool entry. */
+	async function spawnAgent(cwd: string): Promise<PoolEntry> {
+		if (shuttingDown) throw new Error("gateway is shutting down");
 		// If this cwd is the main agent directory, spawn the sub-agent with
 		// --main so it loads SOUL.md, long-term memory, and the main agent
 		// system prompt (and acquires the main lock instead of the workspace
@@ -277,6 +335,13 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 			? options.createAgent(cwd)
 			: new RpcClient({ cwd, cliPath, binary, env: makeEnv(), args: extraArgs });
 		await client.start();
+		// stop() may have run while start() was in flight — it tears down the
+		// POOL, so an entry registered after that point would leak a live agent
+		// process past gateway shutdown. Kill it and bail instead.
+		if (shuttingDown) {
+			await client.stop().catch(() => {});
+			throw new Error("gateway is shutting down");
+		}
 		const entry: PoolEntry = {
 			client,
 			cwd,
@@ -321,7 +386,11 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 			entry.busy ||
 			entry.queue.length > 0 ||
 			now - entry.lastActivity < agentIdleTimeout ||
-			hasLiveSubscribers(entry.cwd)
+			hasLiveSubscribers(entry.cwd) ||
+			// Pinned by the scheduler guard: this workspace has runnable
+			// scheduled tasks, so its agent (and the SchedulerEngine inside it)
+			// must stay resident even with no clients attached.
+			scheduledCwds.has(normalizeCwd(entry.cwd))
 		);
 	}
 
@@ -635,7 +704,28 @@ function nextMessageId(): string {
 					write({ type: "error", message: `Unknown workspace "${request.workspace}".` });
 					return;
 				}
-				const entry = await getOrCreateAgent(cwd);
+				// Spawn failures must ALSO come back as an id-carrying frame: a bare
+				// { type: "error" } matches no pending request and the client would
+				// hang until its own timeout (same failure family as sendCommand
+				// errors below).
+				let entry: PoolEntry;
+				try {
+					entry = await getOrCreateAgent(cwd);
+				} catch (error) {
+					const frameId = (request.frame as { id?: string })?.id;
+					write({
+						type: "rpc",
+						workspace: cwd,
+						frame: {
+							id: frameId,
+							type: "response",
+							command: (request.frame as { type?: string })?.type,
+							success: false,
+							error: `Failed to start agent for ${cwd}: ${error instanceof Error ? error.message : String(error)}`,
+						} as unknown as GatewayRpcFrame,
+					});
+					return;
+				}
 				// Refresh activity on dispatch: sendCommand acks instantly for
 				// prompt/steer (the turn then streams as events, which also refresh
 				// lastActivity via the forwarder), so this closes the brief gap
@@ -643,9 +733,27 @@ function nextMessageId(): string {
 				// `busy` here — the authoritative liveness signal is the event
 				// stream, and toggling busy around an instant ack would be wrong.
 				entry.lastActivity = Date.now();
-				const response = await entry.client.sendCommand(request.frame as RpcCommand);
-				// Route the response back to THIS channel only (events fan out separately).
-				write({ type: "rpc", workspace: cwd, frame: response as GatewayRpcFrame });
+				try {
+					const response = await entry.client.sendCommand(request.frame as RpcCommand);
+					// Route the response back to THIS channel only (events fan out separately).
+					write({ type: "rpc", workspace: cwd, frame: response as GatewayRpcFrame });
+				} catch (error) {
+					// Keep the original frame id so the client resolves its pending
+					// request instead of spinning until its own timeout — a bare
+					// { type: "error" } frame has no id and matches nothing.
+					const frameId = (request.frame as { id?: string })?.id;
+					write({
+						type: "rpc",
+						workspace: cwd,
+						frame: {
+							id: frameId,
+							type: "response",
+							command: (request.frame as { type?: string })?.type,
+							success: false,
+							error: error instanceof Error ? error.message : String(error),
+						} as unknown as GatewayRpcFrame,
+					});
+				}
 				return;
 			}
 			case "list": {
@@ -760,6 +868,55 @@ function nextMessageId(): string {
 		socket.on("error", () => { activeSockets.delete(socket); cleanup(); });
 	}
 
+	// ── scheduler guard ───────────────────────────────────────────────────
+	// The gateway owns "a workspace with runnable scheduled tasks must have a
+	// live agent". See scheduler-guard.ts for the disk scan; here we keep the
+	// pinned-cwd set fresh and spawn missing agents each tick.
+
+	/** Normalized cwds that currently have runnable scheduled tasks. */
+	let scheduledCwds = new Set<string>();
+	let schedulerGuardTimer: NodeJS.Timeout | undefined;
+
+	async function schedulerGuardTick(): Promise<void> {
+		if (shuttingDown) return;
+		try {
+			scheduledCwds = scheduledCwdsOnDisk(agentDir, mainDir);
+		} catch {
+			return; // scan failure must never break the guard loop
+		}
+		for (const cwd of scheduledCwds) {
+			if (shuttingDown) return;
+			const hasAgent = Array.from(pool.keys()).some((k) => normalizeCwd(k) === cwd);
+			if (hasAgent) continue;
+			try {
+				// Spawn with the VERBATIM mainDir string when this is the main
+				// agent's cwd: getOrCreateAgent compares cwd === mainDir strictly
+				// to decide the --main flag, and normalization could break that.
+				const spawnCwd = mainDir !== undefined && normalizeCwd(mainDir) === cwd ? mainDir : cwd;
+				await getOrCreateAgent(spawnCwd); // emits agentSpawned itself
+			} catch {
+				// Spawn failure (deleted dir, bad install) — retry next tick.
+			}
+		}
+	}
+
+	function startSchedulerGuard(): void {
+		if (schedulerGuardInterval <= 0) return;
+		if (schedulerGuardTimer) return;
+		// Immediate first tick so tasks resume right after gateway (re)start,
+		// then steady-state polling.
+		void schedulerGuardTick();
+		schedulerGuardTimer = setInterval(() => void schedulerGuardTick(), schedulerGuardInterval);
+		schedulerGuardTimer.unref?.();
+	}
+
+	function stopSchedulerGuard(): void {
+		if (schedulerGuardTimer) {
+			clearInterval(schedulerGuardTimer);
+			schedulerGuardTimer = undefined;
+		}
+	}
+
 	// ── lifecycle ─────────────────────────────────────────────────────────
 
 	/** Periodic health check: ping each idle agent; tear down non-responders. */
@@ -778,7 +935,16 @@ function nextMessageId(): string {
 				// is clearly alive (it just handled a request).
 				if (now - entry.lastActivity < healthCheckInterval) continue;
 				try {
-					await entry.client.sendCommand({ type: "get_state", id: `_health_${Date.now()}` });
+					// Race the configured health timeout: sendCommand's own timeout is
+					// 30s, which would let one stuck agent stall this sequential loop
+					// (and every other agent's check) for half a minute.
+					await Promise.race([
+						entry.client.sendCommand({ type: "get_state", id: `_health_${Date.now()}` }),
+						new Promise((_, reject) => {
+							const t = setTimeout(() => reject(new Error("health check timed out")), healthCheckTimeout);
+							(t as NodeJS.Timeout).unref?.();
+						}),
+					]);
 				} catch {
 					// Re-check: if the agent became busy while we were waiting,
 					// it's healthy — don't tear it down.
@@ -803,13 +969,13 @@ function nextMessageId(): string {
 				if (error.code === "EADDRINUSE" && platform() !== "win32") {
 					// Stale socket from a crashed daemon — remove and retry once.
 					try {
-						const { unlinkSync } = require("node:fs") as typeof import("node:fs");
 						unlinkSync(socketPath);
 					} catch {
 						/* ignore */
 					}
 					server!.listen(socketPath, () => {
 						server!.off("error", onError);
+						restrictSocketPermissions(socketPath);
 						emitter.emit("listening", socketPath as never);
 						resolve();
 					});
@@ -820,17 +986,20 @@ function nextMessageId(): string {
 			server!.once("error", onError);
 			server!.listen(socketPath, () => {
 				server!.off("error", onError);
+				restrictSocketPermissions(socketPath);
 				emitter.emit("listening", socketPath as never);
 				resolve();
 			});
 		});
 		startHealthCheck();
+		startSchedulerGuard();
 	}
 
 	async function stop(): Promise<void> {
 		if (shuttingDown) return;
 		shuttingDown = true;
 		stopHealthCheck();
+		stopSchedulerGuard();
 		// Tear down all pooled agents.
 		const cwds = Array.from(pool.keys());
 		await Promise.all(cwds.map((cwd) => teardownAgent(cwd, "shutdown").catch(() => {})));
@@ -850,7 +1019,6 @@ function nextMessageId(): string {
 		// Remove the socket file (Unix only).
 		if (platform() !== "win32") {
 			try {
-				const { unlinkSync } = require("node:fs") as typeof import("node:fs");
 				unlinkSync(socketPath);
 			} catch {
 				/* ignore */

@@ -38,8 +38,15 @@ export {
 	writeTasks,
 	appendRun,
 	readRuns,
+	readTaskFresh,
+	readTasksAllScopes,
+	mutateTaskAnyScope,
+	getSchedulerDir,
 	getSchedulerDirForTest,
+	type ScopedTask,
 } from "./store.js";
+
+export { SchedulerScopeLock, HEARTBEAT_MS, STALE_MS } from "./scope-lock.js";
 
 export {
 	generateTaskId,

@@ -3,13 +3,12 @@ import { Container, Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "@sinclair/typebox";
 import { mkdir as fsMkdir, writeFile as fsWriteFile } from "fs/promises";
 import { dirname } from "path";
-import { keyHint } from "../../../packages/tui/components/keybinding-hints.js";
-import { getLanguageFromPath, highlightCode } from "../../../packages/tui/theme/theme.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { withFileMutationQueue } from "./file-mutation-queue.js";
 import { resolveToCwd } from "./path-utils.js";
 import { invalidArgText, normalizeDisplayText, replaceTabs, shortenPath, str } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
+import { toolRenderBridge as tui } from "./render-bridge.js";
 
 const writeSchema = Type.Object({
 	path: Type.String({ description: "Path to the file to write (relative or absolute)" }),
@@ -58,7 +57,7 @@ class WriteCallRenderComponent extends Text {
 const WRITE_PARTIAL_FULL_HIGHLIGHT_LINES = 50;
 
 function highlightSingleLine(line: string, lang: string): string {
-	const highlighted = highlightCode(line, lang);
+	const highlighted = tui().highlightCode(line, lang);
 	return highlighted[0] ?? "";
 }
 
@@ -66,7 +65,7 @@ function refreshWriteHighlightPrefix(cache: WriteHighlightCache): void {
 	const prefixCount = Math.min(WRITE_PARTIAL_FULL_HIGHLIGHT_LINES, cache.normalizedLines.length);
 	if (prefixCount === 0) return;
 	const prefixSource = cache.normalizedLines.slice(0, prefixCount).join("\n");
-	const prefixHighlighted = highlightCode(prefixSource, cache.lang);
+	const prefixHighlighted = tui().highlightCode(prefixSource, cache.lang);
 	for (let i = 0; i < prefixCount; i++) {
 		cache.highlightedLines[i] =
 			prefixHighlighted[i] ?? highlightSingleLine(cache.normalizedLines[i] ?? "", cache.lang);
@@ -74,7 +73,7 @@ function refreshWriteHighlightPrefix(cache: WriteHighlightCache): void {
 }
 
 function rebuildWriteHighlightCacheFull(rawPath: string | null, fileContent: string): WriteHighlightCache | undefined {
-	const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
+	const lang = rawPath ? tui().getLanguageFromPath(rawPath) : undefined;
 	if (!lang) return undefined;
 	const displayContent = normalizeDisplayText(fileContent);
 	const normalized = replaceTabs(displayContent);
@@ -83,7 +82,7 @@ function rebuildWriteHighlightCacheFull(rawPath: string | null, fileContent: str
 		lang,
 		rawContent: fileContent,
 		normalizedLines: normalized.split("\n"),
-		highlightedLines: highlightCode(normalized, lang),
+		highlightedLines: tui().highlightCode(normalized, lang),
 	};
 }
 
@@ -92,7 +91,7 @@ function updateWriteHighlightCacheIncremental(
 	rawPath: string | null,
 	fileContent: string,
 ): WriteHighlightCache | undefined {
-	const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
+	const lang = rawPath ? tui().getLanguageFromPath(rawPath) : undefined;
 	if (!lang) return undefined;
 	if (!cache) return rebuildWriteHighlightCacheFull(rawPath, fileContent);
 	if (cache.lang !== lang || cache.rawPath !== rawPath) return rebuildWriteHighlightCacheFull(rawPath, fileContent);
@@ -138,23 +137,23 @@ function formatWriteCall(
 	const fileContent = str(args?.content);
 	const path = rawPath !== null ? shortenPath(rawPath) : null;
 	const invalidArg = invalidArgText(theme);
-	let text = `${theme.fg("toolTitle", theme.bold("write"))} ${path === null ? invalidArg : path ? theme.fg("accent", path) : theme.fg("toolOutput", "...")}`;
+	let text = `${tui().theme.fg("toolTitle", tui().theme.bold("write"))} ${path === null ? invalidArg : path ? tui().theme.fg("accent", path) : tui().theme.fg("toolOutput", "...")}`;
 
 	if (fileContent === null) {
-		text += `\n\n${theme.fg("error", "[invalid content arg - expected string]")}`;
+		text += `\n\n${tui().theme.fg("error", "[invalid content arg - expected string]")}`;
 	} else if (fileContent) {
-		const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
+		const lang = rawPath ? tui().getLanguageFromPath(rawPath) : undefined;
 		const renderedLines = lang
-			? (cache?.highlightedLines ?? highlightCode(replaceTabs(normalizeDisplayText(fileContent)), lang))
+			? (cache?.highlightedLines ?? tui().highlightCode(replaceTabs(normalizeDisplayText(fileContent)), lang))
 			: normalizeDisplayText(fileContent).split("\n");
 		const lines = trimTrailingEmptyLines(renderedLines);
 		const totalLines = lines.length;
 		const maxLines = options.expanded ? lines.length : 10;
 		const displayLines = lines.slice(0, maxLines);
 		const remaining = lines.length - maxLines;
-		text += `\n\n${displayLines.map((line) => (lang ? line : theme.fg("toolOutput", replaceTabs(line)))).join("\n")}`;
+		text += `\n\n${displayLines.map((line) => (lang ? line : tui().theme.fg("toolOutput", replaceTabs(line)))).join("\n")}`;
 		if (remaining > 0) {
-			text += `${theme.fg("muted", `\n... (${remaining} more lines, ${totalLines} total,`)} ${keyHint("app.tools.expand", "to expand")})`;
+			text += `${tui().theme.fg("muted", `\n... (${remaining} more lines, ${totalLines} total,`)} ${tui().keyHint("app.tools.expand", "to expand")})`;
 		}
 	}
 
@@ -175,7 +174,7 @@ function formatWriteResult(
 	if (!output) {
 		return undefined;
 	}
-	return `\n${theme.fg("error", output)}`;
+	return `\n${tui().theme.fg("error", output)}`;
 }
 
 export function createWriteToolDefinition(

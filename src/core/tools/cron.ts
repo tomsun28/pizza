@@ -28,6 +28,7 @@ import { Type, type Static } from "@sinclair/typebox";
 import type { ScheduleSpec, ScheduledTaskSummary } from "@tomsun28/pizza-protocol";
 import type { SchedulerEngine } from "../scheduler/engine.js";
 import { parseScheduleShorthand } from "../scheduler/shorthand.js";
+import { mutateTaskAnyScope, readTasksAllScopes } from "../scheduler/store.js";
 import { defineTool, type ToolDefinition } from "../extensions/types.js";
 
 /** Supported `_cron` subcommands. */
@@ -83,6 +84,20 @@ const cronSchema = Type.Object({
 	verbose: Type.Optional(
 		Type.Boolean({
 			description: "list only: inline the prompt body of each task for quick review. Default: compact one-line rows.",
+		}),
+	),
+	all: Type.Optional(
+		Type.Boolean({
+			description:
+				"list only: show tasks from ALL scopes (main + every workspace), not just the current engine's scope. " +
+				"Use this to find tasks that keep firing but are invisible here.",
+		}),
+	),
+	maxRuns: Type.Optional(
+		Type.Number({
+			description:
+				"create/update: auto-disable the task after this many total runs (safety cap for recurring tasks). " +
+				"0 clears the cap.",
 		}),
 	),
 	cronExpr: Type.Optional(
@@ -183,6 +198,28 @@ function formatList(tasks: ScheduledTaskSummary[], verbose = false): string {
 	return `${tasks.length} task(s):\n${rows.join("\n")}`;
 }
 
+/** Render tasks gathered from every scope, grouped by scope, for `list --all`. */
+function formatAllScopes(): string {
+	const entries = readTasksAllScopes();
+	if (entries.length === 0) return "No scheduled tasks in any scope.";
+	const groups = new Map<string, string[]>();
+	for (const { task, scope, workspaceId } of entries) {
+		const key = scope === "main" ? "main" : `workspace ${workspaceId}`;
+		const status = task.enabled ? "on " : "off";
+		const last = task.lastRunStatus ? ` [last: ${task.lastRunStatus}]` : "";
+		const runs = ` runs: ${task.runCount ?? 0}${task.maxRuns ? `/${task.maxRuns}` : ""}`;
+		const row = `  - ${task.id}  "${task.name}"  ${status} ${runs}${last}`;
+		const list = groups.get(key) ?? [];
+		list.push(row);
+		groups.set(key, list);
+	}
+	const blocks: string[] = [];
+	for (const [key, rows] of groups) {
+		blocks.push(`${key}:\n${rows.join("\n")}`);
+	}
+	return `${entries.length} task(s) across ${groups.size} scope(s):\n${blocks.join("\n")}\n\nTasks outside the current scope can be paused/deleted from here too — pass their id to _cron pause/delete.`;
+}
+
 /** Indent every line of `text` by 4 spaces (for nested display). */
 function indent(text: string): string {
 	return text
@@ -211,7 +248,7 @@ function formatDetail(t: ScheduledTaskSummary): string {
 	lines.push(
 		`next fire:  ${fmtTime(t.nextRunAt)}`,
 		`last fire:  ${fmtTime(t.lastRunAt)}`,
-		`runs:       ${t.runCount ?? 0}`,
+		`runs:       ${t.runCount ?? 0}${t.maxRuns ? ` (cap: ${t.maxRuns})` : ""}`,
 		`target:     ${fmtSessionTarget(t)}`,
 		`created:    ${fmtTime(t.createdAt)}  by ${t.createdBy}`,
 		`updated:    ${fmtTime(t.updatedAt)}`,
@@ -246,7 +283,8 @@ export function createCronToolDefinition(
 
 			switch (params.action) {
 				case "list": {
-				return textResult(formatList(engine.list(), params.verbose === true));
+					if (params.all) return textResult(formatAllScopes());
+					return textResult(formatList(engine.list(), params.verbose === true));
 				}
 
 				case "show": {
@@ -281,6 +319,7 @@ export function createCronToolDefinition(
 						createdBy: "intent",
 						sourceText: expr,
 						sessionTarget,
+						maxRuns: params.maxRuns && params.maxRuns > 0 ? params.maxRuns : undefined,
 					});
 					if (!created.ok) return errResult(`_cron create: ${created.error}`);
 
@@ -314,7 +353,7 @@ export function createCronToolDefinition(
 
 				case "update": {
 					if (!params.taskId) return errResult("_cron update: --task is required.");
-					const patch: { schedule?: ScheduleSpec; prompt?: string; name?: string } = {};
+					const patch: { schedule?: ScheduleSpec; prompt?: string; name?: string; maxRuns?: number | null } = {};
 					const expr = params.cronExpr ?? params.schedule;
 					if (expr !== undefined) {
 						const parsed = parseScheduleShorthand(expr);
@@ -323,8 +362,9 @@ export function createCronToolDefinition(
 					}
 					if (params.prompt !== undefined) patch.prompt = params.prompt;
 					if (params.name !== undefined) patch.name = params.name;
-					if (expr === undefined && params.prompt === undefined && params.name === undefined) {
-						return errResult("_cron update: nothing to change. Pass --schedule/--cron-expr and/or --prompt/--name.");
+					if (params.maxRuns !== undefined) patch.maxRuns = params.maxRuns > 0 ? params.maxRuns : null;
+					if (expr === undefined && params.prompt === undefined && params.name === undefined && params.maxRuns === undefined) {
+						return errResult("_cron update: nothing to change. Pass --schedule/--cron-expr and/or --prompt/--name/--max-runs.");
 					}
 					const r = engine.update(params.taskId, patch);
 					if (!r.ok) return errResult(`_cron update: ${r.error}`);
@@ -338,7 +378,19 @@ export function createCronToolDefinition(
 					if (!params.taskId) return errResult(`_cron ${params.action}: taskId is required.`);
 					const enabled = params.action === "resume";
 					const r = engine.update(params.taskId, { enabled });
-					if (!r.ok) return errResult(`_cron ${params.action}: ${r.error}`);
+					if (!r.ok) {
+						// Not in this engine's scope — try every scope on disk. The
+						// owning engine re-reads tasks.json before each fire, so the
+						// change takes effect at its next tick.
+						const x = mutateTaskAnyScope(params.taskId, (t) => ({ ...t, enabled, updatedAt: Date.now() }));
+						if (x.found) {
+							return textResult(
+								`${enabled ? "Resumed" : "Paused"} task ${params.taskId} in ${x.scope === "main" ? "main scope" : `workspace ${x.workspaceId}`} ` +
+									`(cross-scope edit; takes effect at that scheduler's next tick).`,
+							);
+						}
+						return errResult(`_cron ${params.action}: ${r.error}`);
+					}
 					return textResult(
 						`${enabled ? "Resumed" : "Paused"} task ${r.task.id} "${r.task.name}". ` +
 							`Next fire: ${fmtTime(r.task.nextRunAt)}.`,
@@ -348,7 +400,16 @@ export function createCronToolDefinition(
 				case "delete": {
 					if (!params.taskId) return errResult("_cron delete: taskId is required.");
 					const r = engine.delete(params.taskId);
-					if (!r.ok) return errResult(`_cron delete: ${r.error}`);
+					if (!r.ok) {
+						const x = mutateTaskAnyScope(params.taskId, () => null);
+						if (x.found) {
+							return textResult(
+								`Deleted task ${params.taskId} from ${x.scope === "main" ? "main scope" : `workspace ${x.workspaceId}`} ` +
+									`(cross-scope edit; the owning scheduler drops it at its next tick).`,
+							);
+						}
+						return errResult(`_cron delete: ${r.error}`);
+					}
 					return textResult(`Deleted task ${r.id}.`);
 				}
 

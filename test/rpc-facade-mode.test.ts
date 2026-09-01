@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SqliteEventStore } from "../src/core/event-store/sqlite-store.js";
 import type { ContentBlock, EventBase } from "../src/core/event-store/types.js";
 import type { ToolRegistry } from "../src/core/intent/types.js";
@@ -27,7 +27,10 @@ vi.mock("../src/core/output-guard.js", () => ({
 	},
 }));
 
-vi.mock("../packages/tui/theme/theme.js", () => ({ theme: {} }));
+vi.mock("../packages/tui/theme/theme.js", async (importOriginal) => ({
+	...(await importOriginal<Record<string, unknown>>()),
+	theme: {},
+}));
 
 vi.mock("../packages/rpc/jsonl.js", () => ({
 	attachJsonlLineReader: vi.fn((_stream: NodeJS.ReadableStream, onLine: (line: string) => void) => {
@@ -128,7 +131,19 @@ function parseOutputLines(): Array<Record<string, unknown>> {
 }
 
 describe("runRpcModeWithFacade", () => {
+	let originalPizzaHome: string | undefined;
+
+	beforeEach(() => {
+		// Isolate ALL ~/.pizza writes (scheduler tasks.json, runs.jsonl, ...).
+		// Without this, scheduled-task tests pollute the real user home with
+		// rpc-facade-* workspace dirs containing live-looking tasks.
+		originalPizzaHome = process.env.PIZZA_HOME;
+		process.env.PIZZA_HOME = makeTempDir();
+	});
+
 	afterEach(() => {
+		if (originalPizzaHome === undefined) delete process.env.PIZZA_HOME;
+		else process.env.PIZZA_HOME = originalPizzaHome;
 		rpcIo.outputLines = [];
 		rpcIo.lineHandler = undefined;
 		for (const dir of tempDirs.splice(0)) {

@@ -582,3 +582,84 @@ describe("SchedulerEngine — SessionTarget: new with real session id reassign",
 	});
 
 });
+
+describe("setTimeout overflow protection", () => {
+	// Node clamps setTimeout delays above 2^31-1 ms (~24.8 days) to 1ms. A
+	// monthly task whose next fire is >24.8 days out (or a distant startAt)
+	// must NOT fire immediately — the engine chunks the wait instead.
+	it("far-future startAt does not fire immediately (chunked wait)", async () => {
+		vi.useFakeTimers();
+		try {
+			const fired: number[] = [];
+			const engine = new SchedulerEngine({
+				scope: "main",
+				dispatcher: {
+					dispatch: async () => {
+						fired.push(Date.now());
+						return { eventId: "e1" };
+					},
+				},
+			});
+			engine.load();
+			// startAt 40 days out — delay exceeds the 2^31-1 ms clamp.
+			const startAt = Date.now() + 40 * 24 * 3600_000;
+			const r = engine.create({
+				name: "far future",
+				prompt: "ping",
+				schedule: { mode: "daily", times: [{ hour: 9, minute: 0 }], startAt },
+			});
+			expect(r.ok).toBe(true);
+
+			// Advance 1 hour: on an unpatched engine the clamped timer would
+			// have fired within milliseconds. Nothing may fire.
+			await vi.advanceTimersByTimeAsync(3600_000);
+			expect(fired).toHaveLength(0);
+
+			// Advance past the first chunk boundary (~24.85 days): still
+			// before startAt, so the engine must re-arm, not fire.
+			await vi.advanceTimersByTimeAsync(25 * 24 * 3600_000);
+			expect(fired).toHaveLength(0);
+
+			engine.dispose();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("fireTask refuses fires that arrive early (guard)", async () => {
+		const fired: string[] = [];
+		let nowValue = Date.now();
+		const engine = new SchedulerEngine({
+			scope: "main",
+			now: () => nowValue,
+			dispatcher: {
+				dispatch: async (task) => {
+					fired.push(task.id);
+					return { eventId: "e1" };
+				},
+			},
+		});
+		engine.load();
+		const r = engine.create({
+			name: "guarded",
+			prompt: "ping",
+			schedule: { mode: "daily", times: [{ hour: 9, minute: 0 }] },
+			sessionTarget: { kind: "pinned", sessionId: "sess_guard" },
+		});
+		expect(r.ok).toBe(true);
+		if (!r.ok) return;
+
+		// Simulate a timer that fired ~30 days ahead of schedule (overflow
+		// clamp on an old build / wall-clock jump): call the private
+		// fireTask with a far-future `at` while now() stays put.
+		const at = nowValue + 30 * 24 * 3600_000;
+		await (engine as unknown as { fireTask(t: unknown, at: number, m: boolean): Promise<void> }).fireTask(r.task, at, false);
+		expect(fired).toHaveLength(0); // refused — rescheduled instead
+
+		// A fire at (or within tolerance of) its scheduled time still runs.
+		nowValue = at;
+		await (engine as unknown as { fireTask(t: unknown, at: number, m: boolean): Promise<void> }).fireTask(r.task, at, false);
+		expect(fired).toHaveLength(1);
+		engine.dispose();
+	});
+});

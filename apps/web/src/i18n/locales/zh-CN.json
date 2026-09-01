@@ -14,7 +14,10 @@
     "backToAgent": "返回助理",
     "back": "返回",
     "forward": "前进",
-    "continue": "继续"
+    "continue": "继续",
+    "cancel": "取消",
+    "confirm": "确认",
+    "notice": "提示"
   },
   "layout": {
     "brandTagline": "一起创造。",
@@ -218,6 +221,8 @@
     "thoughtProcess": "思考过程",
     "running": "运行中…",
     "queued": "排队中…",
+    "cancelQueued": "删除 — 从队列移除，不发送",
+    "steerQueued": "立即发送 — 打断当前运行，立刻投递",
     "goodResponse": "回答不错",
     "badResponse": "回答不佳",
     "attachment": "附件"

@@ -40,6 +40,7 @@ import { DiffViewer } from "@/components/DiffViewer";
 import { ResizeHandle } from "@/components/ResizeHandle";
 import { usePersistedState } from "@/lib/usePersistedState";
 import { cn } from "@/lib/utils";
+import { Z } from "@/lib/z-index";
 import { prefillComposer } from "@/lib/composer-prefill";
 
 /** Bounds for the draggable status-list / diff split, in px. */
@@ -660,7 +661,7 @@ const BranchMenu = forwardRef<HTMLDivElement, {
 	return (
 		<div
 			ref={ref}
-			className="absolute left-0 top-full z-40 flex w-64 max-h-72 flex-col overflow-hidden rounded-md border border-border bg-surface shadow-lg"
+			className={cn("absolute left-0 top-full flex w-64 max-h-72 flex-col overflow-hidden rounded-md border border-border bg-surface shadow-lg", Z.menu)}
 		>
 			{/* Search box */}
 			<div className="flex shrink-0 items-center gap-1.5 border-b border-border px-2 py-1.5">

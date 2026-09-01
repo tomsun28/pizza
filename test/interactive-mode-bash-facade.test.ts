@@ -11,7 +11,10 @@ import { SessionFacade } from "../src/core/session-facade.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
 import { InteractiveMode } from "../packages/tui/interactive-mode.js";
 
-vi.mock("../packages/tui/theme/theme.js", () => ({ theme: {} }));
+vi.mock("../packages/tui/theme/theme.js", async (importOriginal) => ({
+	...(await importOriginal<Record<string, unknown>>()),
+	theme: {},
+}));
 
 const emptyRegistry: ToolRegistry = {
 	get: () => undefined,

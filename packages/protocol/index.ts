@@ -127,6 +127,12 @@ export interface ScheduledTask {
 	 * Recommended: 15 for interactive agents, 0 for batch jobs.
 	 */
 	timeoutMinutes?: number;
+	/**
+	 * Safety cap: auto-disable the task once runCount reaches this value.
+	 * Prevents runaway recurring tasks (e.g. self-deleting tasks whose
+	 * termination condition never fires). 0/undefined = unlimited.
+	 */
+	maxRuns?: number;
 }
 
 /**
@@ -213,6 +219,9 @@ export type RpcCommand =
 	| { id?: string; type: "prompt"; message: string; images?: unknown[]; files?: unknown[]; streamingBehavior?: "steer" | "followUp" }
 	| { id?: string; type: "steer"; message: string; images?: unknown[]; files?: unknown[] }
 	| { id?: string; type: "follow_up"; message: string; images?: unknown[]; files?: unknown[] }
+	| { id?: string; type: "get_queued_messages" }
+	| { id?: string; type: "cancel_queued_message"; sourceEventId: string }
+	| { id?: string; type: "steer_queued_message"; sourceEventId: string }
 	| { id?: string; type: "abort" }
 	| { id?: string; type: "rewind"; targetEventId?: string }
 
@@ -437,6 +446,9 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "prompt"; success: true }
 	| { id?: string; type: "response"; command: "steer"; success: true }
 	| { id?: string; type: "response"; command: "follow_up"; success: true }
+	| { id?: string; type: "response"; command: "get_queued_messages"; success: true; data: { entries: Array<{ kind: "steer" | "followUp"; text: string; sourceEventId?: string }> } }
+	| { id?: string; type: "response"; command: "cancel_queued_message"; success: true; data: { removed: boolean } }
+	| { id?: string; type: "response"; command: "steer_queued_message"; success: true; data: { promoted: boolean } }
 	| { id?: string; type: "response"; command: "abort"; success: true }
 	| { id?: string; type: "response"; command: "rewind"; success: true; data: { cancelled: boolean } }
 

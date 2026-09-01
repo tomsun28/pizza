@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback, useRef, type ReactNode } from "react"
 import { useTranslation } from "react-i18next";
 import { useNavigate, useLocation, useOutletContext } from "react-router-dom";
 import { PageHeader, Card, Badge, Button } from "@/components/ui";
+import { confirmDialog } from "@/lib/confirm";
+import { Z } from "@/lib/z-index";
 import { cn } from "@/lib/utils";
 import { PixelSelect, PixelCombobox } from "@pxlkit/ui-kit";
 import {
@@ -287,7 +289,7 @@ function AccountLoginDialog({
 	}, [answer, prompt, onDone]);
 
 	return (
-		<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+		<div className={cn("fixed inset-0 flex items-center justify-center bg-black/50 p-4", Z.modal)}>
 			<Card className="w-full max-w-lg">
 				<div className="mb-3 text-sm font-medium text-fg">
 					{t("settings.provider.accountLoginTitle", { name: providerName })}
@@ -385,7 +387,13 @@ function ProviderRow({ provider, onRefresh }: { provider: ProviderInfo; onRefres
 	}, [keyValue, provider.id, onRefresh, t]);
 
 	const handleRemove = useCallback(async () => {
-		if (!confirm(t("settings.provider.confirmRemove", { label: providerLabel(provider) }))) return;
+		const ok = await confirmDialog({
+			title: t("common.remove"),
+			message: t("settings.provider.confirmRemove", { label: providerLabel(provider) }),
+			confirmLabel: t("common.remove"),
+			danger: true,
+		});
+		if (!ok) return;
 		try {
 			if (provider.is_custom) {
 				await removeCustomProvider(provider.id);

@@ -8,9 +8,10 @@
 import type { AgentMessage } from "../agent/types.js";
 import type { EventBase, EventType } from "../event-store/types.js";
 import type { EventStore } from "../event-store/store.js";
-import type { SessionDescriptor, BuildContextOptions, BuiltContext } from "./types.js";
+import type { SessionDescriptor, SessionSourceRef, BuildContextOptions, BuiltContext } from "./types.js";
 import type { TimelineEntry, TimelineEntryKind } from "./timeline-projection.js";
 import { eventsToMessages } from "./event-to-message.js";
+import { sanitizeToolPairing } from "./context-sanitizer.js";
 
 // ============================================================================
 // Constants
@@ -38,11 +39,20 @@ const CONTEXT_RELEVANT_EVENT_TYPES: EventType[] = [
  * Session is a projection/view over events, not a data holder.
  * Multiple sessions can coexist - same events can belong to multiple session views.
  */
+/**
+ * Resolve a cross-workspace fork source into a built context (zero-copy fork).
+ * Injected by SessionManager — the projection itself never opens foreign
+ * stores. Returns undefined when the source cannot be resolved (workspace
+ * deleted, session missing): context then degrades to the session's own range.
+ */
+export type ResolveSourceContext = (ref: SessionSourceRef) => BuiltContext | undefined;
+
 export class SessionProjection {
 	constructor(
 		private store: EventStore,
 		private descriptor: SessionDescriptor,
 		private resolveSession?: (sessionId: string) => SessionDescriptor | undefined,
+		private resolveSourceContext?: ResolveSourceContext,
 	) {}
 
 	/**
@@ -55,6 +65,12 @@ export class SessionProjection {
 	 * 4. Apply token budget truncation if needed
 	 */
 	buildContext(options?: BuildContextOptions): BuiltContext {
+		// Zero-copy cross-workspace fork: prepend the SOURCE workspace's context
+		// (read-only, via the injected resolver) instead of cloned events.
+		const sourceContext =
+			this.descriptor.source_ref && this.resolveSourceContext
+				? this.resolveSourceContext(this.descriptor.source_ref)
+				: undefined;
 		const parentContext = this._buildContextParent(options);
 		const { start, end } = this._getEventRange();
 		const rawEvents = this.store.query({
@@ -64,7 +80,16 @@ export class SessionProjection {
 		}).filter((e) => !e.thread_id || e.thread_id === this.descriptor.thread_id);
 		const events = this._applyCompactionBoundary(rawEvents);
 
-		let messages = [...(parentContext?.messages ?? []), ...eventsToMessages(events)];
+		// Repair tool_use ↔ tool_result pairing: interleaved turns (concurrent
+		// reactors) and crash-truncated executions can leave toolResults that do
+		// not directly follow their assistant tool_use message — strict providers
+		// (Anthropic/Bedrock) reject the whole request for that. The sanitizer
+		// repositions/drops/synthesizes so any log yields a well-formed context.
+		let messages = sanitizeToolPairing([
+			...(sourceContext?.messages ?? []),
+			...(parentContext?.messages ?? []),
+			...eventsToMessages(events),
+		]);
 
 		// Inject compaction summary if present
 		if (this.descriptor.summary_event_id) {
@@ -87,10 +112,14 @@ export class SessionProjection {
 
 		// Apply token budget if specified
 		if (options?.max_tokens) {
-			messages = this._truncateByTokens(messages, options.max_tokens);
+			messages = sanitizeToolPairing(this._truncateByTokens(messages, options.max_tokens));
 		}
 
-		return { messages, events: [...(parentContext?.events ?? []), ...events], descriptor: this.descriptor };
+		return {
+			messages,
+			events: [...(sourceContext?.events ?? []), ...(parentContext?.events ?? []), ...events],
+			descriptor: this.descriptor,
+		};
 	}
 
 	/**
@@ -179,7 +208,7 @@ export class SessionProjection {
 	private _buildContextParent(options?: BuildContextOptions): BuiltContext | undefined {
 		const parent = this._getContextParentDescriptor();
 		if (!parent) return undefined;
-		return new SessionProjection(this.store, parent, this.resolveSession).buildContext({
+		return new SessionProjection(this.store, parent, this.resolveSession, this.resolveSourceContext).buildContext({
 			...options,
 			max_tokens: undefined,
 		});

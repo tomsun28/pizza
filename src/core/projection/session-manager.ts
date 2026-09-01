@@ -5,10 +5,20 @@
  * Data lives in EventStore. Session is just a query view.
  */
 
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import type { EventStore } from "../event-store/store.js";
 import { isSessionStore, type SessionStore } from "../event-store/session-store.js";
-import type { SessionDescriptor, SessionIndex, ThreadDescriptor } from "./types.js";
-import { SessionProjection } from "./session-projection.js";
+import type { SessionDescriptor, SessionIndex, SessionSourceRef, ThreadDescriptor } from "./types.js";
+import { SessionProjection, type ResolveSourceContext } from "./session-projection.js";
+import type { BuiltContext } from "./types.js";
+import { getAgentDir } from "../../config.js";
+import { SqliteEventStore } from "../event-store/sqlite-store.js";
+import {
+	rebuildSessionIndex,
+	replayIndexEventsAfter,
+	type SessionIndexState,
+} from "./session-index-reducer.js";
 import { randomBytes } from "node:crypto";
 
 /** 8-char crypto-random id suffix. Math.random() gave two concurrent
@@ -25,6 +35,8 @@ export interface CreateProjectionSessionOptions {
 	startEventId?: string;
 	summaryEventId?: string;
 	closeActive?: boolean;
+	/** Cross-workspace fork provenance (zero-copy fork). */
+	sourceRef?: SessionSourceRef;
 }
 
 export interface SwitchToExistingSessionOptions {
@@ -49,6 +61,16 @@ export class SessionManager {
 	private activeThreadId: string | undefined;
 	private activeSessionId: string | undefined;
 	private sessionStore: SessionStore | undefined;
+	/** Threads created in-memory whose THREAD record has not yet been carried
+	 * by a SESSION_CREATED event (embedded thread payload). */
+	private pendingThreadEvents: Set<string> = new Set();
+	/**
+	 * Read-only stores of OTHER workspaces opened to resolve source_ref
+	 * (zero-copy cross-workspace fork). Cached per workspace_id, closed on
+	 * dispose(). null = resolution failed permanently (store missing) — do
+	 * not retry every buildContext.
+	 */
+	private externalSources: Map<string, { store: EventStore & { close(): void }; manager: SessionManager } | null> = new Map();
 
 	constructor(
 		private store: EventStore,
@@ -73,7 +95,12 @@ export class SessionManager {
 			this.createSession("user_explicit", undefined, { threadId: this.activeThreadId });
 		}
 		const desc = this.sessions.get(this.activeSessionId!)!;
-		return new SessionProjection(this.store, desc, (sessionId) => this.sessions.get(sessionId));
+		return new SessionProjection(
+			this.store,
+			desc,
+			(sessionId) => this.sessions.get(sessionId),
+			this._resolveSourceContext,
+		);
 	}
 
 	/**
@@ -99,6 +126,7 @@ export class SessionManager {
 			created_by,
 			parent_session_id: options.parentSessionId,
 			context_parent_session_id: options.contextParentSessionId,
+			source_ref: options.sourceRef,
 			created_at: Date.now(),
 		};
 
@@ -106,7 +134,19 @@ export class SessionManager {
 		this.activeSessionId = desc.session_id;
 		this.activeThreadId = desc.thread_id;
 
-		// Emit session created event
+		// Which session does this creation close? Computed BEFORE append so the
+		// event carries the boundary mutation (index = projection of the log).
+		const previousActive = previousActiveId ? this.sessions.get(previousActiveId) : undefined;
+		const closesSession =
+			previousActive && previousActive.thread_id === threadId && previousActive.event_range.end_event_id === "HEAD"
+				? previousActive
+				: undefined;
+
+		// Embed the thread record when this event is the first to reference it,
+		// so replay can recreate the thread without a snapshot.
+		const threadPayload = this._takePendingThreadEvent(desc.thread_id);
+
+		// Emit session created event carrying the full descriptor.
 		const createdEvent = this.store.append({
 			actor_id: "runtime",
 			type: "SESSION_CREATED",
@@ -116,13 +156,18 @@ export class SessionManager {
 				created_by,
 				parent_session_id: desc.parent_session_id,
 				context_parent_session_id: desc.context_parent_session_id,
+				start_event_id: desc.event_range.start_event_id,
+				summary_event_id: desc.summary_event_id,
+				created_at: desc.created_at,
+				closes_session_id: closesSession?.session_id,
+				thread: threadPayload,
+				source_ref: desc.source_ref,
 			},
 			thread_id: desc.thread_id,
 		});
 
-		const previousActive = previousActiveId ? this.sessions.get(previousActiveId) : undefined;
-		if (previousActive && previousActive.thread_id === threadId && previousActive.event_range.end_event_id === "HEAD") {
-			previousActive.event_range.end_event_id = createdEvent.event_id;
+		if (closesSession) {
+			closesSession.event_range.end_event_id = createdEvent.event_id;
 		}
 		this._persistIndex();
 
@@ -140,6 +185,7 @@ export class SessionManager {
 		this.activeSessionId = forked.session_id;
 		this.activeThreadId = forked.thread_id;
 
+		const closesSource = source.event_range.end_event_id === "HEAD";
 		const forkedEvent = this.store.append({
 			actor_id: "runtime",
 			type: "SESSION_FORKED",
@@ -147,10 +193,16 @@ export class SessionManager {
 				new_session_id: forked.session_id,
 				parent_session_id: forked.parent_session_id,
 				fork_at_event_id: event_id,
+				name: forked.name,
+				start_event_id: forked.event_range.start_event_id,
+				summary_event_id: forked.summary_event_id,
+				context_parent_session_id: forked.context_parent_session_id,
+				created_at: forked.created_at,
+				closes_session_id: closesSource ? source.session_id : undefined,
 			},
 			thread_id: forked.thread_id,
 		});
-		if (source.event_range.end_event_id === "HEAD") {
+		if (closesSource) {
 			source.event_range.end_event_id = forkedEvent.event_id;
 		}
 		this._persistIndex();
@@ -200,6 +252,7 @@ export class SessionManager {
 			threadId: source.thread_id,
 		});
 
+		const closesPrevious = previousActive?.event_range.end_event_id === "HEAD";
 		const forkedEvent = this.store.append({
 			actor_id: "runtime",
 			type: "SESSION_FORKED",
@@ -207,11 +260,17 @@ export class SessionManager {
 				new_session_id: forked.session_id,
 				parent_session_id: source.session_id,
 				fork_at_event_id: forkAtEventId,
+				name: forked.name,
+				start_event_id: forked.event_range.start_event_id,
+				summary_event_id: forked.summary_event_id,
+				context_parent_session_id: forked.context_parent_session_id,
+				created_at: forked.created_at,
+				closes_session_id: closesPrevious ? previousActive!.session_id : undefined,
 			},
 			thread_id: forked.thread_id,
 		});
-		if (previousActive?.event_range.end_event_id === "HEAD") {
-			previousActive.event_range.end_event_id = forkedEvent.event_id;
+		if (closesPrevious) {
+			previousActive!.event_range.end_event_id = forkedEvent.event_id;
 			this._persistIndex();
 		}
 
@@ -389,20 +448,29 @@ export class SessionManager {
 		this.activeSessionId = target.session_id;
 		this.activeThreadId = target.thread_id;
 		if (userInitiated) this._promoteThreadToActive(target.thread_id);
+		// Which session does this switch close? Computed BEFORE append so the
+		// event carries the boundary mutation (index = projection of the log).
+		const closePrevious = options.closePrevious ?? "same-thread";
+		const closesTarget =
+			previousActive?.event_range.end_event_id === "HEAD" &&
+			(closePrevious === "always" ||
+				(closePrevious === "same-thread" && previousActive.thread_id === target.thread_id))
+				? previousActive
+				: undefined;
 		const jumpedEvent = this.store.append({
 			actor_id: "runtime",
 			type: "SESSION_JUMPED",
-			payload: { target_session_id: target.session_id, reason, direct: true, background: options.background },
+			payload: {
+				target_session_id: target.session_id,
+				reason,
+				direct: true,
+				background: options.background,
+				closes_session_id: closesTarget?.session_id,
+			},
 			thread_id: target.thread_id,
 		});
-		if (previousActive?.event_range.end_event_id === "HEAD") {
-			const closePrevious = options.closePrevious ?? "same-thread";
-			const shouldClose =
-				closePrevious === "always" ||
-				(closePrevious === "same-thread" && previousActive.thread_id === target.thread_id);
-			if (shouldClose) {
-				previousActive.event_range.end_event_id = jumpedEvent.event_id;
-			}
+		if (closesTarget) {
+			closesTarget.event_range.end_event_id = jumpedEvent.event_id;
 		}
 		this._persistIndex();
 		return target;
@@ -421,7 +489,12 @@ export class SessionManager {
 	getSessionProjection(session_id: string): SessionProjection | undefined {
 		const desc = this.sessions.get(session_id);
 		if (!desc) return undefined;
-		return new SessionProjection(this.store, desc, (id) => this.sessions.get(id));
+		return new SessionProjection(
+			this.store,
+			desc,
+			(id) => this.sessions.get(id),
+			this._resolveSourceContext,
+		);
 	}
 
 	/**
@@ -431,6 +504,13 @@ export class SessionManager {
 		const desc = this.sessions.get(session_id);
 		if (!desc) return;
 		desc.name = name;
+		// Renames must be in the log so the index remains a pure projection.
+		this.store.append({
+			actor_id: "runtime",
+			type: "SESSION_RENAMED",
+			payload: { session_id, name },
+			thread_id: desc.thread_id,
+		});
 		this._persistIndex();
 	}
 
@@ -467,10 +547,93 @@ export class SessionManager {
 	}
 
 	/**
-	 * Dispose the session manager.
+	 * Dispose the session manager. Closes any read-only source stores opened
+	 * for zero-copy cross-workspace forks.
 	 */
 	dispose(): void {
-		// no-op
+		for (const entry of this.externalSources.values()) {
+			if (!entry) continue;
+			try {
+				entry.manager.dispose();
+				entry.store.close();
+			} catch {
+				/* best-effort */
+			}
+		}
+		this.externalSources.clear();
+	}
+
+	/**
+	 * Resolve a cross-workspace fork source into a built context (zero-copy
+	 * fork). Opens the source workspace's event store READ-ONLY (cached per
+	 * workspace, closed on dispose) and builds the source session's context
+	 * clamped to fork_at_event_id. Degrades to undefined — never throws —
+	 * when the source workspace/session is gone.
+	 */
+	private _resolveSourceContext: ResolveSourceContext = (ref: SessionSourceRef): BuiltContext | undefined => {
+		if (ref.workspace_id === this.store.workspace_id) {
+			// Same workspace: resolve against our own index (defensive — the
+			// fork path only writes source_ref for cross-workspace forks).
+			const desc = this.sessions.get(ref.session_id);
+			if (!desc) return undefined;
+			const nextAfter = this.store.query({ after: ref.fork_at_event_id, limit: 1 })[0];
+			return new SessionProjection(this.store, {
+				...desc,
+				event_range: {
+					...desc.event_range,
+					end_event_id: nextAfter ? nextAfter.event_id : desc.event_range.end_event_id,
+				},
+			}, (id) => this.sessions.get(id), this._resolveSourceContext).buildContext();
+		}
+
+		let entry = this.externalSources.get(ref.workspace_id);
+		if (entry === undefined) {
+			entry = this._openExternalSource(ref.workspace_id);
+			this.externalSources.set(ref.workspace_id, entry);
+		}
+		if (entry === null) return undefined;
+
+		const sourceDesc = entry.manager.sessions.get(ref.session_id);
+		if (!sourceDesc) return undefined;
+		// Clamp the source range to the fork point so events appended to the
+		// source AFTER the fork do not leak into this session's context.
+		// event_range.end is an EXCLUSIVE `before` bound in store.query, but
+		// fork_at_event_id must be INCLUDED — use the next event after it as
+		// the bound (or keep the source's own end when nothing follows).
+		const nextAfterFork = entry.store.query({ after: ref.fork_at_event_id, limit: 1 })[0];
+		const clamped: SessionDescriptor = {
+			...sourceDesc,
+			event_range: {
+				...sourceDesc.event_range,
+				end_event_id: nextAfterFork ? nextAfterFork.event_id : sourceDesc.event_range.end_event_id,
+			},
+		};
+		try {
+			return new SessionProjection(
+				entry.store,
+				clamped,
+				(id) => entry!.manager.sessions.get(id),
+				entry.manager._resolveSourceContext,
+			).buildContext();
+		} catch {
+			return undefined; // corrupt source store — degrade, never break the fork
+		}
+	};
+
+	/** Open another workspace's event store read-only, or null when missing. */
+	private _openExternalSource(workspaceId: string): { store: EventStore & { close(): void }; manager: SessionManager } | null {
+		try {
+			// Check existence WITHOUT the usual path helpers: getWorkspaceDir()
+			// mkdirs as a side effect, which would fabricate empty workspace
+			// dirs for deleted sources.
+			const dbPath = join(getAgentDir(), "workspaces", workspaceId, "events.sqlite");
+			if (!existsSync(dbPath)) return null;
+			const store = new SqliteEventStore(workspaceId, dbPath, "fork_source_reader");
+			const manager = new SessionManager(store, store);
+			return { store, manager };
+		} catch {
+			return null;
+		}
 	}
 
 	// =========================================================================
@@ -479,7 +642,20 @@ export class SessionManager {
 
 	private _loadIndex(): void {
 		const index = this.sessionStore?.getSessionIndex();
-		if (!index) return;
+		if (!index) {
+			// No snapshot. The log may still contain SESSION_* events (snapshot
+			// lost/corrupted, or a fresh checkout of an existing event db):
+			// rebuild the index as a pure projection of the log.
+			const rebuilt = rebuildSessionIndex(this.store);
+			if (rebuilt.sessions.size === 0 && rebuilt.threads.size === 0) return;
+			this.threads = rebuilt.threads;
+			this.sessions = rebuilt.sessions;
+			this._selectActiveFromIndex({
+				threads: Array.from(rebuilt.threads.values()),
+				sessions: Array.from(rebuilt.sessions.values()),
+			});
+			return;
+		}
 
 		// Load threads (without selecting an active thread yet) and index all
 		// sessions first. The active thread is chosen deterministically below.
@@ -490,6 +666,16 @@ export class SessionManager {
 			this.sessions.set(session.session_id, session);
 		}
 
+		// Self-heal: replay SESSION_* / THREAD_* events the snapshot missed
+		// (crash between event append and snapshot persist). The reducer is the
+		// same one the live path conceptually applies, so replay converges.
+		const state: SessionIndexState = { threads: this.threads, sessions: this.sessions };
+		replayIndexEventsAfter(state, this.store, index.watermark_sequence ?? 0);
+
+		this._selectActiveFromIndex(index);
+	}
+
+	private _selectActiveFromIndex(index: Pick<SessionIndex, "threads" | "sessions">): void {
 		// Deterministically select the active thread on reload.
 		//
 		// Background threads (created by the scheduler for automated tasks)
@@ -552,6 +738,9 @@ export class SessionManager {
 		const index: SessionIndex = {
 			threads: Array.from(this.threads.values()),
 			sessions: Array.from(this.sessions.values()),
+			// Snapshot watermark: everything up to the store's current head is
+			// reflected in this snapshot (mutations happen right after append).
+			watermark_sequence: this.store.head_sequence,
 		};
 		this.sessionStore.saveSessionIndex(index);
 	}
@@ -572,7 +761,26 @@ export class SessionManager {
 		};
 		this.threads.set(thread.thread_id, thread);
 		this.activeThreadId = thread.thread_id;
+		// The thread record rides on the next SESSION_CREATED event for this
+		// thread (embedded `thread` payload) so replay can recreate it.
+		this.pendingThreadEvents.add(thread.thread_id);
 		return thread;
+	}
+
+	/** Consume the pending-thread marker and return the embeddable payload. */
+	private _takePendingThreadEvent(
+		threadId: string,
+	): { thread_id: string; name?: string; created_at: number; status: ThreadDescriptor["status"] } | undefined {
+		if (!this.pendingThreadEvents.has(threadId)) return undefined;
+		this.pendingThreadEvents.delete(threadId);
+		const thread = this.threads.get(threadId);
+		if (!thread) return undefined;
+		return {
+			thread_id: thread.thread_id,
+			name: thread.name,
+			created_at: thread.created_at,
+			status: thread.status,
+		};
 	}
 
 	/**
@@ -591,6 +799,13 @@ export class SessionManager {
 		const thread = this.threads.get(threadId);
 		if (thread?.status !== "background") return false;
 		thread.status = "active";
+		// Status changes must be in the log so the index remains a pure projection.
+		this.store.append({
+			actor_id: "runtime",
+			type: "THREAD_STATUS_CHANGED",
+			payload: { thread_id: threadId, status: "active" },
+			thread_id: threadId,
+		});
 		return true;
 	}
 

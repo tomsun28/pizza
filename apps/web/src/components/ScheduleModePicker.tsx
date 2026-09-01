@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Check, ChevronDown } from "lucide-react";
 import type { ScheduleMode } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { Z } from "@/lib/z-index";
 
 /**
  * The 6 visual schedule modes (plus an "advanced (cron)" entry). Matches
@@ -84,7 +85,7 @@ export function ScheduleModePicker({
 				/>
 			</button>
 			{open && (
-				<div className="absolute left-0 right-0 top-full z-20 mt-1 max-h-72 overflow-y-auto rounded-xl border border-border bg-surface p-1 shadow-lg">
+				<div className={cn("absolute left-0 right-0 top-full mt-1 max-h-72 overflow-y-auto rounded-xl border border-border bg-surface p-1 shadow-lg", Z.menu)}>
 					{VISUAL_MODES.map((mode) => {
 						const selected = value === mode;
 						return (

@@ -15,9 +15,7 @@
 
 import { sendCommandAwait } from "./transport";
 
-function isTauri(): boolean {
-	return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
+import { isTauri } from "./platform";
 
 async function invokeTauri<T>(command: string, args?: Record<string, unknown>): Promise<T> {
 	const { invoke } = await import("@tauri-apps/api/core");

@@ -32,8 +32,25 @@ export interface SessionDescriptor {
 	parent_session_id?: string;
 	/** Session whose closed history should be prepended when building context. */
 	context_parent_session_id?: string;
+	/**
+	 * Cross-workspace fork provenance (zero-copy fork). When set, buildContext
+	 * opens the SOURCE workspace's event store read-only and prepends the
+	 * source session's context up to `fork_at_event_id` instead of the events
+	 * having been cloned into this workspace's log. If the source store is
+	 * gone (workspace deleted), context degrades to starting at this session's
+	 * own range — never an error.
+	 */
+	source_ref?: SessionSourceRef;
 	/** Creation timestamp */
 	created_at: number;
+}
+
+/** Reference to a fork source in another workspace (see SessionDescriptor.source_ref). */
+export interface SessionSourceRef {
+	workspace_id: string;
+	session_id: string;
+	/** Source events up to AND INCLUDING this event id participate in context. */
+	fork_at_event_id: string;
 }
 
 // ============================================================================
@@ -62,6 +79,14 @@ export interface ThreadDescriptor {
 export interface SessionIndex {
 	threads: ThreadDescriptor[];
 	sessions: SessionDescriptor[];
+	/**
+	 * Log sequence watermark: the highest event sequence whose effects are
+	 * reflected in this snapshot. Loaders replay SESSION_* / THREAD_* events
+	 * after this sequence to self-heal a snapshot that missed a persist.
+	 * Absent in legacy snapshots (treated as "trust snapshot, replay nothing"
+	 * only when no sequence information is available).
+	 */
+	watermark_sequence?: number;
 }
 
 // ============================================================================

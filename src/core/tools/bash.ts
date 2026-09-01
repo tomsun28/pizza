@@ -5,9 +5,6 @@ import type { AgentTool } from "../agent/types.js";
 import { Container, Text, truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import { type Static, Type } from "@sinclair/typebox";
 import { spawn } from "child_process";
-import { keyHint } from "../../../packages/tui/components/keybinding-hints.js";
-import { truncateToVisualLines } from "../../../packages/tui/components/visual-truncate.js";
-import { theme } from "../../../packages/tui/theme/theme.js";
 import { waitForChildProcess } from "../../utils/child-process.js";
 import { injectPizzaPathShims } from "../../utils/path-shims.js";
 import {
@@ -37,6 +34,7 @@ import { createSkillToolDefinition, type SkillToolInput, type SkillToolOptions }
 import { createCronToolDefinition, type CronToolInput, type CronToolOptions } from "./cron.js";
 import { createTellToolDefinition, type TellToolInput, type TellToolOptions } from "./tell.js";
 import { createWriteToolDefinition, type WriteToolInput, type WriteToolOptions } from "./write.js";
+import { toolRenderBridge as tui } from "./render-bridge.js";
 
 /** Unique private temp file path for bash output overflow (0700 dir, 0600 file). */
 function getTempFilePath(): string {
@@ -262,9 +260,9 @@ function formatDuration(ms: number): string {
 function formatBashCall(args: { command?: string; timeout?: number } | undefined): string {
 	const command = str(args?.command);
 	const timeout = args?.timeout as number | undefined;
-	const timeoutSuffix = timeout ? theme.fg("muted", ` (timeout ${timeout}s)`) : "";
-	const commandDisplay = command === null ? invalidArgText(theme) : command ? command : theme.fg("toolOutput", "...");
-	return theme.fg("toolTitle", theme.bold(`$ ${commandDisplay}`)) + timeoutSuffix;
+	const timeoutSuffix = timeout ? tui().theme.fg("muted", ` (timeout ${timeout}s)`) : "";
+	const commandDisplay = command === null ? invalidArgText(tui().theme) : command ? command : tui().theme.fg("toolOutput", "...");
+	return tui().theme.fg("toolTitle", tui().theme.bold(`$ ${commandDisplay}`)) + timeoutSuffix;
 }
 
 function rebuildBashResultRenderComponent(
@@ -286,7 +284,7 @@ function rebuildBashResultRenderComponent(
 	if (output) {
 		const styledOutput = output
 			.split("\n")
-			.map((line) => theme.fg("toolOutput", line))
+			.map((line) => tui().theme.fg("toolOutput", line))
 			.join("\n");
 
 		if (options.expanded) {
@@ -295,15 +293,15 @@ function rebuildBashResultRenderComponent(
 			component.addChild({
 				render: (width: number) => {
 					if (state.cachedLines === undefined || state.cachedWidth !== width) {
-						const preview = truncateToVisualLines(styledOutput, BASH_PREVIEW_LINES, width);
+						const preview = tui().truncateToVisualLines(styledOutput, BASH_PREVIEW_LINES, width);
 						state.cachedLines = preview.visualLines;
 						state.cachedSkipped = preview.skippedCount;
 						state.cachedWidth = width;
 					}
 					if (state.cachedSkipped && state.cachedSkipped > 0) {
 						const hint =
-							theme.fg("muted", `... (${state.cachedSkipped} earlier lines,`) +
-							` ${keyHint("app.tools.expand", "to expand")})`;
+							tui().theme.fg("muted", `... (${state.cachedSkipped} earlier lines,`) +
+							` ${tui().keyHint("app.tools.expand", "to expand")})`;
 						return ["", truncateToWidth(hint, width, "..."), ...(state.cachedLines ?? [])];
 					}
 					return ["", ...(state.cachedLines ?? [])];
@@ -333,13 +331,13 @@ function rebuildBashResultRenderComponent(
 				);
 			}
 		}
-		component.addChild(new Text(`\n${theme.fg("warning", `[${warnings.join(". ")}]`)}`, 0, 0));
+		component.addChild(new Text(`\n${tui().theme.fg("warning", `[${warnings.join(". ")}]`)}`, 0, 0));
 	}
 
 	if (startedAt !== undefined) {
 		const label = options.isPartial ? "Elapsed" : "Took";
 		const endTime = endedAt ?? Date.now();
-		component.addChild(new Text(`\n${theme.fg("muted", `${label} ${formatDuration(endTime - startedAt)}`)}`, 0, 0));
+		component.addChild(new Text(`\n${tui().theme.fg("muted", `${label} ${formatDuration(endTime - startedAt)}`)}`, 0, 0));
 	}
 }
 

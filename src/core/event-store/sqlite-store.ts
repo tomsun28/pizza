@@ -155,6 +155,7 @@ export class SqliteEventStore implements EventStore, SessionStore {
 
 	/** Update workspace meta.json last_accessed_at when a message event is appended. */
 	private _lastMetaTouch = 0;
+	private _metaTouchTimer: ReturnType<typeof setTimeout> | undefined;
 
 	private _touchMetaOnMessage(eventType: string): void {
 		if (eventType !== "USER_MESSAGE" && eventType !== "AGENT_MESSAGE_START") return;
@@ -162,8 +163,26 @@ export class SqliteEventStore implements EventStore, SessionStore {
 		// Without this, every message did a synchronous read+parse+write of
 		// meta.json inside the append hot path.
 		const now = Date.now();
-		if (now - this._lastMetaTouch < 60_000) return;
+		if (now - this._lastMetaTouch < 60_000) {
+			// Trailing edge: a short conversation (< 60s) would otherwise only
+			// record its FIRST message — recency sorting then lags by up to a
+			// minute. Arm one deferred write for when the window closes.
+			if (!this._metaTouchTimer) {
+				const wait = 60_000 - (now - this._lastMetaTouch);
+				this._metaTouchTimer = setTimeout(() => {
+					this._metaTouchTimer = undefined;
+					this._lastMetaTouch = Date.now();
+					this._writeMetaTouch();
+				}, wait);
+				this._metaTouchTimer.unref?.();
+			}
+			return;
+		}
 		this._lastMetaTouch = now;
+		this._writeMetaTouch();
+	}
+
+	private _writeMetaTouch(): void {
 		try {
 			const metaPath = getWorkspaceMetaPath(this.workspace_id);
 			const raw = readFileSync(metaPath, "utf8");
@@ -293,6 +312,10 @@ export class SqliteEventStore implements EventStore, SessionStore {
 	}
 
 	close(): void {
+		if (this._metaTouchTimer) {
+			clearTimeout(this._metaTouchTimer);
+			this._metaTouchTimer = undefined;
+		}
 		this.db.close();
 	}
 

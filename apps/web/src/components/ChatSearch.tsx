@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { ChevronUp, ChevronDown, X, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Z } from "@/lib/z-index";
 
 /**
  * Floating "find in conversation" bar. Opened via ⌘/Ctrl+F from AgentView.
@@ -55,7 +56,8 @@ export function ChatSearch({
 			// being treated as window-drag.
 			data-no-drag
 			className={cn(
-				"absolute right-4 top-11 z-40 flex items-center gap-1 rounded-lg border border-border bg-surface px-1.5 py-1 shadow-lg",
+				"absolute right-4 top-11 flex items-center gap-1 rounded-lg border border-border bg-surface px-1.5 py-1 shadow-lg",
+				Z.chrome,
 			)}
 			onKeyDown={(e) => {
 				if (e.key === "Escape") {

@@ -14,9 +14,7 @@ import type {
 	RpcForensicEvent,
 } from "./types";
 
-function isTauri(): boolean {
-	return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
+import { isTauri } from "./platform";
 
 /**
  * Open an external URL in the system browser. In Tauri this routes through
@@ -171,7 +169,16 @@ export async function initSidecar(cwd?: string): Promise<Record<string, unknown>
 		if (typeof parsed === "string") {
 			parsed = JSON.parse(parsed);
 		}
-		const state = (parsed as unknown as Record<string, unknown>)?.data ?? parsed ?? null;
+		const frame = parsed as unknown as Record<string, unknown> | null;
+		// A gateway rpc error comes back as a { success:false, error } response
+		// frame with no data. The old `?.data ?? parsed` fallback returned the
+		// frame ITSELF as "state", so the UI treated the error as a valid
+		// non-empty state and rendered a broken workspace instead of the error
+		// screen. Surface it as a proper failure.
+		if (frame && frame.success === false) {
+			throw new Error(typeof frame.error === "string" ? frame.error : "init_sidecar failed");
+		}
+		const state = frame?.data ?? frame ?? null;
 		return state as Record<string, unknown> | null;
 	}
 	// Browser: simple GET /rpc/init — bridge sends get_state and returns response

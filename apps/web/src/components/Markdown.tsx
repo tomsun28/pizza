@@ -6,9 +6,7 @@ import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { highlightNodes } from "@/lib/highlight";
 
-function isTauri(): boolean {
-	return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
+import { isTauri } from "@/lib/utils";
 
 /** Schemes the shell plugin's default open-scope permits (http(s)://, mailto:, tel:). */
 const OPENABLE_SCHEME = /^(https?:|mailto:|tel:)/i;

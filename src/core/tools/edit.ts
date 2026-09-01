@@ -3,7 +3,6 @@ import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "@sinclair/typebox";
 import { constants } from "fs";
 import { access as fsAccess, readFile as fsReadFile, writeFile as fsWriteFile } from "fs/promises";
-import { renderDiff } from "../../../packages/tui/components/diff.js";
 import type { ToolDefinition } from "../extensions/types.js";
 import {
 	applyEditsToNormalizedContent,
@@ -21,6 +20,7 @@ import { withFileMutationQueue } from "./file-mutation-queue.js";
 import { resolveToCwd } from "./path-utils.js";
 import { invalidArgText, shortenPath, str } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
+import { toolRenderBridge as tui } from "./render-bridge.js";
 
 type EditPreview = EditDiffResult | EditDiffError;
 
@@ -257,7 +257,7 @@ function formatEditResult(
 
 	const resultDiff = result.details?.diff;
 	if (resultDiff && resultDiff !== previewDiff) {
-		return renderDiff(resultDiff, { filePath: rawPath ?? undefined });
+		return tui().renderDiff(resultDiff, { filePath: rawPath ?? undefined });
 	}
 
 	return undefined;
@@ -294,7 +294,7 @@ function buildEditCallComponent(
 	}
 
 	const body =
-		"error" in component.preview ? theme.fg("error", component.preview.error) : renderDiff(component.preview.diff);
+		"error" in component.preview ? theme.fg("error", component.preview.error) : tui().renderDiff(component.preview.diff);
 	component.addChild(new Spacer(1));
 	component.addChild(new Text(body, 0, 0));
 	return component;

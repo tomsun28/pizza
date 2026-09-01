@@ -9,8 +9,11 @@ import { connect } from "node:net";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createGatewayServer, type GatewayServer } from "../packages/gateway/gateway-server.js";
+import { createGatewayServer, type GatewayServer, type AgentConnection } from "../packages/gateway/gateway-server.js";
 import { serializeJsonLine } from "../packages/gateway/jsonl.js";
+import { mkdirSync, statSync } from "node:fs";
+import { platform } from "node:os";
+import type { RpcCommand, RpcResponse } from "../packages/rpc/rpc-types.js";
 
 function uniqueSocketPath(): string {
 	const dir = mkdtempSync(join(tmpdir(), "pizza-gw-"));
@@ -101,5 +104,70 @@ describe("gateway server", () => {
 		server = undefined;
 		// After stop, a new connection should fail.
 		await expect(sendAndWait(socketPath, { type: "ping" })).rejects.toThrow();
+	});
+
+	it("restricts the socket to owner-only permissions (0600)", async () => {
+		if (platform() === "win32") return; // named pipes use ACLs
+		const socketPath = uniqueSocketPath();
+		sockets.push(socketPath);
+		server = createGatewayServer({ socketPath, agentDir: "/tmp/nonexistent-agent" });
+		await server.start();
+		const mode = statSync(socketPath).mode & 0o777;
+		expect(mode).toBe(0o600);
+	});
+
+	it("normalizes destination paths so path variants share ONE pool entry", async () => {
+		// /a/b, /a/b/ and /a/../a/b must resolve to the same agent — divergent
+		// pool keys would spawn a second agent for the same workspace and lose
+		// the single-instance lock race.
+		const socketPath = uniqueSocketPath();
+		sockets.push(socketPath);
+		const projectDir = mkdtempSync(join(tmpdir(), "pizza-gw-norm-"));
+		sockets.push(projectDir);
+		mkdirSync(projectDir, { recursive: true });
+
+		const spawnedCwds: string[] = [];
+		const fakeAgent = (cwd: string): AgentConnection => ({
+			async start() {},
+			async stop() {},
+			onEvent: () => () => {},
+			onExit: () => () => {},
+			async sendCommand(command: RpcCommand): Promise<RpcResponse> {
+				return { id: (command as { id: string }).id, type: "response", command: (command as { type: string }).type, success: true } as unknown as RpcResponse;
+			},
+			async prompt() {},
+			async followUp() {},
+			async waitForIdle() {},
+			async getLastAssistantText() { return "ok"; },
+		});
+
+		server = createGatewayServer({
+			socketPath,
+			agentDir: "/tmp/nonexistent-agent",
+			agentIdleTimeout: 0,
+			agentHealthCheckInterval: 0,
+			schedulerGuardInterval: 0,
+			createAgent: (cwd) => {
+				spawnedCwds.push(cwd);
+				return fakeAgent(cwd);
+			},
+		});
+		await server.start();
+
+		// Same directory in three spellings.
+		const variants = [projectDir, `${projectDir}/`, `${projectDir}/../${projectDir.split("/").pop()}`];
+		for (let i = 0; i < variants.length; i++) {
+			const response = await sendAndWait(socketPath, {
+				type: "tell",
+				id: `t${i}`,
+				to: variants[i],
+				message: "ping",
+				timeoutMs: 2000,
+			});
+			expect(JSON.parse(response).type).toBe("tell_result");
+		}
+
+		// All three tells must have reused ONE agent.
+		expect(spawnedCwds).toHaveLength(1);
 	});
 });
