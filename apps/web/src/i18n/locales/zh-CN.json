@@ -312,7 +312,8 @@
     "copyId": "复制会话 id",
     "position": "位置",
     "depth": "深度",
-    "root": "根"
+    "root": "根",
+    "untitled": "未命名会话"
   },
   "timeline": {
     "title": "时间线",

@@ -991,6 +991,7 @@ export async function runRpcModeWithFacade(
 							nodes = nodes.filter(
 								(n) =>
 									n.name?.toLowerCase().includes(q) ||
+									n.title?.toLowerCase().includes(q) ||
 									n.snippet?.toLowerCase().includes(q) ||
 									n.session_id.toLowerCase().includes(q),
 							);

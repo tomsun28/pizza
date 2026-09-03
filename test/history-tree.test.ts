@@ -151,6 +151,46 @@ describe("history_tree", () => {
 			sessionManager.dispose();
 			store.close();
 		});
+
+		it("labels nodes with a human title, message count and last activity", () => {
+			const { store, sessionManager } = makeStore();
+			const root = sessionManager.getActiveSession().getDescriptor();
+			store.append({
+				actor_id: "user",
+				type: "USER_MESSAGE",
+				payload: { content: "Fix the flaky auth test in packages/rpc. It fails on CI sometimes." },
+			});
+			store.append({ actor_id: "user", type: "USER_MESSAGE", payload: { content: "also check the retry path" } });
+
+			const named = sessionManager.createSession("user_explicit", "Release prep");
+			store.append({ actor_id: "user", type: "USER_MESSAGE", payload: { content: "bump versions" } });
+
+			const nodes = buildHistoryTreeNodes(
+				sessionManager.listSessions(),
+				sessionManager.getActiveSessionId(),
+				store,
+			);
+			const rootNode = nodes.find((n) => n.session_id === root.session_id)!;
+			const namedNode = nodes.find((n) => n.session_id === named.session_id)!;
+
+			// Unnamed session: title derived from the first user message, first clause only.
+			expect(rootNode.title).toBe("Fix the flaky auth test in packages/rpc");
+			expect(rootNode.title_is_derived).toBe(true);
+			expect(rootNode.message_count).toBeGreaterThanOrEqual(2);
+			expect(rootNode.last_activity_at).toBeGreaterThan(0);
+
+			// Explicit name always wins and is not marked derived.
+			expect(namedNode.title).toBe("Release prep");
+			expect(namedNode.title_is_derived).toBe(false);
+
+			// Rendered text leads with the title, id second.
+			const text = renderHistoryTreeText(nodes);
+			expect(text).toContain("Fix the flaky auth test in packages/rpc · " + root.session_id);
+			expect(text).toContain("Release prep · " + named.session_id);
+
+			sessionManager.dispose();
+			store.close();
+		});
 	});
 
 	// ── SessionManager.jumpToSession ─────────────────────────────────────────

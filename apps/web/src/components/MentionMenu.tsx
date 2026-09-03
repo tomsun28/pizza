@@ -76,12 +76,26 @@ function buildRows(items: MentionItem[]): Row[] {
 	const rows: Row[] = [];
 	let lastCategory: MentionCategory | null = null;
 	let flatIndex = 0;
+	// Row keys must be unique: many files share a basename (index.ts,
+	// package.json…), so keying on the label alone collides and React drops or
+	// mixes up rows in the filtered list. We key on category + insertText +
+	// description (unique for files/workspaces), and de-duplicate defensively so
+	// even two identically-named schedules can never collide.
+	const seen = new Map<string, number>();
 	for (const item of items) {
 		if (item.category !== lastCategory) {
 			rows.push({ kind: "header", category: item.category, key: `header-${item.category}` });
 			lastCategory = item.category;
 		}
-		rows.push({ kind: "item", item, flatIndex, key: `item-${item.category}-${item.label}` });
+		const base = `item-${item.category}-${item.insertText}-${item.description ?? ""}`;
+		const dupes = seen.get(base) ?? 0;
+		seen.set(base, dupes + 1);
+		rows.push({
+			kind: "item",
+			item,
+			flatIndex,
+			key: dupes === 0 ? base : `${base}#${dupes}`,
+		});
 		flatIndex++;
 	}
 	return rows;

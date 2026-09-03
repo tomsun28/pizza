@@ -52,15 +52,39 @@ export interface TimelineItem {
 	timestamp?: number;
 }
 
-/** Format a Unix ms timestamp as HH:mm (24h). Returns "" if invalid. */
+/** True if two Unix ms timestamps fall on the same calendar day (local time). */
+function isSameDay(a: number, b: number): boolean {
+	const da = new Date(a);
+	const db = new Date(b);
+	return (
+		da.getFullYear() === db.getFullYear() &&
+		da.getMonth() === db.getMonth() &&
+		da.getDate() === db.getDate()
+	);
+}
+
+/**
+ * Format a Unix ms timestamp for message timestamps.
+ * Today: HH:mm; other days: MM-DD HH:mm (with year if a different year).
+ * Returns "" if invalid.
+ */
 function formatMessageTime(ts?: number): string {
 	if (!ts || !Number.isFinite(ts)) return "";
 	try {
-		return new Date(ts).toLocaleTimeString(undefined, {
+		const d = new Date(ts);
+		const time = d.toLocaleTimeString(undefined, {
 			hour: "2-digit",
 			minute: "2-digit",
 			hour12: false,
 		});
+		if (isSameDay(ts, Date.now())) return time;
+		const sameYear = d.getFullYear() === new Date().getFullYear();
+		const date = d.toLocaleDateString(undefined, {
+			year: sameYear ? undefined : "numeric",
+			month: "2-digit",
+			day: "2-digit",
+		});
+		return `${date} ${time}`;
 	} catch {
 		return "";
 	}

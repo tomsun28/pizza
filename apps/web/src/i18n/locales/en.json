@@ -312,7 +312,8 @@
     "copyId": "Copy session id",
     "position": "Position",
     "depth": "depth",
-    "root": "root"
+    "root": "root",
+    "untitled": "Untitled session"
   },
   "timeline": {
     "title": "Timeline",

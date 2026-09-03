@@ -549,7 +549,15 @@ export interface RpcHistoryTreeNode {
 	is_active: boolean;
 	closed: boolean;
 	has_active_continuation?: boolean;
+	/** Human-meaningful label: explicit name, else derived from the first user message. */
+	title?: string;
+	/** True when `title` was derived from content instead of an explicit name. */
+	title_is_derived?: boolean;
 	snippet?: string;
+	/** Number of user messages in the session. */
+	message_count?: number;
+	/** Timestamp of the last event in the session. */
+	last_activity_at?: number;
 	/** Event id the branch was forked at (present when it has a parent). */
 	fork_at_event_id?: string;
 }

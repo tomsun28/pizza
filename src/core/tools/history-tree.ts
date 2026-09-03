@@ -62,6 +62,7 @@ export function createHistoryTreeToolDefinition(): ToolDefinition<typeof history
 									.filter(
 										(node) =>
 											node.name?.toLowerCase().includes(query) ||
+											node.title?.toLowerCase().includes(query) ||
 											node.snippet?.toLowerCase().includes(query) ||
 											node.session_id.toLowerCase().includes(query),
 									)

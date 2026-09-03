@@ -10,7 +10,7 @@ import {
 } from "@/lib/file-attachment";
 import { FileAttachmentIcon } from "@/components/FileAttachmentIcon";
 import { ScheduleMenu } from "@/components/ScheduleMenu";
-import { MentionMenu, type MentionItem } from "@/components/MentionMenu";
+import { MentionMenu, type MentionCategory, type MentionItem } from "@/components/MentionMenu";
 import { formatFileSize } from "@/lib/file-format";
 
 export type { LoadedFileAttachment } from "@/lib/file-attachment";
@@ -22,6 +22,22 @@ import { COMPOSER_PREFILL_EVENT, type ComposerPrefillDetail } from "@/lib/compos
 import { Z } from "@/lib/z-index";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+
+/** Display order of mention categories in the @ popup (files first, like IDE
+ *  quick-open). Used as the primary sort key when filtering so category
+ *  blocks stay contiguous and the menu section headers stay unique. */
+const MENTION_CATEGORY_RANK: Record<MentionCategory, number> = {
+	file: 0,
+	branch: 1,
+	workspace: 2,
+	skill: 3,
+	schedule: 4,
+};
+
+/** Longest `@…` query we still treat as a mention. Beyond this the `@` was
+ *  almost certainly ordinary prose (an e-mail, a handle, a sentence), so the
+ *  menu closes instead of lingering with no results. */
+const MENTION_MAX_QUERY = 64;
 
 /** Format a token count compactly (e.g. 12.3k, 1.2M). */
 function formatTokens(n: number): string {
@@ -482,11 +498,34 @@ export function Composer({
 	const filteredMentionItems = useMemo(() => {
 		const q = mentionQuery.toLowerCase().trim();
 		if (!q) return mentionItems;
-		return mentionItems.filter(
-			(item) =>
-				item.label.toLowerCase().includes(q) ||
-				(item.description?.toLowerCase().includes(q) ?? false),
+		// Score each item by where the query matches:
+		//   3 — label starts with the query (e.g. `@index` → index.ts)
+		//   2 — label contains the query
+		//   1 — insertText (`@skill:lark`, `@branch:main`, …) or description
+		//       (file path, workspace cwd, …) contains the query
+		// Category blocks keep their original order so the menu headers stay
+		// unique; within a block higher scores rank first, and the stable sort
+		// preserves the shallowest-first ordering of equally-scored files.
+		const scored: { item: MentionItem; score: number }[] = [];
+		for (const item of mentionItems) {
+			const label = item.label.toLowerCase();
+			let score = 0;
+			if (label.startsWith(q)) score = 3;
+			else if (label.includes(q)) score = 2;
+			else if (
+				item.insertText.toLowerCase().includes(q) ||
+				(item.description?.toLowerCase().includes(q) ?? false)
+			) {
+				score = 1;
+			}
+			if (score > 0) scored.push({ item, score });
+		}
+		scored.sort(
+			(a, b) =>
+				MENTION_CATEGORY_RANK[a.item.category] - MENTION_CATEGORY_RANK[b.item.category] ||
+				b.score - a.score,
 		);
+		return scored.map((s) => s.item);
 	}, [mentionItems, mentionQuery]);
 	const filteredMentionItemsRef = useRef(filteredMentionItems);
 	filteredMentionItemsRef.current = filteredMentionItems;
@@ -498,29 +537,32 @@ export function Composer({
 		mentionQueryRef.current = null;
 	}, []);
 
-	// Detect `@` at the start of input or after a whitespace, and track the
-	// query text between `@` and the cursor. Only resets the selected index
-	// when the query actually changes — so arrow-key navigation (which may
-	// re-trigger detectMention via onKeyUp/onClick) doesn't jump the selection
-	// back to 0 mid-navigation.
+	// Detect the `@` that starts a mention and track the query text between it
+	// and the cursor. Only resets the selected index when the query actually
+	// changes — so arrow-key navigation (which may re-trigger detectMention via
+	// onKeyUp/onClick) doesn't jump the selection back to 0 mid-navigation.
 	const detectMention = useCallback((value: string, cursorPos: number) => {
-		// Search backwards from the cursor for an `@` that is either at the
-		// start of the text or preceded by whitespace.
+		// Search backwards from the cursor for the nearest `@`.
 		const before = value.slice(0, cursorPos);
 		const atIdx = before.lastIndexOf("@");
 		if (atIdx < 0) {
 			closeMention();
 			return;
 		}
-		// `@` must be at position 0 or after a whitespace character.
-		if (atIdx > 0 && !/\s/.test(before[atIdx - 1])) {
+		// The `@` must not be glued to a preceding word character, otherwise
+		// e-mails (`a@b.com`) and scoped paths would pop the menu open. We check
+		// for ASCII word/path characters rather than requiring whitespace: CJK
+		// text has no spaces, so `帮我看看@Composer` must still trigger the menu.
+		if (atIdx > 0 && /[A-Za-z0-9._~-]/.test(before[atIdx - 1])) {
 			closeMention();
 			return;
 		}
-		// The query is the text between `@` and the cursor. If it contains
-		// whitespace, the mention is "closed" — stop showing the menu.
+		// The query is the text between `@` and the cursor. Whitespace closes the
+		// mention; so does an over-long query, which means the `@` was ordinary
+		// prose rather than a mention trigger (and would otherwise keep the menu
+		// open, swallowing Enter).
 		const query = value.slice(atIdx + 1, cursorPos);
-		if (/\s/.test(query)) {
+		if (/\s/.test(query) || query.length > MENTION_MAX_QUERY) {
 			closeMention();
 			return;
 		}
@@ -820,12 +862,15 @@ ${insert}`;
 				void addPathFiles([item.absolutePath]);
 			}
 
-			// Replace `@query` in the input with the insert text.
+			// Replace `@query` in the input with the insert text. A trailing space
+			// is appended so that typing right after an inserted mention does not
+			// re-open the menu on the just-inserted `@token` (its query would be
+			// the token text, showing only that item again).
 			setInput((prev) => {
 				if (mentionStart < 0) return prev;
 				const before = prev.slice(0, mentionStart);
 				const after = prev.slice(mentionStart + 1 + mentionQuery.length);
-				const insert = item.insertText;
+				const insert = `${item.insertText} `;
 				const next = `${before}${insert}${after}`;
 				// Restore focus and place cursor after the inserted text.
 				requestAnimationFrame(() => {
@@ -1145,33 +1190,37 @@ ${insert}`;
 								// where the filtered list was still empty (data loading).
 								if (mentionActiveRef.current) {
 									const filtered = filteredMentionItemsRef.current;
-									if (e.key === "ArrowDown") {
-										e.preventDefault();
-										e.stopPropagation();
-										if (filtered.length === 0) return;
-										setMentionSelectedIndex((prev) => Math.min(prev + 1, filtered.length - 1));
-										return;
-									}
-									if (e.key === "ArrowUp") {
-										e.preventDefault();
-										e.stopPropagation();
-										if (filtered.length === 0) return;
-										setMentionSelectedIndex((prev) => Math.max(prev - 1, 0));
-										return;
-									}
-									if (e.key === "Enter" || e.key === "Tab") {
-										e.preventDefault();
-										e.stopPropagation();
-										if (filtered.length === 0) return;
-										const idx = Math.min(mentionSelectedIndexRef.current, filtered.length - 1);
-										const item = filtered[idx];
-										if (item) handleMentionSelect(item);
-										return;
-									}
+									// Escape always closes the menu, even with no matches.
 									if (e.key === "Escape") {
 										e.preventDefault();
 										closeMention();
 										return;
+									}
+									// Only claim the navigation/commit keys when there is
+									// something to navigate or commit. With zero matches the
+									// keys must fall through, otherwise an open-but-empty menu
+									// swallows Enter and the message can never be sent.
+									if (filtered.length > 0) {
+										if (e.key === "ArrowDown") {
+											e.preventDefault();
+											e.stopPropagation();
+											setMentionSelectedIndex((prev) => Math.min(prev + 1, filtered.length - 1));
+											return;
+										}
+										if (e.key === "ArrowUp") {
+											e.preventDefault();
+											e.stopPropagation();
+											setMentionSelectedIndex((prev) => Math.max(prev - 1, 0));
+											return;
+										}
+										if (e.key === "Enter" || e.key === "Tab") {
+											e.preventDefault();
+											e.stopPropagation();
+											const idx = Math.min(mentionSelectedIndexRef.current, filtered.length - 1);
+											const item = filtered[idx];
+											if (item) handleMentionSelect(item);
+											return;
+										}
 									}
 								}
 								if (e.key === "Enter" && !e.shiftKey) {
