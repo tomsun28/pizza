@@ -216,6 +216,7 @@
   },
   "conversation": {
     "showLess": "收起",
+    "showMore": "展开",
     "showMoreLines": "展开 {{count}} 行",
     "thinking": "思考中…",
     "thoughtProcess": "思考过程",

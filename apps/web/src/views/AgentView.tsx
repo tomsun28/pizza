@@ -236,13 +236,15 @@ function buildTimelineFromMessages(
 			const resultText = toolResultText(msg.content);
 			const isError = msg.isError === true || msg.is_error === true;
 			const existing = toolCallId ? toolCardById.get(toolCallId) : undefined;
+			const resultImages = messageImages(msg);
 			if (existing) {
 				existing.toolResult = resultText;
+				if (resultImages.length > 0) existing.toolImages = resultImages;
 				existing.isError = isError;
 				existing.status = isError ? "ERROR" : "DONE";
 			} else {
 				// Orphan result (no matching call) — still show it.
-				history.push({ id: `hist-${history.length}`, role: "tool", title: String(msg.toolName ?? msg.name ?? "tool"), text: "", status: isError ? "ERROR" : "DONE", streaming: false, toolName: String(msg.toolName ?? msg.name ?? "tool"), toolResult: resultText, isError });
+				history.push({ id: `hist-${history.length}`, role: "tool", title: String(msg.toolName ?? msg.name ?? "tool"), text: "", status: isError ? "ERROR" : "DONE", streaming: false, toolName: String(msg.toolName ?? msg.name ?? "tool"), toolResult: resultText, ...(resultImages.length > 0 ? { toolImages: resultImages } : {}), isError });
 				// (title intentionally uses raw tool name, not translated)
 			}
 		}
@@ -825,14 +827,33 @@ export default function AgentView({
 				const payload = event.payload as Record<string, unknown>;
 				const toolCallId = payload.tool_call_id as string;
 				const result = payload.result as Array<Record<string, unknown>> | undefined;
+				// Image blocks are rendered as thumbnails (toolImages), never
+				// serialized into the text — a raw base64 dump would flood the card.
 				const resultText = result
-					? result.map((r) => (r.type === "text" ? String(r.text ?? "") : JSON.stringify(r))).join("\n")
+					? result
+							.map((r) =>
+								r.type === "text"
+									? String(r.text ?? "")
+									: r.type === "image"
+										? `[image ${String(r.mime_type ?? r.mimeType ?? "image/png")}]`
+										: "",
+							)
+							.filter(Boolean)
+							.join("\n")
 					: "";
+				const resultImages = result ? result.flatMap((r) => (r.type === "image" ? messageImages({ content: [r] }) : [])) : [];
 				const isError = payload.is_error === true;
 				updateItems((prev) =>
 					prev.map((it) =>
 						it.id === toolCallId && it.role === "tool"
-							? { ...it, status: isError ? "ERROR" : "DONE", streaming: false, toolResult: resultText || it.toolResult, isError }
+							? {
+									...it,
+									status: isError ? "ERROR" : "DONE",
+									streaming: false,
+									toolResult: resultText || it.toolResult,
+									...(resultImages.length > 0 ? { toolImages: resultImages } : {}),
+									isError,
+								}
 							: it,
 					),
 				);
