@@ -422,14 +422,193 @@ function parseBuiltinInvocation(command: string): { command: "read" | "write" | 
 	return { command: builtin, path };
 }
 
-function getNonNullRedirectPath(command: string): string | undefined {
-	const matches = command.matchAll(/(?:^|[\s;|&])(?:\d*)>>?\s*(['"]?)([^'"\s;&|]+)\1/g);
+
+/**
+ * Commands whose quoted or heredoc payloads are executed as code rather than
+ * used as data (shell interpreters, eval/source, script runtimes). Redirects
+ * hidden inside those payloads are real, so for them we keep the raw scan.
+ */
+const EXEC_PAYLOAD_RE =
+	/\b(?:ba|z|da|k)?sh\s+(?:-[a-zA-Z]*c|<<)|\b(?:python3?|node|perl|ruby|osascript|bun|deno)\s+(?:-[a-zA-Z]+\b|<<)|\b(?:eval|source|exec)\s+/;
+
+/**
+ * Quote-unaware redirect scan (the original behavior). Kept as a conservative
+ * fallback for commands that execute their string/heredoc payloads, where a
+ * redirect written inside quotes is still performed by the inner shell.
+ */
+function rawRedirectScan(command: string): string | undefined {
+	const matches = command.matchAll(/(?:^|[\s;|&])(?:\d*)>>?\s*(["']?)([^'"\s;&|]+)\1/g);
 	for (const match of matches) {
 		const path = match[2];
 		if (!path || path === "/dev/null") continue;
 		return path;
 	}
 	return undefined;
+}
+
+/**
+ * Find the target of the first output redirection the shell would actually
+ * perform (a `>` in its plain, append and fd-prefixed forms), or undefined
+ * when there is none (or only /dev/null).
+ *
+ * The scan is quote-, escape- and heredoc-aware so payload data cannot fake
+ * a redirection: a `>` inside quoted arguments (e.g. edit content like
+ * `if (a>b)`), after a backslash, or inside a heredoc body is data, not
+ * shell syntax. Quoted targets are unquoted. Command substitution
+ * (`$(...)`, backticks) is scanned as shell code. Commands that execute
+ * their payloads fall back to rawRedirectScan.
+ */
+function getNonNullRedirectPath(command: string): string | undefined {
+	if (EXEC_PAYLOAD_RE.test(command)) {
+		return rawRedirectScan(command);
+	}
+	const n = command.length;
+	let quote: "'" | '"' | undefined;
+	let i = 0;
+
+	while (i < n) {
+		const ch = command[i]!;
+
+		if (quote !== undefined) {
+			if (quote === '"' && ch === "\\") {
+				i += 2;
+				continue;
+			}
+			if (ch === quote) quote = undefined;
+			i++;
+			continue;
+		}
+
+		if (ch === "'" || ch === '"') {
+			quote = ch;
+			i++;
+			continue;
+		}
+		if (ch === "\\") {
+			i += 2; // escaped metacharacter (or a trailing backslash)
+			continue;
+		}
+
+		if (ch === "<" && command[i + 1] === "<") {
+			const after = skipHeredocBody(command, i);
+			if (after !== undefined) {
+				i = after;
+				continue;
+			}
+			// not a heredoc (e.g. `<<<` or a shift inside $((...))) - scan on
+		}
+
+		if (ch === ">") {
+			const opEnd = command[i + 1] === ">" ? i + 1 : i;
+			let fdStart = i;
+			while (fdStart !== 0 && /\d/.test(command[fdStart - 1]!)) fdStart--;
+			const atOperator =
+				fdStart < i ? atBoundary(command, fdStart - 1) : atBoundary(command, i - 1);
+			if (atOperator) {
+				let p = opEnd + 1;
+				while (p < n && /\s/.test(command[p]!)) p++;
+				const parsed = readRedirectTarget(command, p);
+				if (parsed !== undefined) {
+						if (parsed.path !== "/dev/null") return parsed.path;
+					i = parsed.end;
+						continue;
+					}
+			}
+			i = opEnd + 1;
+			continue;
+		}
+
+		i++;
+	}
+	return undefined;
+}
+
+/** Read a redirect target starting at p (already past the operator and any
+ * whitespace). Quoted targets are returned unquoted. */
+function readRedirectTarget(command: string, p: number): { path: string; end: number } | undefined {
+	const n = command.length;
+	const qc = command[p];
+	if (qc === "'" || qc === '"') {
+		let content = "";
+		let q = p + 1;
+		while (q < n && command[q] !== qc) {
+			if (qc === '"' && command[q] === "\\" && q + 1 < n && /["`$\\]/.test(command[q + 1]!)) {
+				content += command[q + 1]!;
+				q += 2;
+				continue;
+			}
+			content += command[q]!;
+			q++;
+		}
+		if (command[q] !== qc) return undefined; // unterminated quote
+		return content ? { path: content, end: q + 1 } : undefined;
+	}
+	let content = "";
+	let q = p;
+	while (q < n && !/['"\s;&|]/.test(command[q]!)) {
+		content += command[q]!;
+		q++;
+	}
+	return content ? { path: content, end: q } : undefined;
+}
+
+/**
+ * When a heredoc starts at command[i] (on the first of two `<`), return the
+ * index just past its body. Returns undefined when this is not a recognizable
+ * heredoc (no delimiter word, or not in operator position).
+ */
+function skipHeredocBody(command: string, i: number): number | undefined {
+	const n = command.length;
+	// Operator position: preceded by a boundary, or by an fd-digit run that
+	// itself follows a boundary (this rejects shifts like $((1<<2)) where the
+	// digit follows an opening paren).
+	let s = i;
+	while (s !== 0 && /\d/.test(command[s - 1]!)) s--;
+	const atOperator = s < i ? atBoundary(command, s - 1) : atBoundary(command, i - 1);
+	if (!atOperator) return undefined;
+	let p = i + 2;
+	let stripTabs = false;
+	if (command[p] === "-") {
+		stripTabs = true;
+		p++;
+	}
+	const qc = command[p];
+	let delim: string | undefined;
+	if (qc === "'" || qc === '"') {
+		const close = command.indexOf(qc, p + 1);
+		if (close === -1) return undefined;
+		delim = command.slice(p + 1, close) || undefined;
+		p = close + 1;
+	} else {
+		let q = p;
+		while (q < n && /[A-Za-z0-9_]/.test(command[q]!)) q++;
+		if (q === p) return undefined;
+		delim = command.slice(p, q);
+	}
+	if (!delim) return undefined;
+	// The body starts on the line after the operator line.
+	const nl = command.indexOf("\n", p);
+	if (nl === -1) return n; // body pending, nothing else to scan
+	let lineStart = nl + 1;
+	for (;;) {
+		const nextNl = command.indexOf("\n", lineStart);
+		const lineEnd = nextNl === -1 ? n : nextNl;
+		let ls = lineStart;
+		if (stripTabs) {
+			while (ls < lineEnd && command[ls] === "\t") ls++;
+		}
+		if (command.slice(ls, lineEnd) === delim) {
+			return nextNl === -1 ? n : nextNl + 1;
+		}
+		if (nextNl === -1) return n; // unterminated body runs to the end
+		lineStart = nextNl + 1;
+	}
+}
+
+/** Whether idx is before the string start or points at a character that may
+ * precede a redirection/heredoc operator (whitespace, `;`, `|`, `&`). */
+function atBoundary(command: string, idx: number): boolean {
+	return idx === -1 || /[\s;|&]/.test(command[idx]!);
 }
 
 function isSingleSafeShellCommand(command: string): boolean {

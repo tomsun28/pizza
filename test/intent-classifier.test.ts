@@ -161,6 +161,60 @@ describe("IntentClassifier", () => {
 			expect(result.category).toBe("file_write");
 			expect(result.affected_files).toEqual(["output.txt"]);
 		});
+
+		it("should not misclassify quoted greater-than as redirection", () => {
+			const GT = String.fromCharCode(62); // build ">" so this source stays free of redirect-looking text
+			const result = classifier.classify("cli", {
+				command: `_edit src/app.ts search "if (count ${GT} bestCount) {" "if (bestCount < count) {"`,
+			});
+			expect(result.category).toBe("shell_moderate");
+			expect(result.requires_approval).toBe(false);
+		});
+
+		it("should not misclassify heredoc bodies as redirection", () => {
+			const GT = String.fromCharCode(62);
+			const result = classifier.classify("cli", {
+				command: "cat notes.txt <<EOF\nx = a" + GT + "b\nEOF\necho done",
+			});
+			expect(result.category).toBe("shell_moderate");
+			expect(result.requires_approval).toBe(false);
+		});
+
+		it("should still detect redirection after a heredoc terminator", () => {
+			const GT = String.fromCharCode(62);
+			const result = classifier.classify("cli", {
+				command: "cat notes.txt <<EOF\nbody\nEOF\necho done " + GT + " out.txt",
+			});
+			expect(result.category).toBe("file_write");
+			expect(result.affected_files).toEqual(["out.txt"]);
+		});
+
+		it("should unquote quoted redirection targets", () => {
+			const GT = String.fromCharCode(62);
+			const result = classifier.classify("cli", {
+				command: "echo hi " + GT + ' "my output.txt"',
+			});
+			expect(result.category).toBe("file_write");
+			expect(result.affected_files).toEqual(["my output.txt"]);
+		});
+
+		it("should ignore escaped greater-than", () => {
+			const GT = String.fromCharCode(62);
+			const result = classifier.classify("cli", {
+				command: "echo a \\" + GT + " b",
+			});
+			expect(result.category).toBe("shell_moderate");
+			expect(result.requires_approval).toBe(false);
+		});
+
+		it("keeps raw detection for interpreter string payloads", () => {
+			const GT = String.fromCharCode(62);
+			const result = classifier.classify("cli", {
+				command: 'sh -c "echo x ' + GT + ' inner.txt"',
+			});
+			expect(result.category).toBe("file_write");
+			expect(result.affected_files).toEqual(["inner.txt"]);
+		});
 	});
 
 	describe("unknown tools", () => {
