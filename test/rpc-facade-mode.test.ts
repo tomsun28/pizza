@@ -295,6 +295,68 @@ describe("runRpcModeWithFacade", () => {
 		facade.dispose();
 	});
 
+	it("new_session waits for the in-flight turn so the boundary does not steal the answer", async () => {
+		// Deferred LLM call: the turn stays in flight until we resolve it.
+		let resolveLlm: ((response: LLMResponse) => void) | undefined;
+		const client: LLMClient = {
+			async complete(): Promise<LLMResponse> {
+				return new Promise<LLMResponse>((resolve) => {
+					resolveLlm = resolve;
+				});
+			},
+		};
+		const facade = createFacade(client);
+		void runRpcModeWithFacade(facade);
+		await vi.waitFor(() => expect(rpcIo.lineHandler).toBeDefined());
+
+		const manager = facade.runtime.sessionManager!;
+		const sessionA = manager.getActiveSessionId()!;
+
+		// Start a turn; it streams until resolveLlm() is called.
+		rpcIo.outputLines = [];
+		rpcIo.lineHandler!(JSON.stringify({ id: "p1", type: "prompt", message: "computer use protocol?" }));
+		await vi.waitFor(() => expect(resolveLlm).toBeDefined());
+		expect(facade.isRunning).toBe(true);
+
+		// Click "new session" mid-turn. Regression: the boundary used to land at
+		// the streaming answer start event, stealing the answer from the session
+		// where the user asked.
+		rpcIo.lineHandler!(JSON.stringify({ id: "new-1", type: "new_session" }));
+
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		// The command is still waiting for the turn to settle…
+		expect(parseOutputLines().filter((record) => record.id === "new-1")).toHaveLength(0);
+		// …and no session boundary was created mid-turn.
+		expect(manager.getActiveSessionId()).toBe(sessionA);
+
+		// The answer completes AFTER the click and must stay in session A.
+		resolveLlm!(makeTextResponse("the answer belongs to the session where it was asked"));
+
+		await vi.waitFor(() => {
+			expect(parseOutputLines()).toContainEqual(
+				expect.objectContaining({
+					id: "new-1",
+					type: "response",
+					command: "new_session",
+					success: true,
+				}),
+			);
+		});
+
+		const sessionB = manager.getActiveSessionId()!;
+		expect(sessionB).not.toBe(sessionA);
+
+		const contextA = manager.getSessionProjection(sessionA)!.buildContext();
+		expect(contextA.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+		expect(JSON.stringify(contextA.messages)).toContain("the answer belongs to the session where it was asked");
+
+		// The new session starts fresh: it must not contain the stolen turn.
+		const contextB = manager.getSessionProjection(sessionB)!.buildContext();
+		expect(contextB.messages).toHaveLength(0);
+
+		facade.dispose();
+	});
+
 	it("keeps pinned scheduled tasks on the resolved continuation instead of the visible session", async () => {
 		const facade = createFacade();
 		void runRpcModeWithFacade(facade);
