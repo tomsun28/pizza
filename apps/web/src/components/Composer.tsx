@@ -14,7 +14,7 @@ import { MentionMenu, type MentionCategory, type MentionItem } from "@/component
 import { formatFileSize } from "@/lib/file-format";
 
 export type { LoadedFileAttachment } from "@/lib/file-attachment";
-import { sendCommandAwait, setSafeMode, newSession, getSkills, invoke, searchFiles, gitBranches, listScheduledTasks, type SkillInfo, type GitBranchEntry } from "@/lib/transport";
+import { sendCommandAwait, setSafeMode, setApprovalPolicy, newSession, getSkills, invoke, searchFiles, gitBranches, listScheduledTasks, type SkillInfo, type GitBranchEntry } from "@/lib/transport";
 import type { RpcSessionState, RpcContextUsage, RpcTokenUsage, ModelInfo } from "@/lib/types";
 import type { WorkspaceMeta, ScheduledTaskSummary } from "@/lib/types";
 import { resolveScheduleScope } from "@/lib/schedule-scope";
@@ -634,16 +634,20 @@ export function Composer({
 		}
 	}, [onRefreshState]);
 
-	// Approval policy for the current session (safe mode). Selected inline in
+	// Approval policy for the current session (two states). Selected inline in
 	// the composer so the user can choose per-session without visiting Settings.
-	const safeMode = state?.safeMode ?? false;
-	const handleApprovalPolicyChange = useCallback(async (enabled: boolean) => {
+	// "off" (自动) auto-runs everything; "auto" (审批, default) gates only
+	// unknown tools and dangerous commands. Legacy "on" (strict) settings map
+	// to 审批 in the UI.
+	const approvalPolicy = state?.approvalPolicy ?? (state?.safeMode ? "on" : "auto");
+	const gated = approvalPolicy !== "off";
+	const handleApprovalPolicyChange = useCallback(async (policy: "auto" | "off") => {
 		setApprovalMenuOpen(false);
 		try {
-			await setSafeMode(enabled);
+			await setApprovalPolicy(policy);
 			onRefreshState?.();
 		} catch (e) {
-			console.error("[composer] set_safe_mode failed:", e);
+			console.error("[composer] set_approval_policy failed:", e);
 		}
 	}, [onRefreshState]);
 
@@ -1346,52 +1350,43 @@ ${insert}`;
 									onClick={() => setApprovalMenuOpen((o) => !o)}
 									className={cn(
 										"flex items-center gap-1 rounded-full px-2.5 py-1 text-xs transition-colors disabled:opacity-40",
-										safeMode
+										gated
 											? "text-warning hover:bg-surface"
 											: "text-muted hover:bg-surface hover:text-fg",
 									)}
 									title={t("composer.approvalPolicy")}
 								>
-									{safeMode ? (
+									{gated ? (
 										<ShieldCheck className="h-3.5 w-3.5" />
 									) : (
 										<Shield className="h-3.5 w-3.5" />
 									)}
-									<span>{safeMode ? t("composer.approvalOn") : t("composer.approvalOff")}</span>
+									<span>{gated ? t("composer.approvalGated") : t("composer.approvalOff")}</span>
 									<ChevronDown className="h-3 w-3" />
 								</button>
 								{approvalMenuOpen && (
 									<div className={cn("absolute bottom-full left-0 mb-2 w-56 rounded-xl border border-border bg-surface p-1 shadow-lg", Z.menu)}>
-										<button
-											type="button"
-											onClick={() => void handleApprovalPolicyChange(false)}
-											className={cn(
-												"flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors hover:bg-surface-2",
-												!safeMode ? "text-fg" : "text-muted",
-											)}
-										>
-											<Shield className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-											<span className="min-w-0 flex-1">
-												<span className="block text-fg">{t("composer.approvalOff")}</span>
-												<span className="block text-[10px] text-muted">{t("composer.approvalOffHint")}</span>
-											</span>
-											{!safeMode && <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" />}
-										</button>
-										<button
-											type="button"
-											onClick={() => void handleApprovalPolicyChange(true)}
-											className={cn(
-												"flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors hover:bg-surface-2",
-												safeMode ? "text-fg" : "text-muted",
-											)}
-										>
-											<ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-											<span className="min-w-0 flex-1">
-												<span className="block text-fg">{t("composer.approvalOn")}</span>
-												<span className="block text-[10px] text-muted">{t("composer.approvalOnHint")}</span>
-											</span>
-											{safeMode && <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" />}
-										</button>
+										{([
+											{ policy: "auto" as const, icon: ShieldCheck, label: t("composer.approvalGated"), hint: t("composer.approvalGatedHint"), active: gated },
+											{ policy: "off" as const, icon: Shield, label: t("composer.approvalOff"), hint: t("composer.approvalOffHint"), active: !gated },
+										] as const).map(({ policy, icon: Icon, label, hint, active }) => (
+											<button
+												key={policy}
+												type="button"
+												onClick={() => void handleApprovalPolicyChange(policy)}
+												className={cn(
+													"flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors hover:bg-surface-2",
+													active ? "text-fg" : "text-muted",
+												)}
+											>
+												<Icon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+												<span className="min-w-0 flex-1">
+													<span className="block text-fg">{label}</span>
+													<span className="block text-[10px] text-muted">{hint}</span>
+												</span>
+												{active && <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" />}
+											</button>
+										))}
 									</div>
 								)}
 							</div>

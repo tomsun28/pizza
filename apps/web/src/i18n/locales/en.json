@@ -77,9 +77,9 @@
     "sendHint": "enter to send · shift+enter for newline",
     "approvalPolicy": "Approval policy for this session",
     "approvalOff": "Auto",
-    "approvalOffHint": "Run tools without asking",
-    "approvalOn": "Approve",
-    "approvalOnHint": "Pause risky tool calls for your approval",
+    "approvalOffHint": "Run all tools without asking",
+    "approvalGated": "Approve",
+    "approvalGatedHint": "Unknown tools and dangerous commands ask first; the rest auto-run",
     "contextUsed": "Context",
     "inputTokens": "Input",
     "outputTokens": "Output",
@@ -503,7 +503,13 @@
       "languageDescription": "Interface display language",
       "safeMode": "Safe Mode",
       "safeModeLabel": "Require approval",
-      "safeModeHint": "When on, risky tool calls (file writes, edits, deletes, dangerous shell) pause for your approval before running."
+      "safeModeHint": "When on, risky tool calls (file writes, edits, deletes, dangerous shell) pause for your approval before running.",
+      "approval": {
+        "title": "Tool Approval Policy",
+        "subtitle": "Controls whether tool calls run immediately or wait for your confirmation. Applies to current and new sessions.",
+        "policy": "Policy",
+        "current": "Current"
+      }
     },
     "provider": {
       "title": "Providers",

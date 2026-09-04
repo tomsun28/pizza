@@ -77,9 +77,9 @@
     "sendHint": "回车发送 · shift+回车换行",
     "approvalPolicy": "当前会话的审批策略",
     "approvalOff": "自动",
-    "approvalOffHint": "无需确认直接执行工具",
-    "approvalOn": "需审批",
-    "approvalOnHint": "有风险的工具调用会暂停等待你确认",
+    "approvalOffHint": "全部工具直接执行,不做任何确认",
+    "approvalGated": "审批",
+    "approvalGatedHint": "未知工具和危险命令需确认,其余自动执行",
     "contextUsed": "上下文",
     "inputTokens": "输入",
     "outputTokens": "输出",
@@ -503,7 +503,13 @@
       "languageDescription": "界面显示语言",
       "safeMode": "安全模式",
       "safeModeLabel": "需要审批",
-      "safeModeHint": "开启后，有风险的工具调用（文件写入、编辑、删除、危险命令）在执行前会暂停等待你确认。"
+      "safeModeHint": "开启后，有风险的工具调用（文件写入、编辑、删除、危险命令）在执行前会暂停等待你确认。",
+      "approval": {
+        "title": "工具审批策略",
+        "subtitle": "控制工具调用是否需要你确认后执行。策略对当前及新会话生效。",
+        "policy": "策略",
+        "current": "当前"
+      }
     },
     "provider": {
       "title": "服务商",

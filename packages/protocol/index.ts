@@ -281,6 +281,10 @@ export type RpcCommand =
 	| { id?: string; type: "approve"; intentEventId: string }
 	| { id?: string; type: "reject"; intentEventId: string }
 	| { id?: string; type: "set_safe_mode"; enabled: boolean }
+	| { id?: string; type: "set_approval_policy"; policy: ApprovalPolicy }
+	| { id?: string; type: "get_approval_policy" }
+	| { id?: string; type: "get_approval_gates" }
+	| { id?: string; type: "set_approval_gates"; gates: ApprovalGates }
 	| { id?: string; type: "new_session" }
 	| { id?: string; type: "get_skills" }
 	| { id?: string; type: "set_skill_enabled"; skillName: string; enabled: boolean }
@@ -414,10 +418,22 @@ export interface RpcSessionState {
 	ptyPort?: number;
 	/** When true, risky tool calls require explicit user approval before running. */
 	safeMode?: boolean;
+	/** Approval policy: "off" auto-runs everything, "auto" defers to per-category gates, "on" gates every risky call. */
+	approvalPolicy?: ApprovalPolicy;
 	/** Estimated context window usage for the current session. */
 	contextUsage?: RpcContextUsage;
 	/** Cumulative token usage across all assistant messages in the session. */
 	tokenUsage?: RpcTokenUsage;
+}
+
+export type ApprovalPolicy = "auto" | "on" | "off";
+
+/** Per-category approval gates; consulted only when the approval policy is "auto". */
+export interface ApprovalGates {
+	writes?: boolean;
+	edits?: boolean;
+	shellModerate?: boolean;
+	unknown?: boolean;
 }
 
 export interface RpcContextUsage {
@@ -502,6 +518,10 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "approve"; success: true }
 	| { id?: string; type: "response"; command: "reject"; success: true }
 	| { id?: string; type: "response"; command: "set_safe_mode"; success: true; data: { safeMode: boolean } }
+	| { id?: string; type: "response"; command: "set_approval_policy"; success: true; data: { approvalPolicy: ApprovalPolicy } }
+	| { id?: string; type: "response"; command: "get_approval_policy"; success: true; data: { approvalPolicy: ApprovalPolicy } }
+	| { id?: string; type: "response"; command: "get_approval_gates"; success: true; data: { gates: ApprovalGates } }
+	| { id?: string; type: "response"; command: "set_approval_gates"; success: true; data: { gates: ApprovalGates } }
 	| { id?: string; type: "response"; command: "new_session"; success: true; data: { sessionId: string } }
 	| { id?: string; type: "response"; command: "get_skills"; success: true; data: { skills: RpcSkillInfo[] } }
 	| {

@@ -116,6 +116,10 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "approve"; success: true }
 	| { id?: string; type: "response"; command: "reject"; success: true }
 	| { id?: string; type: "response"; command: "set_safe_mode"; success: true; data: { safeMode: boolean } }
+	| { id?: string; type: "response"; command: "set_approval_policy"; success: true; data: { approvalPolicy: import("@tomsun28/pizza-protocol").ApprovalPolicy } }
+	| { id?: string; type: "response"; command: "get_approval_policy"; success: true; data: { approvalPolicy: import("@tomsun28/pizza-protocol").ApprovalPolicy } }
+	| { id?: string; type: "response"; command: "get_approval_gates"; success: true; data: { gates: import("@tomsun28/pizza-protocol").ApprovalGates } }
+	| { id?: string; type: "response"; command: "set_approval_gates"; success: true; data: { gates: import("@tomsun28/pizza-protocol").ApprovalGates } }
 	| { id?: string; type: "response"; command: "new_session"; success: true; data: { sessionId: string } }
 	| { id?: string; type: "response"; command: "get_skills"; success: true; data: { skills: RpcSkillInfo[] } }
 	| {
