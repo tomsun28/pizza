@@ -863,9 +863,12 @@ export class SettingsManager {
 		unknown: boolean;
 	} {
 		const approvals = this.settings.approvals;
+		// Default "gated" policy: unknown tools + dangerous shell are gated
+		// (dangerous is always gated by the classifier); writes/edits/ordinary
+		// shell auto-run.
 		return {
-			writes: approvals?.writes ?? true,
-			edits: approvals?.edits ?? true,
+			writes: approvals?.writes ?? false,
+			edits: approvals?.edits ?? false,
 			shellModerate: approvals?.shellModerate ?? false,
 			unknown: approvals?.unknown ?? true,
 		};
@@ -874,6 +877,13 @@ export class SettingsManager {
 	setSafeMode(enabled: boolean | "auto"): void {
 		this.globalSettings.safeMode = enabled;
 		this.markModified("safeMode");
+		this.save();
+	}
+
+	/** Persist per-category approval gates (merged into global settings). */
+	setApprovalGates(gates: Partial<ApprovalSettings>): void {
+		this.globalSettings.approvals = { ...this.globalSettings.approvals, ...gates };
+		this.markModified("approvals");
 		this.save();
 	}
 

@@ -18,7 +18,7 @@
  */
 
 import { join } from "node:path";
-import type { Model } from "@earendil-works/pi-ai/compat";
+import type { ImageContent, Model } from "@earendil-works/pi-ai/compat";
 import { getAgentDir, getMainMemoryDir } from "../config.js";
 import type { AgentTool, ThinkingLevel } from "./agent/index.js";
 import { AuthStorage } from "./auth-storage.js";
@@ -405,6 +405,30 @@ export async function createSessionFacade(
 				resourceLoader.refreshMainAgentResources?.();
 			}
 			return toolAssembly.refreshSystemPrompt();
+		},
+		beforeAgentStart: async (payload) => {
+			// Fire before_agent_start extension hooks (e.g. built-in extensions
+			// injecting usage hints into the system prompt). Always rebuild from
+			// the canonical base first so repeated turns do not accumulate
+			// injections, then apply the extensions’ chained result on top.
+			const base = toolAssembly.refreshSystemPrompt();
+			const combined = await extensionRunner.emitBeforeAgentStart(
+				payload.prompt,
+				payload.images as ImageContent[] | undefined,
+				base,
+				{
+					cwd,
+					skills: resourceLoader.getSkills().skills,
+					contextFiles: resourceLoader.getAgentsFiles().agentsFiles,
+					customPrompt: resourceLoader.getSystemPrompt(),
+				},
+			);
+			const systemPrompt = combined?.systemPrompt;
+			if (systemPrompt) {
+				runtime?.setSystemPrompt(systemPrompt);
+				return { systemPrompt };
+			}
+			return { systemPrompt: base };
 		},
 	});
 	toolAssembly.attachRuntime(runtime);

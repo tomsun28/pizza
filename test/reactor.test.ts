@@ -143,6 +143,77 @@ describe("Reactor (event-driven core)", () => {
 		runtime.dispose();
 	});
 
+	it("runs beforeAgentStart once per user prompt and applies the returned system prompt", async () => {
+		const cwd = makeTempDir();
+		const registry = makeRegistry();
+		const seenSystemPrompts: string[] = [];
+		let calls = 0;
+		const client: LLMClient = {
+			async complete(request) {
+				calls++;
+				seenSystemPrompts.push(request.systemPrompt ?? "");
+				if (calls === 1) {
+					const content: ContentBlock[] = [
+						{ type: "tool_call", id: "call_1", name: "echo", arguments: { text: "hello" } } as ContentBlock,
+					];
+					return {
+						content,
+						provider: "test",
+						model: "test",
+						usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, cost: 0 },
+						stopReason: "tool_use",
+					};
+				}
+				return {
+					content: [{ type: "text", text: "done" } as ContentBlock],
+					provider: "test",
+					model: "test",
+					usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total: 0, cost: 0 },
+					stopReason: "stop",
+				};
+			},
+		};
+
+		let hookCalls = 0;
+		const runtime = new EventSourcedRuntime({
+			cwd,
+			agentDir: cwd,
+			toolRegistry: registry,
+			llmClient: client,
+			classifierConfig: { approve_unknown: false },
+			systemPrompt: "base system",
+			model: { provider: "test", model_id: "test" },
+			tools: [],
+			beforeAgentStart: async (payload) => {
+				hookCalls++;
+				return { systemPrompt: `base system + hint for: ${payload.prompt}` };
+			},
+		});
+
+		await runtime.prompt("say hi");
+
+		// Hook fired exactly once for the user prompt — not again on the tool-results round.
+		expect(hookCalls).toBe(1);
+		// Both LLM rounds of the turn used the injected system prompt.
+		expect(seenSystemPrompts.length).toBe(2);
+		for (const sp of seenSystemPrompts) {
+			expect(sp).toBe("base system + hint for: say hi");
+		}
+
+		// A second user prompt fires the hook again (once).
+		calls = 0;
+		seenSystemPrompts.length = 0;
+		await runtime.prompt("say hi again").catch(() => {});
+		expect(hookCalls).toBe(2);
+		if (seenSystemPrompts.length > 0) {
+			for (const sp of seenSystemPrompts) {
+				expect(sp).toBe("base system + hint for: say hi again");
+			}
+		}
+
+		runtime.dispose();
+	});
+
 	it("refreshes the session breadcrumb before prompting after an out-of-band session switch", async () => {
 		const cwd = makeTempDir();
 		const store = new SqliteEventStore(`runtime-refresh-${Date.now()}`, join(cwd, "events.sqlite"));

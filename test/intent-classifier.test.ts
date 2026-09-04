@@ -36,28 +36,29 @@ describe("IntentClassifier", () => {
 	});
 
 	describe("file write tools", () => {
-		it("should classify write as moderate", () => {
+		it("should classify write as moderate (ungated by default)", () => {
 			const result = classifier.classify("write", { path: "/some/file.ts" });
 			expect(result.risk).toBe("moderate");
-			expect(result.requires_approval).toBe(true);
+			// Default "gated" policy: writes/edits auto-run.
+			expect(result.requires_approval).toBe(false);
 			expect(result.category).toBe("file_write");
 			expect(result.affected_files).toContain("/some/file.ts");
 		});
 
-		it("should classify edit as moderate", () => {
+		it("should classify edit as moderate (ungated by default)", () => {
 			const result = classifier.classify("edit", { path: "/some/file.ts" });
 			expect(result.risk).toBe("moderate");
-			expect(result.requires_approval).toBe(true);
+			expect(result.requires_approval).toBe(false);
 			expect(result.category).toBe("file_write");
 		});
 
-		it("should allow writes when explicitly configured", () => {
-			const permissive = new IntentClassifier({
-				require_approval_writes: false,
-				require_approval_edits: false,
+		it("should gate writes when explicitly configured", () => {
+			const gating = new IntentClassifier({
+				require_approval_writes: true,
+				require_approval_edits: true,
 			});
-			const result = permissive.classify("write", { path: "/some/file.ts" });
-			expect(result.requires_approval).toBe(false);
+			expect(gating.classify("write", { path: "/some/file.ts" }).requires_approval).toBe(true);
+			expect(gating.classify("edit", { path: "/some/file.ts" }).requires_approval).toBe(true);
 		});
 
 		it("should support deprecated approval aliases", () => {
@@ -144,20 +145,20 @@ describe("IntentClassifier", () => {
 			expect(result.category).toBe("shell_moderate");
 		});
 
-		it("should classify cli built-in writes as file writes", () => {
+		it("should classify cli built-in writes as file writes (ungated by default)", () => {
 			const result = classifier.classify("cli", { command: "write src/app.ts <<EOF\nhello\nEOF" });
 
 			expect(result.risk).toBe("moderate");
-			expect(result.requires_approval).toBe(true);
+			expect(result.requires_approval).toBe(false);
 			expect(result.category).toBe("file_write");
 			expect(result.affected_files).toEqual(["src/app.ts"]);
 		});
 
-		it("should classify non-null shell redirection as file writes", () => {
+		it("should classify non-null shell redirection as file writes (ungated by default)", () => {
 			const result = classifier.classify("cli", { command: "echo hello > output.txt" });
 
 			expect(result.risk).toBe("moderate");
-			expect(result.requires_approval).toBe(true);
+			expect(result.requires_approval).toBe(false);
 			expect(result.category).toBe("file_write");
 			expect(result.affected_files).toEqual(["output.txt"]);
 		});
@@ -253,7 +254,8 @@ describe("IntentClassifier", () => {
 		it("setSafeMode toggles live", () => {
 			const c = new IntentClassifier();
 			expect(c.isSafeMode).toBe(false);
-			expect(c.classify("write", { path: "x" }).requires_approval).toBe(true); // flag default
+			expect(c.classify("write", { path: "x" }).requires_approval).toBe(false); // flag default (writes ungated)
+			expect(c.classify("some_unknown_tool", { arg: "v" }).requires_approval).toBe(true); // unknown gated
 			c.setSafeMode(false);
 			expect(c.classify("write", { path: "x" }).requires_approval).toBe(false);
 			expect(c.classify("truncate", { path: "x" }).requires_approval).toBe(false);

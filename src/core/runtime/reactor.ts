@@ -88,6 +88,18 @@ export interface ReactorConfig {
 	 * Returns the updated system prompt string.
 	 */
 	refreshSystemPrompt?: () => string;
+	/**
+	 * Run at the start of each user-prompt turn, before the first LLM round.
+	 * Lets the caller fire extension before_agent_start hooks (system-prompt
+	 * injection, context messages) with the canonical base prompt. Return the
+	 * effective system prompt for this turn, or undefined to keep the current
+	 * one. Implementations must build on the canonical base prompt so repeated
+	 * turns do not accumulate injections.
+	 */
+	beforeAgentStart?: (payload: {
+		prompt: string;
+		images?: unknown[];
+	}) => Promise<{ systemPrompt?: string } | undefined>;
 }
 
 /** A single event handler. Returns void or void Promise. */
@@ -440,6 +452,21 @@ export class Reactor {
 
 		// A turn starts here — queued follow-ups must wait for its completion.
 		this._turnInFlight = true;
+
+		// Run before_agent_start extension hooks so system-prompt injections
+		// (e.g. built-in extensions like agent-browser) apply to this turn.
+		// Fires once per user prompt — not per tool-results round.
+		if (this.config.beforeAgentStart) {
+			try {
+				const result = await this.config.beforeAgentStart({
+					prompt: typeof payload.content === "string" ? payload.content : "",
+					images: Array.isArray(payload.images) ? payload.images : undefined,
+				});
+				if (result?.systemPrompt) this.config.systemPrompt = result.systemPrompt;
+			} catch {
+				// A failing hook must not block the turn.
+			}
+		}
 
 		// Reset loop detection for a new prompt cycle
 		this._toolRoundSignatures = [];

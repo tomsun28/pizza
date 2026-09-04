@@ -49,10 +49,12 @@ interface ResolvedClassifierConfig {
 	require_approval_unknown: boolean;
 }
 
+// Default policy is "gated": unknown tools and dangerous shell are gated;
+// writes/edits/ordinary commands auto-run.
 const DEFAULT_CLASSIFIER_CONFIG: ResolvedClassifierConfig = {
 	safe_mode: undefined,
-	require_approval_writes: true,
-	require_approval_edits: true,
+	require_approval_writes: false,
+	require_approval_edits: false,
 	require_approval_shell_moderate: false,
 	require_approval_unknown: true,
 };
@@ -101,6 +103,18 @@ export class IntentClassifier {
 	 */
 	setSafeMode(safeMode: boolean | undefined): void {
 		this.config = { ...this.config, safe_mode: safeMode };
+	}
+
+	/** Update individual require_approval_* gates live (effective when safe
+	 * mode is "auto"/undefined). Fields left undefined keep their value. */
+	setApprovalGates(gates: { writes?: boolean; edits?: boolean; shellModerate?: boolean; unknown?: boolean }): void {
+		this.config = {
+			...this.config,
+			...(gates.writes !== undefined ? { require_approval_writes: gates.writes } : {}),
+			...(gates.edits !== undefined ? { require_approval_edits: gates.edits } : {}),
+			...(gates.shellModerate !== undefined ? { require_approval_shell_moderate: gates.shellModerate } : {}),
+			...(gates.unknown !== undefined ? { require_approval_unknown: gates.unknown } : {}),
+		};
 	}
 
 	/** Whether safe mode is currently active (explicitly on). */

@@ -74,6 +74,15 @@ export interface EventSourcedRuntimeConfig {
 	 * changes (split/fork/jump). Returns the updated system prompt string.
 	 */
 	refreshSystemPrompt?: () => string;
+	/**
+	 * Run at the start of each user-prompt turn (before the first LLM round).
+	 * Extension host: fire before_agent_start hooks here so system-prompt
+	 * injections apply to the turn. Forwarded to the reactor.
+	 */
+	beforeAgentStart?: (payload: {
+		prompt: string;
+		images?: unknown[];
+	}) => Promise<{ systemPrompt?: string } | undefined>;
 }
 
 export interface RuntimeCompactOptions {
@@ -197,6 +206,7 @@ export class EventSourcedRuntime {
 				compactionPolicy: this._buildCompactionPolicy(projection),
 			sessionManager: this.sessionManager,
 			refreshSystemPrompt: this.config.refreshSystemPrompt,
+			beforeAgentStart: this.config.beforeAgentStart,
 		});
 
 			await this.reactor.start();
@@ -604,6 +614,11 @@ export class EventSourcedRuntime {
 	 */
 	setSafeMode(enabled: boolean | undefined): void {
 		this.classifier.setSafeMode(enabled);
+	}
+
+	/** Update per-category approval gates live (effective when safe mode is auto). */
+	setApprovalGates(gates: { writes?: boolean; edits?: boolean; shellModerate?: boolean; unknown?: boolean }): void {
+		this.classifier.setApprovalGates(gates);
 	}
 
 	/** Whether safe mode is currently active. */
