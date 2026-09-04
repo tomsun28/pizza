@@ -91,7 +91,9 @@ export default function BranchTreeExplorer({ workspace }: { workspace?: string |
 		try {
 			setError("");
 			const list = await historyTreeList(q ?? (queryRef.current || undefined));
-			setNodes(list);
+			// The tree arrives in depth-first order, oldest first; the history tab
+			// displays newest sessions at the top, so reverse it for display.
+			setNodes([...list].reverse());
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		} finally {

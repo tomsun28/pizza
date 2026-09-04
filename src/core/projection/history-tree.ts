@@ -62,7 +62,14 @@ export function buildHistoryTreeNodes(
 	sessions: SessionDescriptor[],
 	activeSessionId: string | undefined,
 	store?: EventStore,
+	/**
+	 * Restrict the tree to one thread. REQUIRED in multi-tenant (SDK threadId)
+	 * deployments — without it the tree exposes every tenant's session titles
+	 * and snippets. Omit only for single-user local use.
+	 */
+	threadId?: string,
 ): HistoryTreeNodeInfo[] {
+	if (threadId) sessions = sessions.filter((s) => s.thread_id === threadId);
 	const byId = new Map(sessions.map((s) => [s.session_id, s]));
 	const activeSession = activeSessionId ? byId.get(activeSessionId) : undefined;
 	const activeVisibleSessionId = activeSession?.context_parent_session_id ?? activeSessionId;
