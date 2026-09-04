@@ -490,7 +490,7 @@ describe("ModelRegistry", () => {
 			const opus = registry.find("claude-relay", "claude-opus-5");
 			expect((opus?.compat as any)?.forceAdaptiveThinking).toBe(true);
 			// Inherits thinkingLevelMap from the known built-in model metadata
-			expect(opus?.thinkingLevelMap).toEqual({ xhigh: "xhigh", max: "max" });
+			expect(opus?.thinkingLevelMap).toEqual({ off: null, xhigh: "xhigh", max: "max" });
 
 			const sonnet = registry.find("claude-relay", "claude-sonnet-4-6-cc");
 			expect((sonnet?.compat as any)?.forceAdaptiveThinking).toBe(true);

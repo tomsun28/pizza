@@ -699,14 +699,36 @@ export class ModelRegistry {
 		const models: Model<Api>[] = [];
 		const builtInProviders = new Set<string>(getProviders());
 
-		// Cache built-in defaults (api, baseUrl) per provider, extracted from first model.
-		const builtInDefaultsCache = new Map<string, { api: string; baseUrl: string }>();
-		const getBuiltInDefaults = (providerName: string): { api: string; baseUrl: string } | undefined => {
+		// Cache built-in defaults (api, baseUrl) per provider. Providers can mix
+		// APIs (e.g. openrouter serves native anthropic-messages endpoints
+		// alongside openai-completions), so default to the provider's most
+		// common api rather than its first model's, and let custom models whose
+		// id matches a built-in inherit that model's endpoint.
+		type BuiltInDefaults = { api: string; baseUrl: string; byId: Map<string, { api: string; baseUrl: string }> };
+		const builtInDefaultsCache = new Map<string, BuiltInDefaults>();
+		const getBuiltInDefaults = (providerName: string): BuiltInDefaults | undefined => {
 			if (!builtInProviders.has(providerName)) return undefined;
 			if (builtInDefaultsCache.has(providerName)) return builtInDefaultsCache.get(providerName);
 			const builtIn = getModels(providerName as BuiltinProvider) as Model<Api>[];
 			if (builtIn.length === 0) return undefined;
-			const defaults = { api: builtIn[0].api, baseUrl: builtIn[0].baseUrl };
+			const byId = new Map<string, { api: string; baseUrl: string }>();
+			const apiCounts = new Map<string, number>();
+			const apiBaseUrls = new Map<string, string>();
+			for (const m of builtIn) {
+				if (!m.api || !m.baseUrl) continue;
+				byId.set(m.id, { api: m.api, baseUrl: m.baseUrl });
+				apiCounts.set(m.api, (apiCounts.get(m.api) || 0) + 1);
+				if (!apiBaseUrls.has(m.api)) apiBaseUrls.set(m.api, m.baseUrl);
+			}
+			let bestApi: string | undefined;
+			let bestCount = 0;
+			for (const [api, count] of apiCounts) {
+				if (bestCount < count) {
+					bestCount = count;
+					bestApi = api;
+				}
+			}
+			const defaults: BuiltInDefaults = { api: bestApi || builtIn[0].api, baseUrl: (bestApi && apiBaseUrls.get(bestApi)) || builtIn[0].baseUrl, byId };
 			builtInDefaultsCache.set(providerName, defaults);
 			return defaults;
 		};
@@ -718,10 +740,13 @@ export class ModelRegistry {
 			const builtInDefaults = getBuiltInDefaults(providerName);
 
 			for (const modelDef of modelDefs) {
-				const api = modelDef.api ?? providerConfig.api ?? builtInDefaults?.api;
+				// Custom model ids that match a built-in model inherit its endpoint
+				const builtInMatch = builtInDefaults?.byId.get(modelDef.id);
+				const api = modelDef.api ?? providerConfig.api ?? builtInMatch?.api ?? builtInDefaults?.api;
 				if (!api) continue;
 
-				const baseUrl = modelDef.baseUrl ?? providerConfig.baseUrl ?? builtInDefaults?.baseUrl;
+				const baseUrl =
+					modelDef.baseUrl ?? providerConfig.baseUrl ?? builtInMatch?.baseUrl ?? builtInDefaults?.baseUrl;
 				if (!baseUrl) continue;
 
 				let compat = mergeCompat(providerConfig.compat, modelDef.compat);
