@@ -51,11 +51,17 @@ function inferFileMutations(
 		case "bash": {
 			const details = _result.details as BashToolDetails | undefined;
 			const builtin = details?.builtin;
-			if (builtin?.name === "write" && builtin.args.path) {
-				return [{ path: builtin.args.path, operation: "create" }];
+			if (!builtin) return undefined;
+			// Static built-ins (write/edit) carry typed args; dynamic built-ins
+			// (extension-registered names) carry untyped records and never match
+			// the write/edit checks below.
+			if (builtin.name !== "write" && builtin.name !== "edit") return undefined;
+			const args = builtin.args as { path?: string };
+			if (builtin.name === "write" && args.path) {
+				return [{ path: args.path, operation: "create" }];
 			}
-			if (builtin?.name === "edit" && builtin.args.path) {
-				return [{ path: builtin.args.path, operation: "modify" }];
+			if (builtin.name === "edit" && args.path) {
+				return [{ path: args.path, operation: "modify" }];
 			}
 			return undefined;
 		}

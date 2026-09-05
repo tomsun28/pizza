@@ -83,16 +83,16 @@ describe("SettingsManager — safeMode tri-state", () => {
 		expect(SettingsManager.create(projectDir, agentDir).getSafeModeSetting()).toBe(false);
 	});
 
-	it("exposes per-category approval defaults", () => {
+	it("exposes per-category approval defaults (gated policy: unknown + dangerous)", () => {
 		writeSettings({});
 		const approvals = SettingsManager.create(projectDir, agentDir).getApprovalSettings();
-		expect(approvals).toEqual({ writes: true, edits: true, shellModerate: false, unknown: true });
+		expect(approvals).toEqual({ writes: false, edits: false, shellModerate: false, unknown: true });
 	});
 
 	it("honours per-category overrides from settings.json", () => {
-		writeSettings({ safeMode: "auto", approvals: { writes: false, shellModerate: true } });
+		writeSettings({ safeMode: "auto", approvals: { writes: true, shellModerate: true } });
 		const approvals = SettingsManager.create(projectDir, agentDir).getApprovalSettings();
-		expect(approvals).toEqual({ writes: false, edits: true, shellModerate: true, unknown: true });
+		expect(approvals).toEqual({ writes: true, edits: false, shellModerate: true, unknown: true });
 	});
 
 	it("end-to-end: \"auto\" + approvals actually gates the matching tool call", () => {

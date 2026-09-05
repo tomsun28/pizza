@@ -307,6 +307,7 @@ async function buildExtensionInfos(facade: SessionFacade): Promise<RpcExtensionI
 			path: ext.path,
 			toolCount: ext.tools.size,
 			commandCount: ext.commands.size,
+			builtinCommandCount: ext.builtinCommands?.size ?? 0,
 		});
 	}
 
@@ -330,6 +331,7 @@ async function buildExtensionInfos(facade: SessionFacade): Promise<RpcExtensionI
 			path: `<builtin:${info.id}>`,
 			toolCount: 0,
 			commandCount: 0,
+			builtinCommandCount: 0,
 		});
 	}
 	// Stable ordering: built-ins first, then the rest by id.
@@ -494,6 +496,10 @@ function getFacadeSessionState(facade: SessionFacade, ptyPort?: number): RpcSess
 		messageCount: messages.length,
 		pendingMessageCount: 0,
 		safeMode: facade.runtime.isSafeMode,
+		approvalPolicy: (() => {
+			const raw = facade.settingsManager.getSafeModeSetting();
+			return raw === true ? "on" as const : raw === false ? "off" as const : "auto" as const;
+		})(),
 		ptyPort,
 		contextUsage,
 		tokenUsage,
@@ -784,6 +790,19 @@ export async function runRpcModeWithFacade(
 		process.exit(exitCode);
 	}
 
+	/**
+	 * Session-structure commands (new_session / switch_session / history_tree
+	 * switch-jump-fork / fork / clone / rewind) place their boundary at the
+	 * store head. While an agent turn is in flight the head sits INSIDE the
+	 * streaming answer: the boundary would land mid-turn and steal the rest of
+	 * the answer from the session where the user asked (the new/switched-to
+	 * session range swallows the response tail - attribution bug). Wait for the
+	 * prompt cycle - including queued follow-ups, retries and compaction - to
+	 * settle first so the boundary lands after the turn final event. Resolves
+	 * immediately when the runtime is idle.
+	 */
+	const waitForSessionStructureIdle = (): Promise<void> => facade.waitForIdle();
+
 	const handleCommand = async (command: RpcCommand): Promise<RpcResponse | undefined> => {
 		const id = command.id;
 
@@ -910,6 +929,7 @@ export async function runRpcModeWithFacade(
 					return error(id, "rewind", "Projection session manager is not available");
 				}
 				if (command.targetEventId) {
+					await waitForSessionStructureIdle();
 					const event = facade.runtime.store.get(command.targetEventId);
 					if (!event) {
 						return error(id, "rewind", `Event not found: ${command.targetEventId}`);
@@ -926,12 +946,14 @@ export async function runRpcModeWithFacade(
 				if (!sessionManager) {
 					return error(id, "switch_session", "Projection session manager is not available");
 				}
+				await waitForSessionStructureIdle();
 				const desc = sessionManager.switchToExistingSession(resolveSessionId(facade, command.sessionPath), command.reason);
 				facade.runtime.refreshSystemPromptForCurrentSession();
 				return success(id, "switch_session", { cancelled: false, sessionId: desc.session_id });
 			}
 
 			case "fork": {
+				await waitForSessionStructureIdle();
 				const event = facade.runtime.store.get(command.entryId);
 				if (!event) {
 					return error(id, "fork", `Event not found: ${command.entryId}`);
@@ -944,6 +966,7 @@ export async function runRpcModeWithFacade(
 			}
 
 			case "clone": {
+				await waitForSessionStructureIdle();
 				const leafId = getFacadeLeafEventId(facade);
 				if (!leafId) {
 					return error(id, "clone", "Cannot clone session: no current entry selected");
@@ -991,6 +1014,7 @@ export async function runRpcModeWithFacade(
 							nodes = nodes.filter(
 								(n) =>
 									n.name?.toLowerCase().includes(q) ||
+									n.title?.toLowerCase().includes(q) ||
 									n.snippet?.toLowerCase().includes(q) ||
 									n.session_id.toLowerCase().includes(q),
 							);
@@ -1019,6 +1043,7 @@ export async function runRpcModeWithFacade(
 						});
 					}
 					case "switch": {
+						await waitForSessionStructureIdle();
 						const target = sessionManager.resolveSwitchTargetSession(command.sessionId);
 						const desc = sessionManager.switchToExistingSession(target.session_id, command.reason);
 						facade.runtime.refreshSystemPromptForCurrentSession();
@@ -1028,6 +1053,7 @@ export async function runRpcModeWithFacade(
 						});
 					}
 					case "jump": {
+						await waitForSessionStructureIdle();
 						const result = sessionManager.jumpToSession(command.sessionId, command.reason);
 						facade.runtime.refreshSystemPromptForCurrentSession();
 						return success(id, "history_tree", {
@@ -1037,6 +1063,7 @@ export async function runRpcModeWithFacade(
 						});
 					}
 					case "fork": {
+						await waitForSessionStructureIdle();
 						const desc = sessionManager.forkFromSession(command.sessionId, { preserveHistory: false });
 						facade.runtime.refreshSystemPromptForCurrentSession();
 						return success(id, "history_tree", { action: "fork", session_id: desc.session_id });
@@ -1115,6 +1142,35 @@ export async function runRpcModeWithFacade(
 				facade.settingsManager.setSafeMode(enabled);
 				return success(id, "set_safe_mode", { safeMode: facade.runtime.isSafeMode });
 			}
+			case "set_approval_policy": {
+				const policy = (command as unknown as { policy: "auto" | "on" | "off" }).policy;
+				const safeMode = policy === "on" ? true : policy === "off" ? false : undefined;
+				facade.runtime.setSafeMode(safeMode);
+				facade.settingsManager.setSafeMode(safeMode === undefined ? "auto" : safeMode);
+				// "auto" is the two-state UI approval mode: reset gates to the
+				// standard set (unknown + dangerous gated, all else auto-runs) so
+				// behavior matches the label regardless of stale gate overrides.
+				if (policy === "auto") {
+					const gates = { writes: false, edits: false, shellModerate: false, unknown: true };
+					facade.settingsManager.setApprovalGates(gates);
+					facade.runtime.setApprovalGates(gates);
+				}
+				return success(id, "set_approval_policy", { approvalPolicy: policy });
+			}
+			case "get_approval_policy": {
+				const raw = facade.settingsManager.getSafeModeSetting();
+				const policy = raw === true ? "on" as const : raw === false ? "off" as const : "auto" as const;
+				return success(id, "get_approval_policy", { approvalPolicy: policy });
+			}
+			case "get_approval_gates": {
+				return success(id, "get_approval_gates", { gates: facade.settingsManager.getApprovalSettings() });
+			}
+			case "set_approval_gates": {
+				const gates = (command as unknown as { gates: { writes?: boolean; edits?: boolean; shellModerate?: boolean; unknown?: boolean } }).gates;
+				facade.settingsManager.setApprovalGates(gates);
+				facade.runtime.setApprovalGates(gates);
+				return success(id, "set_approval_gates", { gates: facade.settingsManager.getApprovalSettings() });
+			}
 			case "get_scheduler_policy": {
 				return success(id, "get_scheduler_policy", { policy: facade.settingsManager.getSchedulerPolicy() });
 			}
@@ -1127,6 +1183,7 @@ export async function runRpcModeWithFacade(
 			// Long-lived agents cache skills from process start; pick up skills
 			// added/removed on disk so each new conversation sees the current set.
 			await refreshSkillsFromDisk(facade);
+			await waitForSessionStructureIdle();
 			const desc = facade.runtime.createSession();
 			const sessionId = desc?.session_id ?? facade.runtime.sessionManager?.getActiveSessionId() ?? "";
 			return success(id, "new_session", { sessionId });

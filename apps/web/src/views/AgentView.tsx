@@ -236,13 +236,15 @@ function buildTimelineFromMessages(
 			const resultText = toolResultText(msg.content);
 			const isError = msg.isError === true || msg.is_error === true;
 			const existing = toolCallId ? toolCardById.get(toolCallId) : undefined;
+			const resultImages = messageImages(msg);
 			if (existing) {
 				existing.toolResult = resultText;
+				if (resultImages.length > 0) existing.toolImages = resultImages;
 				existing.isError = isError;
 				existing.status = isError ? "ERROR" : "DONE";
 			} else {
 				// Orphan result (no matching call) — still show it.
-				history.push({ id: `hist-${history.length}`, role: "tool", title: String(msg.toolName ?? msg.name ?? "tool"), text: "", status: isError ? "ERROR" : "DONE", streaming: false, toolName: String(msg.toolName ?? msg.name ?? "tool"), toolResult: resultText, isError });
+				history.push({ id: `hist-${history.length}`, role: "tool", title: String(msg.toolName ?? msg.name ?? "tool"), text: "", status: isError ? "ERROR" : "DONE", streaming: false, toolName: String(msg.toolName ?? msg.name ?? "tool"), toolResult: resultText, ...(resultImages.length > 0 ? { toolImages: resultImages } : {}), isError });
 				// (title intentionally uses raw tool name, not translated)
 			}
 		}
@@ -372,7 +374,16 @@ export default function AgentView({
 				if (cancelled) return;
 				const data = (r as unknown as Record<string, unknown>)?.data as Record<string, unknown> | undefined;
 				const messages = (data?.messages as Array<Record<string, unknown>> | undefined) ?? [];
-				const history = buildTimelineFromMessages(messages, tRef.current);
+				let history = buildTimelineFromMessages(messages, tRef.current);
+				// Mid-turn reload (session jump/fork/scheduled completion):
+				// persisted history has no trace of an in-flight message, so
+				// append a streaming placeholder when the agent is still
+				// running — chunks adopt it, turn-end finalizes it.
+				if (stateRef.current?.isStreaming && !history.some((it) => it.streaming)) {
+					const id = `inflight-${ws}`;
+					history = [...history, { id, role: "assistant", title: tRef.current("common.pizza"), text: "", status: "STREAMING", streaming: true, timestamp: Date.now() }];
+					activeAssistantRef.current = id;
+				}
 				if (!cancelled) setItems(history);
 				void refreshQueued();
 				onRefreshState?.();
@@ -423,7 +434,17 @@ export default function AgentView({
 				if (cancelled) return;
 				const data = (r as unknown as Record<string, unknown>)?.data as Record<string, unknown> | undefined;
 				const messages = (data?.messages as Array<Record<string, unknown>> | undefined) ?? [];
-				const history = buildTimelineFromMessages(messages, tRef.current);
+				let history = buildTimelineFromMessages(messages, tRef.current);
+				// The agent may be mid-turn while we load history (first visit
+				// to a running workspace, or webview reload). Persisted history
+				// has no trace of the in-flight message — append a streaming
+				// placeholder so the spinner shows up right away; incoming
+				// chunks adopt it and turn-end finalizes it (see handleEvent).
+				if (stateRef.current?.isStreaming && !history.some((it) => it.streaming)) {
+					const id = `inflight-${workspace}`;
+					history = [...history, { id, role: "assistant", title: tRef.current("common.pizza"), text: "", status: "STREAMING", streaming: true, timestamp: Date.now() }];
+					activeAssistantRef.current = id;
+				}
 				if (!cancelled && history.length > 0) {
 					setItems(history);
 				}
@@ -532,6 +553,28 @@ export default function AgentView({
 		}
 
 		const activeRef = isForCurrent ? activeAssistantRef : { current: activeAssistantByWs.current.get(eventCwd) ?? null };
+		// Streaming-pointer fallback for events that arrive without their
+		// AGENT_MESSAGE_START having been seen (the view joined mid-turn:
+		// workspace switch, history reload, missed event). Chunks and the
+		// end/turn events resolve to the same deterministic id so an
+		// in-flight message still renders instead of being dropped.
+		const inflightId = `inflight-${eventCwd}`;
+		const adoptInflightId = (): string => {
+			if (isForCurrent) {
+				if (!activeAssistantRef.current) activeAssistantRef.current = inflightId;
+				return activeAssistantRef.current;
+			}
+			const existing = activeAssistantByWs.current.get(eventCwd) ?? null;
+			if (!existing) activeAssistantByWs.current.set(eventCwd, inflightId);
+			return existing ?? inflightId;
+		};
+		const ensureStreamingBubble = (id: string) => {
+			updateItems((prev) =>
+				prev.some((it) => it.id === id)
+					? prev
+					: [...prev, { id, role: "assistant", title: tRef.current("common.pizza"), text: "", status: "STREAMING", streaming: true, timestamp: Date.now() }],
+			);
+		};
 
 		const updateItems = (fn: (prev: TimelineItem[]) => TimelineItem[]) => {
 			if (isForCurrent) {
@@ -652,10 +695,13 @@ export default function AgentView({
 				break;
 			}
 			case "AGENT_MESSAGE_CHUNK": {
-				const id = activeRef.current;
-				if (!id) break;
 				const chunk = (event.payload as Record<string, unknown>)?.chunk as Record<string, unknown> | undefined;
 				if (!chunk) break;
+				// No pointer → we joined mid-message (missed AGENT_MESSAGE_START).
+				// Adopt the inflight id so the chunk still renders.
+				const hadPointer = Boolean(activeRef.current);
+				const id = activeRef.current ?? adoptInflightId();
+				if (!hadPointer) ensureStreamingBubble(id);
 				if (chunk.kind === "text_delta" && typeof chunk.delta === "string") {
 					updateItems((prev) =>
 						prev.map((it) => (it.id === id ? { ...it, text: it.text + chunk.delta } : it)),
@@ -668,7 +714,9 @@ export default function AgentView({
 				break;
 			}
 			case "AGENT_MESSAGE_END": {
-				const id = activeRef.current;
+				// Fall back to the inflight id when the matching START wasn't
+				// seen, so a message we joined mid-stream still gets finalized.
+				const id = activeRef.current ?? adoptInflightId();
 				if (id) {
 					const payload = event.payload as Record<string, unknown> | undefined;
 					const content = payload?.content;
@@ -732,7 +780,9 @@ export default function AgentView({
 					break;
 				}
 				case "AGENT_TURN_COMPLETED": {
-				const id = activeRef.current;
+				// Adopt the inflight id if the START wasn't seen, so the
+				// turn-end also finalizes a message we joined mid-stream.
+				const id = activeRef.current ?? adoptInflightId();
 				const payload = event.payload as Record<string, unknown> | undefined;
 				const reason = String(payload?.reason ?? "");
 				const errorMessage = payload?.error_message
@@ -825,14 +875,33 @@ export default function AgentView({
 				const payload = event.payload as Record<string, unknown>;
 				const toolCallId = payload.tool_call_id as string;
 				const result = payload.result as Array<Record<string, unknown>> | undefined;
+				// Image blocks are rendered as thumbnails (toolImages), never
+				// serialized into the text — a raw base64 dump would flood the card.
 				const resultText = result
-					? result.map((r) => (r.type === "text" ? String(r.text ?? "") : JSON.stringify(r))).join("\n")
+					? result
+							.map((r) =>
+								r.type === "text"
+									? String(r.text ?? "")
+									: r.type === "image"
+										? `[image ${String(r.mime_type ?? r.mimeType ?? "image/png")}]`
+										: "",
+							)
+							.filter(Boolean)
+							.join("\n")
 					: "";
+				const resultImages = result ? result.flatMap((r) => (r.type === "image" ? messageImages({ content: [r] }) : [])) : [];
 				const isError = payload.is_error === true;
 				updateItems((prev) =>
 					prev.map((it) =>
 						it.id === toolCallId && it.role === "tool"
-							? { ...it, status: isError ? "ERROR" : "DONE", streaming: false, toolResult: resultText || it.toolResult, isError }
+							? {
+									...it,
+									status: isError ? "ERROR" : "DONE",
+									streaming: false,
+									toolResult: resultText || it.toolResult,
+									...(resultImages.length > 0 ? { toolImages: resultImages } : {}),
+									isError,
+								}
 							: it,
 					),
 				);
@@ -903,6 +972,29 @@ export default function AgentView({
 			unlisteners.forEach((fn) => fn());
 		};
 	}, [sidecarReady, handleEvent]);
+
+	// Safety net: an inflight placeholder (or a bubble we joined mid-stream)
+	// can outlive its turn if the finalizing events were missed (e.g. the
+	// turn settled between our get_state snapshot and the next event). Once
+	// the sidecar reports idle, drop an empty spinner bubble / finalize one
+	// that already accumulated text.
+	useEffect(() => {
+		if (!state || state.isStreaming) return;
+		setItems((prev) => {
+			let changed = false;
+			const next = prev
+				.map((it) => {
+					if (!it.id.startsWith("inflight-") || !it.streaming) return it;
+					changed = true;
+					return !it.text && !it.thinking ? null : { ...it, status: "DONE", streaming: false };
+				})
+				.filter((it): it is TimelineItem => it !== null);
+			return changed ? next : prev;
+		});
+		if (activeAssistantRef.current?.startsWith("inflight-")) {
+			activeAssistantRef.current = null;
+		}
+	}, [state]);
 
 	// Cancel any pending session-switch reload on unmount.
 	useEffect(() => {

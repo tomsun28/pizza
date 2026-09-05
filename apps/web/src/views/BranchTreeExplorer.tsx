@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { GitBranch, Search, RefreshCw, GitFork, CornerUpRight, Pencil, Copy, LogIn } from "lucide-react";
+import { GitBranch, Search, RefreshCw, GitFork, CornerUpRight, Pencil, Copy, LogIn, MessageSquare } from "lucide-react";
 import {
 	historyTreeList,
 	historyTreeFork,
@@ -24,6 +24,24 @@ function shortId(id: string): string {
 	return id.length > 12 ? id.slice(0, 12) : id;
 }
 
+/**
+ * The label a user actually recognizes: the explicit branch name, else the
+ * sidecar-derived title (cut from the first user message), else the short id.
+ * The session id is a last resort — it means nothing to a human.
+ */
+function nodeLabel(node: RpcHistoryTreeNode, untitled: string): string {
+	return node.name?.trim() || node.title?.trim() || (node.snippet ? untitled : shortId(node.session_id));
+}
+
+/** Secondary line: the first user message, hidden when it duplicates the title. */
+function nodeSubtitle(node: RpcHistoryTreeNode): string | undefined {
+	const snippet = node.snippet?.trim();
+	if (!snippet) return undefined;
+	const title = (node.name?.trim() || node.title?.trim() || "").replace(/…$/, "");
+	if (title && snippet.startsWith(title)) return undefined;
+	return snippet;
+}
+
 function formatTime(ts: number): string {
 	try {
 		return new Date(ts).toLocaleString(undefined, {
@@ -35,6 +53,19 @@ function formatTime(ts: number): string {
 	} catch {
 		return "";
 	}
+}
+
+/** Compact recency label ("5m", "3h", "2d") — falls back to a date past a week. */
+function formatRelative(ts: number): string {
+	const diff = Date.now() - ts;
+	if (diff < 60_000) return "now";
+	const minutes = Math.floor(diff / 60_000);
+	if (minutes < 60) return `${minutes}m`;
+	const hours = Math.floor(minutes / 60);
+	if (hours < 24) return `${hours}h`;
+	const days = Math.floor(hours / 24);
+	if (days < 7) return `${days}d`;
+	return formatTime(ts);
 }
 
 /**
@@ -60,7 +91,9 @@ export default function BranchTreeExplorer({ workspace }: { workspace?: string |
 		try {
 			setError("");
 			const list = await historyTreeList(q ?? (queryRef.current || undefined));
-			setNodes(list);
+			// The tree arrives in depth-first order, oldest first; the history tab
+			// displays newest sessions at the top, so reverse it for display.
+			setNodes([...list].reverse());
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		} finally {
@@ -158,7 +191,8 @@ export default function BranchTreeExplorer({ workspace }: { workspace?: string |
 	const onRename = useCallback(async (node: RpcHistoryTreeNode) => {
 		setMenu(null);
 		setRenameTarget(node);
-		setRenameValue(node.name ?? "");
+		// Prefill with the derived title so renaming is a tweak, not retyping.
+		setRenameValue(node.name?.trim() || node.title?.trim() || "");
 	}, []);
 
 	const submitRename = useCallback(async () => {
@@ -228,7 +262,7 @@ export default function BranchTreeExplorer({ workspace }: { workspace?: string |
 			{/* Breadcrumb */}
 			{activeNode && (
 				<div className="shrink-0 border-t border-border px-3 py-1.5 font-mono text-[10px] text-muted">
-					{t("history.position")}: {activeNode.name || shortId(activeNode.session_id)}
+					{t("history.position")}: {nodeLabel(activeNode, t("history.untitled"))}
 					{activeNode.depth > 0 ? ` · ${t("history.depth")} ${activeNode.depth}` : ` · ${t("history.root")}`}
 				</div>
 			)}
@@ -342,13 +376,17 @@ function TreeRow({
 	onSelect: () => void;
 	onContextMenu: (x: number, y: number) => void;
 }) {
+	const { t } = useTranslation();
 	const indent = node.depth * 14;
+	const label = nodeLabel(node, t("history.untitled"));
+	const subtitle = nodeSubtitle(node);
+	const activityAt = node.last_activity_at ?? node.created_at;
 	return (
 		<li>
 			<div
 				onClick={onSelect}
 				onContextMenu={(e) => { e.preventDefault(); onContextMenu(e.clientX, e.clientY); }}
-				title={node.snippet}
+				title={`${label}\n${node.session_id}\n${formatTime(node.created_at)}${node.snippet ? `\n\n${node.snippet}` : ""}`}
 				className={cn(
 					"group flex cursor-pointer items-start gap-2 px-3 py-1.5 transition-colors",
 					selected ? "bg-accent/10" : "hover:bg-surface-2",
@@ -370,8 +408,14 @@ function TreeRow({
 				</span>
 				<div className="min-w-0 flex-1">
 					<div className="flex items-center gap-2">
-						<span className={cn("truncate", node.is_active ? "font-bold text-accent" : "text-fg")}>
-							{node.name || shortId(node.session_id)}
+						<span
+							className={cn(
+								"truncate",
+								node.is_active ? "font-bold text-accent" : "text-fg",
+								!node.name?.trim() && !node.title?.trim() && "text-muted",
+							)}
+						>
+							{label}
 						</span>
 						{node.is_active && (
 							<span className="shrink-0 rounded bg-accent/15 px-1 text-[9px] uppercase tracking-wide text-accent">
@@ -389,11 +433,23 @@ function TreeRow({
 								{node.child_count}
 							</span>
 						)}
-						<span className="ml-auto shrink-0 text-[10px] text-muted">{formatTime(node.created_at)}</span>
+						<span className="ml-auto shrink-0 text-[10px] text-muted" title={formatTime(activityAt)}>
+							{formatRelative(activityAt)}
+						</span>
 					</div>
-					{node.snippet && (
-						<div className="truncate text-[10px] text-muted">↳ {node.snippet}</div>
-					)}
+					{subtitle && <div className="truncate text-[10px] text-muted">↳ {subtitle}</div>}
+					{/* Meta line: size at a glance; the opaque id only on hover. */}
+					<div className="flex items-center gap-1.5 text-[9px] text-muted/70">
+						{!!node.message_count && (
+							<span className="inline-flex items-center gap-0.5">
+								<MessageSquare className="h-2.5 w-2.5" />
+								{node.message_count}
+							</span>
+						)}
+						<span className="truncate opacity-0 transition-opacity group-hover:opacity-70">
+							{shortId(node.session_id)}
+						</span>
+					</div>
 				</div>
 			</div>
 		</li>

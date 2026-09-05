@@ -547,6 +547,53 @@ export class SessionManager {
 	}
 
 	/**
+	 * Adopt a CALLER-SUPPLIED thread id — the multi-tenant entry point.
+	 *
+	 * SDK embedders map their own tenant/user identity onto `threadId` (e.g.
+	 * "user-1024"). Threads are the isolation unit: events are tagged with
+	 * thread_id and `SessionProjection.buildContext()` filters by it, so two
+	 * ids never see each other's history while sharing one event log.
+	 *
+	 * Idempotent by construction — the whole point is that a returning user
+	 * passes the same id and lands back in their own conversation:
+	 *   - unknown id  → create the thread record with that exact id + a session
+	 *   - known id    → activate its open (HEAD) session, else start a new one
+	 *
+	 * Unlike createThread() this never invents an id, so the mapping stays
+	 * owned by the caller and survives restarts with no side table.
+	 */
+	useThread(threadId: string, name?: string): ThreadDescriptor {
+		const existing = this.threads.get(threadId);
+		if (!existing) {
+			const thread = this._createThreadRecord(name, "active", threadId);
+			this.createSession("user_explicit", name, { threadId: thread.thread_id, closeActive: false });
+			this._persistIndex();
+			return thread;
+		}
+
+		// Reuse the thread's open session so a reconnecting user continues the
+		// same conversation instead of fragmenting it into a new branch.
+		let open: SessionDescriptor | undefined;
+		for (const session of this.sessions.values()) {
+			if (session.thread_id !== threadId) continue;
+			if (session.event_range.end_event_id !== "HEAD") continue;
+			if (!open || session.created_at > open.created_at) open = session;
+		}
+		if (open) {
+			// closeActive: never — closing another tenant's live session because
+			// this one connected would corrupt their range.
+			this.activeSessionId = open.session_id;
+			this.activeThreadId = open.thread_id;
+			this._promoteThreadToActive(open.thread_id);
+			this._persistIndex();
+		} else {
+			this.createSession("user_explicit", name, { threadId, closeActive: false });
+			this._persistIndex();
+		}
+		return existing;
+	}
+
+	/**
 	 * Dispose the session manager. Closes any read-only source stores opened
 	 * for zero-copy cross-workspace forks.
 	 */
@@ -750,10 +797,10 @@ export class SessionManager {
 		return `sess_${timestamp}_${cryptoRandomSuffix()}`;
 	}
 
-	/** Create a thread record (no session). Used by createThread and createSession auto-thread fallback. The status defaults to active; pass background for scheduler threads. */
-	private _createThreadRecord(name?: string, status: ThreadDescriptor["status"] = "active"): ThreadDescriptor {
+	/** Create a thread record (no session). Used by createThread and createSession auto-thread fallback. The status defaults to active; pass background for scheduler threads. `explicitId` adopts a caller-supplied id verbatim (useThread / SDK multi-tenancy) instead of generating one. */
+	private _createThreadRecord(name?: string, status: ThreadDescriptor["status"] = "active", explicitId?: string): ThreadDescriptor {
 		const thread: ThreadDescriptor = {
-			thread_id: this._generateThreadId(),
+			thread_id: explicitId ?? this._generateThreadId(),
 			workspace_id: this.store.workspace_id,
 			name,
 			created_at: Date.now(),

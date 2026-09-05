@@ -27,6 +27,8 @@ export interface StoreSetupOptions {
 	workspaceId?: string;
 	storagePath?: string;
 	sessionId?: string;
+	/** Caller-supplied thread id (multi-tenant isolation). Wins over sessionId. */
+	threadId?: string;
 	forkFrom?: ForkSource;
 }
 
@@ -82,6 +84,11 @@ export function setupEventStore(options: StoreSetupOptions): StoreSetupResult {
 	);
 	if (options.forkFrom) {
 		prepareForkedSession({ store, sessionManager, agentDir, source: options.forkFrom });
+	} else if (options.threadId) {
+		// Multi-tenant: bind this facade to the caller's thread. Checked before
+		// sessionId because the thread is the isolation boundary — activating a
+		// session from another thread would defeat it.
+		sessionManager.useThread(options.threadId);
 	} else if (options.sessionId) {
 		sessionManager.switchTo(options.sessionId);
 	}

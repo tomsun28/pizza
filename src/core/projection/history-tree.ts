@@ -28,8 +28,20 @@ export interface HistoryTreeNodeInfo {
 	closed: boolean;
 	/** Whether an internal continuation is currently active for this node. */
 	has_active_continuation?: boolean;
+	/**
+	 * Human-meaningful label for the session, always present when a store is
+	 * provided: the user/agent-given `name`, else a title derived from the first
+	 * user message. UIs should render this instead of the opaque session id.
+	 */
+	title?: string;
+	/** Whether `title` was derived from content rather than an explicit name. */
+	title_is_derived?: boolean;
 	/** First user message in the session (truncated), for orientation/search. */
 	snippet?: string;
+	/** Number of user messages in the session (conversation size at a glance). */
+	message_count?: number;
+	/** Timestamp of the last event in the session (recency ordering in UIs). */
+	last_activity_at?: number;
 	/**
 	 * Event id this branch was forked at (from the SESSION_FORKED event whose
 	 * new_session_id matches this session). Present for forked sessions when a
@@ -50,7 +62,14 @@ export function buildHistoryTreeNodes(
 	sessions: SessionDescriptor[],
 	activeSessionId: string | undefined,
 	store?: EventStore,
+	/**
+	 * Restrict the tree to one thread. REQUIRED in multi-tenant (SDK threadId)
+	 * deployments — without it the tree exposes every tenant's session titles
+	 * and snippets. Omit only for single-user local use.
+	 */
+	threadId?: string,
 ): HistoryTreeNodeInfo[] {
+	if (threadId) sessions = sessions.filter((s) => s.thread_id === threadId);
 	const byId = new Map(sessions.map((s) => [s.session_id, s]));
 	const activeSession = activeSessionId ? byId.get(activeSessionId) : undefined;
 	const activeVisibleSessionId = activeSession?.context_parent_session_id ?? activeSessionId;
@@ -88,6 +107,7 @@ export function buildHistoryTreeNodes(
 	const nodes: HistoryTreeNodeInfo[] = [];
 	const visit = (session: SessionDescriptor, depth: number): void => {
 		const childList = children.get(session.session_id) ?? [];
+		const stats = store ? summarizeSession(store, session) : undefined;
 		nodes.push({
 			session_id: session.session_id,
 			thread_id: session.thread_id,
@@ -100,7 +120,11 @@ export function buildHistoryTreeNodes(
 			is_active: session.session_id === activeVisibleSessionId,
 			closed: session.event_range.end_event_id !== "HEAD",
 			has_active_continuation: activeSession?.context_parent_session_id === session.session_id,
-			snippet: store ? findFirstUserMessage(store, session) : undefined,
+			title: deriveTitle(session, stats?.snippet),
+			title_is_derived: !session.name?.trim(),
+			snippet: stats?.snippet,
+			message_count: stats?.message_count,
+			last_activity_at: stats?.last_activity_at,
 			fork_at_event_id: forkPoints.get(session.session_id),
 		});
 		for (const child of childList) visit(child, depth + 1);
@@ -119,11 +143,13 @@ export function renderHistoryTreeText(nodes: HistoryTreeNodeInfo[]): string {
 		const status = node.is_active ? " [active]" : node.closed ? "" : " [open]";
 		const date = new Date(node.created_at).toISOString().replace("T", " ").slice(0, 16);
 		// Title first, session id second: the title is the split name, falling back
-		// to the first user message snippet, so unnamed sessions stay identifiable.
-		const title = node.name ?? node.snippet;
+		// to a title derived from the first user message, so unnamed sessions stay
+		// identifiable. The snippet is appended only when it adds information.
+		const title = node.title ?? node.name;
 		if (title) {
-			const snippet = node.name && node.snippet ? ` — ${node.snippet}` : "";
-			return `${indent}${marker} ${title} · ${node.session_id} (${date})${status}${snippet}`;
+			const snippet = node.snippet && !node.snippet.startsWith(title.replace(/…$/, "")) ? ` — ${node.snippet}` : "";
+			const count = node.message_count ? ` ${node.message_count}msg` : "";
+			return `${indent}${marker} ${title} · ${node.session_id} (${date})${status}${count}${snippet}`;
 		}
 		return `${indent}${marker} ${node.session_id} (${date})${status}`;
 	});
@@ -180,29 +206,83 @@ export function buildSessionBreadcrumb(
 // Helpers
 // ============================================================================
 
-function findFirstUserMessage(store: EventStore, session: SessionDescriptor): string | undefined {
+/** Aggregate stats used to label a session in tools/UIs. */
+interface SessionStats {
+	snippet?: string;
+	message_count: number;
+	last_activity_at?: number;
+}
+
+/**
+ * Derive the display label for a session:
+ * explicit name → short title cut from the first user message → undefined
+ * (callers fall back to a shortened session id).
+ */
+function deriveTitle(session: SessionDescriptor, snippet?: string): string | undefined {
+	const name = session.name?.trim();
+	if (name) return name;
+	return snippet ? titleFromText(snippet) : undefined;
+}
+
+/** Cut a compact title (<= 48 chars) out of a message body. */
+function titleFromText(text: string): string | undefined {
+	const flat = text.replace(/```[\s\S]*?```/g, " ").replace(/\s+/g, " ").trim();
+	if (!flat) return undefined;
+	// Prefer the first sentence/clause; fall back to a hard cut on word boundary.
+	const firstClause = flat.split(/(?<=[.!?。！？])\s|[\n\r]|(?<=[，,;；])\s?/)[0]?.trim() || flat;
+	const candidate = (firstClause.length >= 8 ? firstClause : flat).replace(/[\s,，.。;；:：!！?？]+$/, "");
+	if (candidate.length <= TITLE_MAX) return candidate;
+	const cut = candidate.slice(0, TITLE_MAX);
+	const lastSpace = cut.lastIndexOf(" ");
+	return `${(lastSpace > TITLE_MAX * 0.6 ? cut.slice(0, lastSpace) : cut).trimEnd()}…`;
+}
+
+const TITLE_MAX = 48;
+const SNIPPET_MAX = 100;
+
+/**
+ * Collect the labelling stats for one session in a single pass:
+ * first user message (snippet), user-message count, last activity timestamp.
+ */
+function summarizeSession(store: EventStore, session: SessionDescriptor): SessionStats {
 	const { start_event_id, end_event_id } = session.event_range;
-	const events = store.query({
+	// No thread_id filter: legacy/runtime events may carry no thread_id and a
+	// strict filter would drop them. Mismatches are skipped per event instead.
+	const range = {
 		after: start_event_id === "ORIGIN" ? undefined : start_event_id,
 		before: end_event_id === "HEAD" ? undefined : end_event_id,
-		types: ["USER_MESSAGE"],
-		limit: 20,
-	});
-	for (const event of events) {
+	};
+
+	const userEvents = store.query({ ...range, types: ["USER_MESSAGE"], limit: MAX_SCANNED_MESSAGES });
+	let snippet: string | undefined;
+	let message_count = 0;
+	for (const event of userEvents) {
 		if (event.thread_id && event.thread_id !== session.thread_id) continue;
-		const payload = event.payload as { content?: string | unknown[] };
-		const text =
-			typeof payload.content === "string"
-				? payload.content
-				: Array.isArray(payload.content)
-					? payload.content
-							.map((block) =>
-								block && typeof block === "object" && "text" in block ? String((block as { text: unknown }).text) : "",
-							)
-							.join(" ")
-					: "";
-		const trimmed = text.replace(/\s+/g, " ").trim();
-		if (trimmed) return trimmed.length > 80 ? `${trimmed.slice(0, 80)}...` : trimmed;
+		message_count++;
+		if (snippet) continue;
+		const text = extractText(event.payload);
+		if (text) snippet = text.length > SNIPPET_MAX ? `${text.slice(0, SNIPPET_MAX)}...` : text;
 	}
-	return undefined;
+
+	const tail = store.query({ ...range, limit: 10, reverse: true });
+	const latest = tail.find((event) => !event.thread_id || event.thread_id === session.thread_id);
+	return { snippet, message_count, last_activity_at: latest?.timestamp };
+}
+
+const MAX_SCANNED_MESSAGES = 200;
+
+/** Flatten a USER_MESSAGE payload (string or content blocks) into plain text. */
+function extractText(payload: unknown): string {
+	const content = (payload as { content?: string | unknown[] } | undefined)?.content;
+	const text =
+		typeof content === "string"
+			? content
+			: Array.isArray(content)
+				? content
+						.map((block) =>
+							block && typeof block === "object" && "text" in block ? String((block as { text: unknown }).text) : "",
+						)
+						.join(" ")
+				: "";
+	return text.replace(/\s+/g, " ").trim();
 }

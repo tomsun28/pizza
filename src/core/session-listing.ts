@@ -80,12 +80,21 @@ function buildSessionInfo(
 	const allMessages: string[] = [];
 	let lastActivity = descriptor.created_at;
 
-	// Query context-relevant events for this session's range
+	// Query context-relevant events for this session's range. Both bounds and
+	// the thread guard are required: without them every session in the
+	// workspace reported the SAME aggregate (whole-log counts and first
+	// message), and in multi-tenant (SDK threadId) use one tenant's listing
+	// would surface another tenant's message text.
+	const { start_event_id, end_event_id } = descriptor.event_range;
 	const events = store.query({
+		after: start_event_id === "ORIGIN" ? undefined : start_event_id,
+		before: end_event_id === "HEAD" ? undefined : end_event_id,
 		types: ["USER_MESSAGE", "AGENT_MESSAGE_END"],
 	});
 
 	for (const event of events) {
+		// Legacy/runtime events may carry no thread_id; only skip real mismatches.
+		if (event.thread_id && event.thread_id !== descriptor.thread_id) continue;
 		if (event.timestamp > 0) {
 			lastActivity = Math.max(lastActivity, event.timestamp);
 		}
@@ -133,6 +142,13 @@ export async function listWorkspaceSessions(
 	cwd: string,
 	agentDir: string = getAgentDir(),
 	onProgress?: SessionListProgress,
+	/**
+	 * Restrict the listing to one thread. REQUIRED in multi-tenant (SDK
+	 * threadId) deployments — omitting it lists every tenant's sessions in the
+	 * workspace. Omit only for single-user local use, where seeing all threads
+	 * is the desired behaviour.
+	 */
+	threadId?: string,
 ): Promise<SessionListInfo[]> {
 	const workspaceId = deriveWorkspaceId(cwd);
 	const dbPath = getEventDatabasePath(workspaceId, agentDir);
@@ -146,10 +162,11 @@ export async function listWorkspaceSessions(
 		const workspaceCwd = readWorkspaceCwd(workspaceId, agentDir) ?? cwd;
 		const results: SessionListInfo[] = [];
 
-		for (let i = 0; i < index.sessions.length; i++) {
-			const desc = index.sessions[i]!;
+		const sessions = threadId ? index.sessions.filter((s) => s.thread_id === threadId) : index.sessions;
+		for (let i = 0; i < sessions.length; i++) {
+			const desc = sessions[i]!;
 			results.push(buildSessionInfo(desc, workspaceId, workspaceCwd, store));
-			onProgress?.(i + 1, index.sessions.length);
+			onProgress?.(i + 1, sessions.length);
 		}
 
 		results.sort((a, b) => b.modified.getTime() - a.modified.getTime());

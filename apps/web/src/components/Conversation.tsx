@@ -31,6 +31,8 @@ export interface TimelineItem {
 	toolName?: string;
 	toolArgs?: string;
 	toolResult?: string;
+	/** Images returned by the tool (data URLs), rendered as thumbnails. */
+	toolImages?: string[];
 	isError?: boolean;
 	/** Attached images as data URLs (for user messages). */
 	images?: string[];
@@ -52,21 +54,78 @@ export interface TimelineItem {
 	timestamp?: number;
 }
 
-/** Format a Unix ms timestamp as HH:mm (24h). Returns "" if invalid. */
+/** True if two Unix ms timestamps fall on the same calendar day (local time). */
+function isSameDay(a: number, b: number): boolean {
+	const da = new Date(a);
+	const db = new Date(b);
+	return (
+		da.getFullYear() === db.getFullYear() &&
+		da.getMonth() === db.getMonth() &&
+		da.getDate() === db.getDate()
+	);
+}
+
+/**
+ * Format a Unix ms timestamp for message timestamps.
+ * Today: HH:mm; other days: MM-DD HH:mm (with year if a different year).
+ * Returns "" if invalid.
+ */
 function formatMessageTime(ts?: number): string {
 	if (!ts || !Number.isFinite(ts)) return "";
 	try {
-		return new Date(ts).toLocaleTimeString(undefined, {
+		const d = new Date(ts);
+		const time = d.toLocaleTimeString(undefined, {
 			hour: "2-digit",
 			minute: "2-digit",
 			hour12: false,
 		});
+		if (isSameDay(ts, Date.now())) return time;
+		const sameYear = d.getFullYear() === new Date().getFullYear();
+		const date = d.toLocaleDateString(undefined, {
+			year: sameYear ? undefined : "numeric",
+			month: "2-digit",
+			day: "2-digit",
+		});
+		return `${date} ${time}`;
 	} catch {
 		return "";
 	}
 }
 
 const COLLAPSE_LINES = 5;
+
+/** Rendering caps for tool output/args: protect the DOM from huge payloads
+ * (base64 images, minified JSON) that can arrive as a single enormous line. */
+const MAX_PREVIEW_LINE_CHARS = 240;
+const MAX_PREVIEW_TOTAL_CHARS = 1500;
+const MAX_EXPANDED_LINE_CHARS = 4000;
+
+/** Clamp text for display: cap the number of lines in the collapsed preview
+ * and the length of every line in either state. Returns the text to render
+ * plus whether anything was cut (a "show more" affordance is then shown). */
+function clampForDisplay(text: string, expanded: boolean): { shown: string; clamped: boolean } {
+	const lines = text.split("\n");
+	const lineCap = expanded ? MAX_EXPANDED_LINE_CHARS : MAX_PREVIEW_LINE_CHARS;
+	const maxLines = expanded ? lines.length : COLLAPSE_LINES;
+	const out: string[] = [];
+	let total = 0;
+	let clamped = false;
+	for (let i = 0; i < lines.length && i < maxLines; i++) {
+		let line = lines[i]!;
+		if (lineCap < line.length) {
+			line = `${line.slice(0, lineCap)} …[+${line.length - lineCap} chars]`;
+			clamped = true;
+		}
+		if (!expanded && MAX_PREVIEW_TOTAL_CHARS < total + line.length) {
+			clamped = true;
+			break;
+		}
+		out.push(line);
+		total += line.length;
+	}
+	if (out.length < lines.length) clamped = true;
+	return { shown: out.join("\n"), clamped };
+}
 
 function useCopy(): [boolean, (text: string) => void] {
 	const [copied, setCopied] = useState(false);
@@ -90,9 +149,7 @@ function useCopy(): [boolean, (text: string) => void] {
 function CollapsibleCode({ text, isError, highlight, highlightActive }: { text: string; isError?: boolean; highlight?: string; highlightActive?: boolean }) {
 	const { t } = useTranslation();
 	const [expanded, setExpanded] = useState(false);
-	const lines = text.split("\n");
-	const long = lines.length > COLLAPSE_LINES;
-	const shown = long && !expanded ? lines.slice(0, COLLAPSE_LINES).join("\n") : text;
+	const { shown, clamped } = clampForDisplay(text, expanded);
 	return (
 		<div className="relative">
 			<pre
@@ -102,15 +159,15 @@ function CollapsibleCode({ text, isError, highlight, highlightActive }: { text: 
 				)}
 			>
 				{highlight ? highlightText(shown, highlight, highlightActive) : shown}
-				{long && !expanded && <span className="text-muted/60">{"\n…"}</span>}
+				{clamped && !expanded && <span className="text-muted/60">{"\n…"}</span>}
 			</pre>
-			{long && (
+			{clamped && (
 				<button
 					type="button"
 					onClick={() => setExpanded((e) => !e)}
 					className="mt-1 font-mono text-[10px] uppercase tracking-widest text-accent hover:opacity-80"
 				>
-					{expanded ? t("conversation.showLess") : t("conversation.showMoreLines", { count: lines.length - COLLAPSE_LINES })}
+					{expanded ? t("conversation.showLess") : t("conversation.showMore")}
 				</button>
 			)}
 		</div>
@@ -228,6 +285,38 @@ function ApprovalSection({
 	);
 }
 
+/** Thumbnail for an image returned by a tool. Click to open full size. */
+function ToolImage({ src, index, count }: { src: string; index: number; count: number }) {
+	const [zoom, setZoom] = useState(false);
+	return (
+		<>
+			<button
+				type="button"
+				onClick={() => setZoom(true)}
+				className="group relative overflow-hidden rounded-md border border-border"
+				title="🔍"
+			>
+				<img src={src} alt={`tool image ${index + 1}/${count}`} className="max-h-40 object-contain transition-transform group-hover:scale-[1.02]" />
+			</button>
+			{zoom && (
+				<div
+					className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-8"
+					onClick={() => setZoom(false)}
+				>
+					<img src={src} alt={`tool image ${index + 1}/${count}`} className="max-h-full max-w-full rounded-md object-contain" />
+					<button
+						type="button"
+						className="absolute right-4 top-4 rounded-full bg-white/10 px-3 py-1.5 font-mono text-xs text-white hover:bg-white/20"
+						onClick={() => setZoom(false)}
+					>
+						✕
+					</button>
+				</div>
+			)}
+		</>
+	);
+}
+
 const ToolCard = memo(function ToolCard({
 	item,
 	onResolveApproval,
@@ -240,7 +329,9 @@ const ToolCard = memo(function ToolCard({
 	highlightActive?: boolean;
 }) {
 	const { t } = useTranslation();
+	const [argsExpanded, setArgsExpanded] = useState(false);
 	const command = formatToolArgs(item.toolArgs);
+	const { shown: commandShown, clamped: commandClamped } = clampForDisplay(command, argsExpanded);
 	const running = item.streaming && !item.toolResult;
 	const approval = item.pendingApproval;
 	const awaitingApproval = approval?.status === "pending";
@@ -278,7 +369,16 @@ const ToolCard = memo(function ToolCard({
 					{command && (
 						<div className="rounded-md bg-bg/60 px-3 py-2 font-mono text-xs leading-relaxed text-fg">
 							<span className="mr-1.5 select-none text-accent">$</span>
-							<span className="whitespace-pre-wrap break-words">{highlight ? highlightText(command, highlight, highlightActive) : command}</span>
+							<span className="whitespace-pre-wrap break-words">{highlight ? highlightText(commandShown, highlight, highlightActive) : commandShown}</span>
+							{commandClamped && (
+								<button
+									type="button"
+									onClick={() => setArgsExpanded((e) => !e)}
+									className="mt-1 block font-mono text-[10px] uppercase tracking-widest text-accent hover:opacity-80"
+								>
+									{argsExpanded ? t("conversation.showLess") : t("conversation.showMore")}
+								</button>
+							)}
 						</div>
 					)}
 					{approval && (
@@ -290,6 +390,13 @@ const ToolCard = memo(function ToolCard({
 									: undefined
 							}
 						/>
+					)}
+					{item.toolImages && item.toolImages.length > 0 && (
+						<div className="flex flex-wrap gap-2">
+							{item.toolImages.map((src, i) => (
+								<ToolImage key={i} src={src} index={i} count={item.toolImages!.length} />
+							))}
+						</div>
 					)}
 					{item.toolResult && <CollapsibleCode text={item.toolResult} isError={item.isError} highlight={highlight} highlightActive={highlightActive} />}
 					{running && !item.toolResult && (

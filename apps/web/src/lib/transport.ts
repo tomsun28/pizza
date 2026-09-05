@@ -315,6 +315,37 @@ export async function setSafeMode(enabled: boolean): Promise<boolean> {
 	const r = await sendCommandAwait<{ safeMode: boolean }>({ type: "set_safe_mode", enabled }, 5000);
 	return r.data?.safeMode ?? enabled;
 }
+
+export type ApprovalPolicy = "auto" | "on" | "off";
+
+export interface ApprovalGates {
+	writes?: boolean;
+	edits?: boolean;
+	shellModerate?: boolean;
+	unknown?: boolean;
+}
+
+/** Set the session approval policy: "off" auto-runs everything, "auto" defers
+ * to per-category gates, "on" gates every risky call. */
+export async function setApprovalPolicy(policy: ApprovalPolicy): Promise<ApprovalPolicy> {
+	const r = await sendCommandAwait<{ approvalPolicy: ApprovalPolicy }>({ type: "set_approval_policy", policy }, 5000);
+	return r.data?.approvalPolicy ?? policy;
+}
+
+export async function getApprovalPolicy(): Promise<ApprovalPolicy> {
+	const r = await sendCommandAwait<{ approvalPolicy: ApprovalPolicy }>({ type: "get_approval_policy" }, 5000);
+	return r.data?.approvalPolicy ?? "auto";
+}
+
+export async function getApprovalGates(): Promise<ApprovalGates> {
+	const r = await sendCommandAwait<{ gates: ApprovalGates }>({ type: "get_approval_gates" }, 5000);
+	return r.data?.gates ?? {};
+}
+
+export async function setApprovalGates(gates: ApprovalGates): Promise<ApprovalGates> {
+	const r = await sendCommandAwait<{ gates: ApprovalGates }>({ type: "set_approval_gates", gates }, 5000);
+	return r.data?.gates ?? gates;
+}
 export interface SkillInfo {
 	command: string;
 	name: string;
@@ -376,6 +407,8 @@ export interface ExtensionInfo {
 	path: string;
 	toolCount: number;
 	commandCount: number;
+	/** Dynamic built-in cli commands registered by this extension (e.g. `_computer_use`). */
+	builtinCommandCount: number;
 }
 
 /** List all extensions (built-in + user-installed), including disabled built-ins. */

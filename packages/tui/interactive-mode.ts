@@ -530,6 +530,7 @@ export class InteractiveMode {
     options: { summarize?: boolean; customInstructions?: string } = {},
   ): Promise<{ cancelled?: boolean; aborted?: boolean; editorText?: string }> {
     // Fork at the target event
+    await this.waitForTurnIdleBeforeSessionChange();
     this.facade.runtime.fork(targetId);
     return {};
   }
@@ -1814,6 +1815,7 @@ export class InteractiveMode {
         },
         fork: async (entryId: string, options: any) => {
           try {
+            await this.waitForTurnIdleBeforeSessionChange();
             const result = (await this.facade!.runtime.fork(entryId)) as any;
             if (result && !result.cancelled) {
               this.renderCurrentSessionState();
@@ -1829,6 +1831,7 @@ export class InteractiveMode {
           }
         },
         navigateTree: async (targetId: string, _options: any) => {
+          await this.waitForTurnIdleBeforeSessionChange();
           this.facade!.runtime.fork(targetId);
           this.chatContainer.clear();
           this.renderInitialMessages();
@@ -4554,6 +4557,7 @@ export class InteractiveMode {
         userMessages.map((m) => ({ id: m.entryId, text: m.text })),
         async (entryId) => {
           try {
+            await this.waitForTurnIdleBeforeSessionChange();
             this.facade.runtime.fork(entryId);
             this.renderCurrentSessionState();
             this.editor.setText("");
@@ -4723,6 +4727,20 @@ export class InteractiveMode {
     });
   }
 
+  /**
+   * Session-structure actions (fork / rewind / navigate / resume) place their
+   * boundary at the store head. While a turn is streaming, the head sits
+   * inside the streaming answer and the boundary would steal the rest of the
+   * answer from the session where the user asked (attribution bug). Wait for
+   * the prompt cycle to settle first; surface a status so the wait is visible.
+   */
+  private async waitForTurnIdleBeforeSessionChange(): Promise<void> {
+    if (this.facade?.isRunning) {
+      this.showStatus("Finishing current turn before switching session...");
+      await this.facade.waitForIdle();
+    }
+  }
+
   private async handleResumeSession(
     sessionPath: string,
     options?: Parameters<ExtensionCommandContext["switchSession"]>[1],
@@ -4733,6 +4751,7 @@ export class InteractiveMode {
     }
     this.statusContainer.clear();
     try {
+      await this.waitForTurnIdleBeforeSessionChange();
       this.facade.runtime.switchSession(sessionPath);
       this.renderCurrentSessionState();
       this.showStatus("Resumed session");
@@ -4744,6 +4763,7 @@ export class InteractiveMode {
           this.showStatus("Resume cancelled");
           return { cancelled: true };
         }
+        await this.waitForTurnIdleBeforeSessionChange();
         this.facade.runtime.switchSession(sessionPath);
         this.renderCurrentSessionState();
         this.showStatus("Resumed session in current cwd");

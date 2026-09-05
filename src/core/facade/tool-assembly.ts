@@ -81,7 +81,20 @@ export class ToolAssembly {
 
 		for (const name of this.deps.requestedToolNames) {
 			if (!isBuiltInToolName(name) || !this._include(name)) continue;
-			const definition = createToolDefinition(name, this.deps.cwd, this.deps.toolOptions);
+			// The cli tool additionally routes extension-registered dynamic built-in
+			// commands (e.g. computer-use's _computer_use); wire the lazy provider
+			// here so the tool sees commands from every loaded extension.
+			const toolOptions =
+				name === "cli"
+					? {
+							...this.deps.toolOptions,
+							cli: {
+								...this.deps.toolOptions?.cli,
+								dynamicBuiltins: () => this.deps.extensionRunner.getAllRegisteredBuiltinCommands(),
+							},
+						}
+					: this.deps.toolOptions;
+			const definition = createToolDefinition(name, this.deps.cwd, toolOptions);
 			definitions.set(definition.name, definition);
 			sources.set(definition.name, createSyntheticSourceInfo(`<builtin:${definition.name}>`, { source: "builtin" }));
 		}

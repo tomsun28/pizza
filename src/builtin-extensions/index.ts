@@ -19,6 +19,13 @@ import {
 	runAgentBrowserInstall,
 	runAgentBrowserUninstall,
 } from "./agent-browser/index.js";
+import {
+	COMPUTER_USE_EXTENSION_ID,
+	checkComputerUseInstalled,
+	createComputerUseExtension,
+	runComputerUseInstall,
+	runComputerUseUninstall,
+} from "./computer-use/index.js";
 
 /** Result of an install/uninstall lifecycle action. */
 export interface ExtensionLifecycleResult {
@@ -65,6 +72,16 @@ export const BUILTIN_EXTENSIONS: readonly BuiltinExtension[] = [
 		checkInstalled: (cwd) => checkBrowserAvailable(cwd),
 		install: (cwd) => runAgentBrowserInstall(cwd),
 		uninstall: (cwd) => runAgentBrowserUninstall(cwd),
+	},
+	{
+		id: COMPUTER_USE_EXTENSION_ID,
+		name: "computer-use",
+		description: "Desktop app automation via structured UI observation (vendored pi-computer-use backend).",
+		factory: createComputerUseExtension,
+		installable: true,
+		checkInstalled: (cwd) => checkComputerUseInstalled(cwd),
+		install: (cwd) => runComputerUseInstall(cwd),
+		uninstall: (cwd) => runComputerUseUninstall(cwd),
 	},
 ];
 

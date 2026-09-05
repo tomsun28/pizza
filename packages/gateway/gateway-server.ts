@@ -127,7 +127,7 @@ export interface GatewayServerOptions {
 	 * `pizza --mode rpc` process via {@link RpcClient}. Inject a fake for tests
 	 * (or a non-spawn owner) — it is memoized per cwd by the pool.
 	 */
-	createAgent?: (cwd: string) => AgentConnection;
+	createAgent?: (cwd: string, opts: { interactive: boolean }) => AgentConnection;
 	/**
 	 * Scheduler-guard interval (ms): every tick the gateway scans all scheduler
 	 * scopes on disk, spawns an agent for any cwd with runnable scheduled tasks
@@ -155,6 +155,13 @@ interface PoolEntry {
 		resolve: () => void;
 		reject: (error: Error) => void;
 	}>;
+	/**
+	 * Spawned headless (PIZZA_HEADLESS=1): no approval handler installed.
+	 * Tell/scheduler spawns are headless; desktop channel spawns are not.
+	 * Used by ensureInteractiveAgent to replace a headless resident with an
+	 * interactive one when a desktop window attaches.
+	 */
+	headless: boolean;
 	/** Idle-eviction timer handle. */
 	idleTimer?: NodeJS.Timeout;
 }
@@ -292,11 +299,16 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 
 	// ── agent pool management ─────────────────────────────────────────────
 
-	function makeEnv(): Record<string, string> {
-		// PIZZA_HEADLESS: gateway sub-agents have no human attached — the rpc
-		// facade must not install a waiting approval handler (gated tool calls
-		// auto-reject with guidance instead of hanging the turn forever).
-		return { PIZZA_AGENT_DIR: agentDir, PIZZA_HEADLESS: "1" };
+	function makeEnv(interactive: boolean): Record<string, string> {
+		// PIZZA_HEADLESS is for agents with NO human attached (tell-routed
+		// sub-agents, scheduler/cron spawns): their gated tool calls
+		// auto-reject with guidance instead of hanging the turn forever.
+		// Desktop channel spawns (attach / channel rpc) DO have a human — the
+		// web UI resolves approvals via the channel's approve/reject commands —
+		// so those agents must install the waiting approval handler instead.
+		// Passing PIZZA_HEADLESS here blanket was a bug: the desktop user's own
+		// main-agent conversation auto-rejected every gated tool call.
+		return interactive ? { PIZZA_AGENT_DIR: agentDir } : { PIZZA_AGENT_DIR: agentDir, PIZZA_HEADLESS: "1" };
 	}
 
 	/** In-flight spawns keyed by cwd — dedupes concurrent getOrCreateAgent
@@ -309,31 +321,50 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 	const spawning = new Map<string, Promise<PoolEntry>>();
 
 	/** Find or spawn the RpcClient for `cwd`. */
-	async function getOrCreateAgent(cwd: string): Promise<PoolEntry> {
+	async function getOrCreateAgent(cwd: string, opts?: { interactive?: boolean }): Promise<PoolEntry> {
 		const existing = pool.get(cwd);
 		if (existing) return existing;
 		const inFlight = spawning.get(cwd);
 		if (inFlight) return inFlight;
-		const spawnPromise = spawnAgent(cwd).finally(() => {
+		const spawnPromise = spawnAgent(cwd, opts).finally(() => {
 			spawning.delete(cwd);
 		});
 		spawning.set(cwd, spawnPromise);
 		return spawnPromise;
 	}
 
+	/**
+	 * Get an agent a desktop channel can talk to: the human on the other end
+	 * can answer approval dialogs, so the agent must NOT be headless. If the
+	 * resident agent was spawned headless (a tell or scheduler task touched
+	 * this workspace before any window opened), replace it — but only when it
+	 * is idle, never mid-turn. Agents are stateless shells over the
+	 * event-sourced store, so a respawn loses nothing but warm caches;
+	 * subscribers are preserved by teardownAgent and re-attached by the fresh
+	 * entry's forwarder.
+	 */
+	async function ensureInteractiveAgent(cwd: string): Promise<PoolEntry> {
+		const existing = pool.get(cwd);
+		if (existing?.headless && !existing.busy && existing.queue.length === 0) {
+			await teardownAgent(cwd, "respawn for interactive channel");
+		}
+		return getOrCreateAgent(cwd, { interactive: true });
+	}
+
 	/** Actually spawn the agent process and register the pool entry. */
-	async function spawnAgent(cwd: string): Promise<PoolEntry> {
+	async function spawnAgent(cwd: string, opts?: { interactive?: boolean }): Promise<PoolEntry> {
 		if (shuttingDown) throw new Error("gateway is shutting down");
 		// If this cwd is the main agent directory, spawn the sub-agent with
 		// --main so it loads SOUL.md, long-term memory, and the main agent
 		// system prompt (and acquires the main lock instead of the workspace
 		// lock). The gateway itself does NOT hold the main lock — only the
 		// per-workspace agent does.
+		const interactive = opts?.interactive === true;
 		const isMainAgent = mainDir !== undefined && cwd === mainDir;
 		const extraArgs = isMainAgent ? ["--main"] : undefined;
 		const client = options.createAgent
-			? options.createAgent(cwd)
-			: new RpcClient({ cwd, cliPath, binary, env: makeEnv(), args: extraArgs });
+			? options.createAgent(cwd, { interactive })
+			: new RpcClient({ cwd, cliPath, binary, env: makeEnv(interactive), args: extraArgs });
 		await client.start();
 		// stop() may have run while start() was in flight — it tears down the
 		// POOL, so an entry registered after that point would leak a live agent
@@ -348,6 +379,7 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 			lastActivity: Date.now(),
 			busy: false,
 			queue: [],
+			headless: !interactive,
 		};
 		pool.set(cwd, entry);
 		scheduleIdleEviction(entry);
@@ -670,7 +702,9 @@ function nextMessageId(): string {
 					return;
 				}
 				try {
-					const entry = await getOrCreateAgent(cwd);
+					// A desktop window is attaching: the human behind it can
+					// answer approval dialogs — the agent must be interactive.
+					const entry = await ensureInteractiveAgent(cwd);
 					ensureForwarder(cwd, entry);
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
@@ -710,7 +744,9 @@ function nextMessageId(): string {
 				// errors below).
 				let entry: PoolEntry;
 				try {
-					entry = await getOrCreateAgent(cwd);
+					// Channel rpc comes from a desktop window (or another
+					// human-facing client): approvals must be answerable.
+					entry = await ensureInteractiveAgent(cwd);
 				} catch (error) {
 					const frameId = (request.frame as { id?: string })?.id;
 					write({

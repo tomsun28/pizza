@@ -1113,6 +1113,16 @@ export interface ExtensionAPI {
 	/** Register a custom command. */
 	registerCommand(name: string, options: Omit<RegisteredCommand, "name" | "sourceInfo">): void;
 
+	/**
+	 * Register a dynamic built-in cli command (e.g. computer-use's `_computer_use`).
+	 * Like the static _read/_edit family it is intercepted by the cli tool before
+	 * shell fallback: it must be a pure single command (no shell operators) and its
+	 * execute runs in-process with the session's ExtensionContext.
+	 * The name must be an underscore token ("_" + lowercase identifier) and must
+	 * not collide with the static built-ins (_read, _edit, ...).
+	 */
+	registerBuiltinCommand(command: BuiltinCommandDefinition): void;
+
 	/** Register a keyboard shortcut. */
 	registerShortcut(
 		shortcut: KeyId,
@@ -1342,6 +1352,43 @@ export interface RegisteredTool {
 	sourceInfo: SourceInfo;
 }
 
+/**
+ * A dynamic built-in cli command registered by an extension via
+ * ExtensionAPI.registerBuiltinCommand (e.g. computer-use's `_computer_use`).
+ *
+ * Like the static _read/_edit family, these are intercepted by the cli tool
+ * BEFORE shell fallback: pure single commands with no shell operators,
+ * executed in-process so the extension keeps its in-memory state (e.g.
+ * computer-use's stateId/@ref machines).
+ */
+export interface BuiltinCommandDefinition {
+	/** Command token including the underscore prefix, e.g. `_computer_use`. */
+	name: string;
+	/** One-line summary, shown in the cli tool description and the help index. */
+	description: string;
+	/** Full help text returned for `<name> -h` / `--help` / `help`. */
+	help: string;
+	/**
+	 * Convert raw cli words (tokens after the command name; heredoc content is
+	 * passed separately) into execute params. Throw an Error with a user-facing
+	 * message on invalid arguments — the cli tool surfaces it as clean text.
+	 */
+	parseArguments: (args: string[], heredoc?: string) => Record<string, unknown>;
+	/** Execute with params from parseArguments. Same contract as ToolDefinition.execute. */
+	execute: (
+		toolCallId: string,
+		params: Record<string, unknown>,
+		signal: AbortSignal | undefined,
+		onUpdate: AgentToolUpdateCallback<any> | undefined,
+		ctx: ExtensionContext,
+	) => Promise<AgentToolResult<any>>;
+}
+
+/** A BuiltinCommandDefinition annotated with the registering extension's source info. */
+export interface RegisteredBuiltinCommand extends BuiltinCommandDefinition {
+	sourceInfo: SourceInfo;
+}
+
 export interface ExtensionFlag {
 	name: string;
 	description?: string;
@@ -1496,6 +1543,7 @@ export interface Extension {
 	sourceInfo: SourceInfo;
 	handlers: Map<string, HandlerFn[]>;
 	tools: Map<string, RegisteredTool>;
+	builtinCommands: Map<string, RegisteredBuiltinCommand>;
 	messageRenderers: Map<string, MessageRenderer>;
 	commands: Map<string, RegisteredCommand>;
 	flags: Map<string, ExtensionFlag>;

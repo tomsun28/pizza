@@ -368,6 +368,11 @@ function ExtensionCard({
 								{t("plugins.extensions.commands", { count: ext.commandCount })}
 							</span>
 						)}
+						{ext.builtinCommandCount > 0 && (
+							<span className="text-[10px] text-muted">
+								{t("plugins.extensions.cliCommands", { count: ext.builtinCommandCount })}
+							</span>
+						)}
 					</div>
 				</div>
 				<div className="flex shrink-0 items-center gap-2">

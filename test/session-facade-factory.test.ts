@@ -55,6 +55,7 @@ describe("createSessionFacade", () => {
 			sourceInfo,
 			handlers: new Map(),
 			tools: new Map(),
+			builtinCommands: new Map(),
 			messageRenderers: new Map(),
 			commands: new Map(),
 			flags: new Map(),

@@ -22,6 +22,9 @@ import {
 	removeCustomProvider,
 	getSchedulerPolicy,
 	setSchedulerPolicy,
+	getApprovalPolicy,
+	setApprovalPolicy,
+	type ApprovalPolicy,
 	type CustomProviderInput,
 	type CustomProviderTestResult,
 	type ProviderInfo,
@@ -91,6 +94,16 @@ function GeneralTab() {
 		defaultSessionTarget: { kind: "pinned" },
 	});
 	const schedulerLoadedRef = useRef(false);
+	// Approval policy (two states: "off" auto-runs everything; "auto"/gated
+	// asks for unknown tools and dangerous commands).
+	const [approvalPolicy, setApprovalPolicyState] = useState<ApprovalPolicy>("auto");
+	useEffect(() => {
+		getApprovalPolicy().then(setApprovalPolicyState).catch(() => {});
+	}, []);
+	const handlePolicySelect = useCallback((policy: ApprovalPolicy) => {
+		setApprovalPolicyState(policy);
+		void setApprovalPolicy(policy).catch(() => {});
+	}, []);
 	useEffect(() => {
 		getSchedulerPolicy()
 			.then((policy) => {
@@ -216,6 +229,40 @@ function GeneralTab() {
 						</div>
 					</div>
 				</div>
+			</Card>
+
+			<Card>
+				<div className="mb-2 text-sm font-medium text-fg">{t("settings.approval.title")}</div>
+				<div className="mb-3 text-xs text-muted">{t("settings.approval.subtitle")}</div>
+				<div className="space-y-3">
+					<div>
+						<div className="mb-1 text-xs text-muted">{t("settings.approval.policy")}</div>
+						<div className="grid gap-1.5">
+							{([
+								{ policy: "auto" as ApprovalPolicy, label: t("composer.approvalGated"), hint: t("composer.approvalGatedHint") },
+								{ policy: "off" as ApprovalPolicy, label: t("composer.approvalOff"), hint: t("composer.approvalOffHint") },
+							]).map(({ policy, label, hint }) => (
+								<button
+									key={policy}
+									type="button"
+									onClick={() => handlePolicySelect(policy)}
+									className={cn(
+										"flex w-full items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left text-sm transition-colors",
+										approvalPolicy === policy
+											? "border-accent bg-accent/10 text-fg"
+											: "border-border bg-surface-2 text-muted hover:bg-surface hover:text-fg",
+										)}
+								>
+									<span>
+										<span className="block">{label}</span>
+										<span className="block text-[10px]">{hint}</span>
+									</span>
+									{approvalPolicy === policy && <Badge tone="accent">{t("settings.approval.current")}</Badge>}
+								</button>
+							))}
+						</div>
+					</div>
+			</div>
 			</Card>
 		</div>
 	);

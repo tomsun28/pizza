@@ -18,7 +18,7 @@
  */
 
 import { join } from "node:path";
-import type { Model } from "@earendil-works/pi-ai/compat";
+import type { ImageContent, Model } from "@earendil-works/pi-ai/compat";
 import { getAgentDir, getMainMemoryDir } from "../config.js";
 import type { AgentTool, ThinkingLevel } from "./agent/index.js";
 import { AuthStorage } from "./auth-storage.js";
@@ -88,6 +88,19 @@ export interface CreateSessionFacadeOptions {
 	workspaceId?: string;
 	/** Existing projection session id to activate before prompting. */
 	sessionId?: string;
+	/**
+	 * Caller-supplied thread id — the isolation key for multi-tenant SDK use.
+	 *
+	 * Map your own tenant/user identity onto it (e.g. `user-1024`): events are
+	 * tagged with it and context is filtered by it, so different ids share one
+	 * event log without ever seeing each other's history. Passing the same id
+	 * again resumes that user's conversation, so no external mapping table is
+	 * needed. Omit for single-user (local) embedding — the most recent
+	 * interactive thread is selected as before.
+	 *
+	 * Takes precedence over `sessionId` when both are given.
+	 */
+	threadId?: string;
 	/** Existing projection session to fork into the target workspace before prompting. */
 	forkFrom?: ForkSource;
 	/** Whether this is a continuation of an existing session (affects model selection). */
@@ -206,6 +219,7 @@ export async function createSessionFacade(
 		workspaceId: options.workspaceId,
 		storagePath: options.storagePath,
 		sessionId: options.sessionId,
+		threadId: options.threadId,
 		forkFrom: options.forkFrom,
 	});
 
@@ -391,6 +405,30 @@ export async function createSessionFacade(
 				resourceLoader.refreshMainAgentResources?.();
 			}
 			return toolAssembly.refreshSystemPrompt();
+		},
+		beforeAgentStart: async (payload) => {
+			// Fire before_agent_start extension hooks (e.g. built-in extensions
+			// injecting usage hints into the system prompt). Always rebuild from
+			// the canonical base first so repeated turns do not accumulate
+			// injections, then apply the extensions’ chained result on top.
+			const base = toolAssembly.refreshSystemPrompt();
+			const combined = await extensionRunner.emitBeforeAgentStart(
+				payload.prompt,
+				payload.images as ImageContent[] | undefined,
+				base,
+				{
+					cwd,
+					skills: resourceLoader.getSkills().skills,
+					contextFiles: resourceLoader.getAgentsFiles().agentsFiles,
+					customPrompt: resourceLoader.getSystemPrompt(),
+				},
+			);
+			const systemPrompt = combined?.systemPrompt;
+			if (systemPrompt) {
+				runtime?.setSystemPrompt(systemPrompt);
+				return { systemPrompt };
+			}
+			return { systemPrompt: base };
 		},
 	});
 	toolAssembly.attachRuntime(runtime);
