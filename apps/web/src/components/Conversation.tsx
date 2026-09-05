@@ -2,6 +2,7 @@ import { memo, useState, useEffect, useLayoutEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { highlightText } from "@/lib/highlight";
+import { parseTellCommand, workspaceNameFrom, type AgentMessageInfo } from "@/lib/agent-messages";
 import { Markdown } from "./Markdown";
 import { Button, Badge } from "@/components/ui";
 import { FileAttachmentIcon } from "@/components/FileAttachmentIcon";
@@ -17,6 +18,8 @@ import {
 	Loader2,
 	AlertCircle,
 	ShieldAlert,
+	Waypoints,
+	ArrowUpRight,
 } from "lucide-react";
 
 export interface TimelineItem {
@@ -52,6 +55,10 @@ export interface TimelineItem {
 	};
 	/** Unix ms timestamp when the message was emitted. */
 	timestamp?: number;
+	/** Parsed cross-workspace agent message (rendered as a dedicated card). */
+	agentMessage?: AgentMessageInfo;
+	/** True when the raw text carries the gateway trust trailer (footnote). */
+	gatewayTrailer?: boolean;
 }
 
 /** True if two Unix ms timestamps fall on the same calendar day (local time). */
@@ -331,6 +338,10 @@ const ToolCard = memo(function ToolCard({
 	const { t } = useTranslation();
 	const [argsExpanded, setArgsExpanded] = useState(false);
 	const command = formatToolArgs(item.toolArgs);
+	// Routed `_tell` commands get a dedicated header ("tell → <workspace>") so
+	// cross-workspace traffic reads as messaging, not as a raw shell call.
+	const tellInfo = item.toolName === "cli" ? parseTellCommand(command) : null;
+	const tellToName = tellInfo?.to ? workspaceNameFrom(tellInfo.to) : undefined;
 	const { shown: commandShown, clamped: commandClamped } = clampForDisplay(command, argsExpanded);
 	const running = item.streaming && !item.toolResult;
 	const approval = item.pendingApproval;
@@ -347,12 +358,34 @@ const ToolCard = memo(function ToolCard({
 			>
 				<div className="flex items-center justify-between gap-3 px-3.5 py-2">
 					<span className="flex items-center gap-2 font-mono text-[11px] font-semibold uppercase tracking-wide text-fg">
-						{awaitingApproval ? (
-							<ShieldAlert className="h-3.5 w-3.5 text-warning" />
+						{tellInfo ? (
+							<>
+								<Waypoints className="h-3.5 w-3.5 shrink-0 text-accent" />
+								<span>
+									{tellInfo.action === "list"
+										? t("conversation.tell.list")
+										: (
+											<>
+												{t("conversation.tell.send")}
+												{tellToName && (
+													<span className="ml-1.5 rounded-md bg-surface px-1.5 py-0.5 normal-case" title={tellInfo.to}>
+														{highlight ? highlightText(tellToName, highlight, highlightActive) : tellToName}
+													</span>
+												)}
+											</>
+										)}
+								</span>
+							</>
 						) : (
-							<Terminal className="h-3.5 w-3.5 text-accent" />
+							<>
+								{awaitingApproval ? (
+									<ShieldAlert className="h-3.5 w-3.5 text-warning" />
+								) : (
+									<Terminal className="h-3.5 w-3.5 text-accent" />
+								)}
+								{toolTitle}
+							</>
 						)}
-						{toolTitle}
 					</span>
 					<span
 						className={cn(
@@ -548,6 +581,99 @@ const UserBubble = memo(function UserBubble({ item, highlight, highlightActive }
 	);
 });
 
+/**
+ * Incoming cross-workspace agent message (a gateway `_tell` delivery). Rendered
+ * as a distinct left-aligned card — sender workspace header, auto-relay badge,
+ * envelope-stripped body, and a trust-trailer footnote — instead of the raw
+ * `<message from=...>` markup the agent sees in its context.
+ */
+const AgentMessageCard = memo(function AgentMessageCard({
+	item,
+	highlight,
+	highlightActive,
+}: {
+	item: TimelineItem;
+	highlight?: string;
+	highlightActive?: boolean;
+}) {
+	const { t } = useTranslation();
+	const [copied, copy] = useCopy();
+	const [hover, setHover] = useState(false);
+	const am = item.agentMessage;
+	const time = formatMessageTime(item.timestamp);
+	// Defensive: the timeline only routes envelope messages here, but fall back
+	// to the plain user bubble rather than crash on malformed items.
+	if (!am) return <UserBubble item={item} highlight={highlight} highlightActive={highlightActive} />;
+	return (
+		<div
+			className="my-4 flex flex-col items-start"
+			onMouseEnter={() => setHover(true)}
+			onMouseLeave={() => setHover(false)}
+		>
+			<div className="w-full max-w-[85%] overflow-hidden rounded-2xl rounded-bl-md border border-accent/25 bg-surface-2/50">
+				<div className="flex items-center gap-2 border-b border-border/70 bg-surface/40 px-3.5 py-2">
+					<Waypoints className="h-3.5 w-3.5 shrink-0 text-accent" />
+					<span className="shrink-0 font-mono text-[10px] uppercase tracking-widest text-muted">
+						{t("conversation.agentMessage.title")}
+					</span>
+					<span
+						className="truncate rounded-md bg-surface px-1.5 py-0.5 font-mono text-xs font-semibold text-fg"
+						title={am.from}
+					>
+						{highlight ? highlightText(am.fromName, highlight, highlightActive) : am.fromName}
+					</span>
+					{am.autoRelay && (
+						<span
+							className="flex shrink-0 items-center gap-0.5 rounded-full border border-accent/40 bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium text-accent"
+							title={t("conversation.agentMessage.autoRelayHint")}
+						>
+							<ArrowUpRight className="h-3 w-3" />
+							{t("conversation.agentMessage.autoRelay")}
+						</span>
+					)}
+					{am.id && (
+						<span className="ml-auto truncate font-mono text-[10px] text-muted/70" title={am.id}>
+							{am.id}
+						</span>
+					)}
+				</div>
+				<div className="whitespace-pre-wrap break-words px-4 py-3 text-sm leading-relaxed text-fg">
+					{highlight ? highlightText(am.body, highlight, highlightActive) : am.body}
+				</div>
+				{item.gatewayTrailer && (
+					<div
+						className="flex items-center gap-1.5 border-t border-border/70 px-4 py-1.5 text-[10px] text-muted/80"
+						title={t("conversation.agentMessage.trailerHint")}
+					>
+						<ShieldAlert className="h-3 w-3 shrink-0" />
+						<span className="truncate">{t("conversation.agentMessage.trailer")}</span>
+					</div>
+				)}
+			</div>
+			<div
+				className={cn(
+					"mt-1 flex items-center gap-1 transition-opacity",
+					hover ? "opacity-100" : "pointer-events-none opacity-0",
+				)}
+			>
+				<button
+					type="button"
+					onClick={() => copy(item.text)}
+					className="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-surface-2 hover:text-fg"
+					title={t("common.copy")}
+				>
+					{copied ? <Check className="h-3.5 w-3.5 text-success" /> : <Copy className="h-3.5 w-3.5" />}
+				</button>
+				{time && (
+					<span className="ml-1 font-mono text-[10px] text-muted" title={new Date(item.timestamp!).toLocaleString()}>
+						{time}
+					</span>
+				)}
+			</div>
+		</div>
+	);
+});
+
 /** Small inline notice for system-originated events (e.g. scheduled task fired). */
 const SystemNotice = memo(function SystemNotice({ item }: { item: TimelineItem }) {
 	const ts = item.timestamp ? new Date(item.timestamp).toLocaleString() : "";
@@ -630,6 +756,10 @@ const AssistantMessage = memo(function AssistantMessage({ item, highlight, highl
  */
 const PROGRESSIVE_BATCH_SIZE = 50;
 const PROGRESSIVE_INITIAL = 50;
+/** Distance from the bottom (px) within which the view counts as at the
+ * bottom and follows newly appended content. Slightly larger than the
+ * composer-area padding (pb-32 = 128px) so a resting view stays pinned. */
+const FOLLOW_BOTTOM_THRESHOLD_PX = 160;
 
 export function Conversation({
 	items,
@@ -694,6 +824,32 @@ export function Conversation({
 		return null;
 	};
 
+	// Live "is the user at the bottom" tracker, driven by native scroll events
+	// (NOT by render cycles — the user can scroll between renders, and a stale
+	// render-time snapshot would wrongly pin or release the follow behavior).
+	const atBottomRef = useRef(true);
+	useEffect(() => {
+		const anchor = bottomAnchorRef.current;
+		if (!anchor) return;
+		let el: HTMLElement | null = anchor.parentElement;
+		while (el) {
+			const style = getComputedStyle(el);
+			if (style.overflowY === "auto" || style.overflowY === "scroll") break;
+			el = el.parentElement;
+		}
+		if (!el) return;
+		// The component owns its scroll behavior (jump-to-bottom on first render,
+		// follow on append, compensation across progressive batches). The browser
+		// native scroll anchoring fights all three — it yanks the viewport back
+		// to its heuristic anchor right after we set scrollTop — so disable it.
+		el.style.overflowAnchor = "none";
+		const onScroll = () => {
+			atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= FOLLOW_BOTTOM_THRESHOLD_PX;
+		};
+		el.addEventListener("scroll", onScroll, { passive: true });
+		return () => el.removeEventListener("scroll", onScroll);
+	}, []);
+
 	// Scroll height measured right before a progressive batch is applied.
 	// Used to compensate scrollTop after older items are prepended, so the
 	// user's viewport shows exactly the same content before and after.
@@ -722,14 +878,22 @@ export function Conversation({
 
 	// Keep the viewport visually stable across renders.
 	//
-	// Two distinct cases:
+	// Three distinct cases:
 	//  1. First render of a conversation → jump to the bottom so the user
 	//     starts at the newest message.
 	//  2. Progressive batch prepended older items → scrollHeight grew above
 	//     the viewport. Add the growth delta to scrollTop so the content the
 	//     user is looking at stays exactly where it was. Without this the
 	//     page appears to scroll on its own.
+	//  3. New content appended (user submits a message, streaming text grows,
+	//     an incoming agent message arrives) -> follow the bottom when the
+	//     user was already there. Without this the viewport stays at its old
+	//     scrollTop while content grows below it, so after submitting a
+	//     message the list appeared to stick in the middle instead of
+	//     showing the newest bubble.
 	const isFirstRenderRef = useRef(true);
+	const prevLenRef = useRef(items.length);
+	const prevLastIdRef = useRef("");
 	useLayoutEffect(() => {
 		const container = getScrollContainer();
 		if (!container) return;
@@ -738,17 +902,30 @@ export function Conversation({
 			isFirstRenderRef.current = false;
 			preBatchScrollHeightRef.current = null;
 			container.scrollTop = container.scrollHeight;
+			prevLenRef.current = items.length;
+			prevLastIdRef.current = items[items.length - 1]?.id ?? "";
 			return;
 		}
 
 		const before = preBatchScrollHeightRef.current;
 		preBatchScrollHeightRef.current = null;
-		if (before === null) return;
-		const delta = container.scrollHeight - before;
-		if (delta > 0) {
-			container.scrollTop += delta;
+		if (before !== null) {
+			const delta = container.scrollHeight - before;
+			if (delta > 0) {
+				container.scrollTop += delta;
+			}
 		}
-	}, [renderCount, items.length]);
+
+		// Follow appended content. The user submitting a message always brings
+		// the newest bubble into view; anything else (streaming, incoming agent
+		// messages) only follows when the user was already near the bottom, so
+		// scrolling up to read history is never interrupted.
+		const lastItem = items[items.length - 1];
+		const appended = items.length !== prevLenRef.current || (lastItem?.id ?? "") !== prevLastIdRef.current;
+		if (appended && (atBottomRef.current || (lastItem?.role === "user" && !lastItem.agentMessage))) {
+			container.scrollTop = container.scrollHeight;
+		}
+	}, [items, renderCount]);
 
 	// Reset first-render flag when a full reload happens (workspace/session
 	// switch) so the new conversation gets an initial scroll-to-bottom.
@@ -786,7 +963,11 @@ export function Conversation({
 				const isActive = item.id === activeMatchId;
 				let content: React.ReactNode;
 				if (item.role === "user") {
-					content = <UserBubble item={item} highlight={searchQuery} highlightActive={isActive} />;
+					content = item.agentMessage ? (
+						<AgentMessageCard item={item} highlight={searchQuery} highlightActive={isActive} />
+					) : (
+						<UserBubble item={item} highlight={searchQuery} highlightActive={isActive} />
+					);
 				} else if (item.role === "system") {
 					content = <SystemNotice item={item} />;
 				} else if (item.role === "tool") {

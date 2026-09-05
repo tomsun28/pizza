@@ -12,6 +12,7 @@ import { Composer, type ComposerImage, type LoadedFileAttachment } from "@/compo
 import { EmptyState, Spinner } from "@/components/ui";
 import { approveToolCall, rejectToolCall } from "@/lib/transport";
 import { cn } from "@/lib/utils";
+import { hasGatewayTrailer, parseAgentMessage } from "@/lib/agent-messages";
 import type { LayoutOutletContext } from "@/components/Layout";
 
 function blockToDataUrl(block: Record<string, unknown>): string | null {
@@ -193,6 +194,17 @@ function messageText(message: unknown): string {
 	return "";
 }
 
+/**
+ * Detect a gateway cross-workspace message envelope in a user turn and return
+ * the TimelineItem fields that make Conversation render it as a dedicated
+ * "workspace message" card. Returns {} for ordinary user messages.
+ */
+function agentMessageFields(text: string): Pick<TimelineItem, "agentMessage" | "gatewayTrailer"> {
+	const parsed = parseAgentMessage(text);
+	if (!parsed) return {};
+	return { agentMessage: parsed, gatewayTrailer: hasGatewayTrailer(text) };
+}
+
 /** Build a TimelineItem[] from a get_messages response, matching tool cards to results. */
 function buildTimelineFromMessages(
 	messages: Array<Record<string, unknown>>,
@@ -208,7 +220,7 @@ function buildTimelineFromMessages(
 			const text = messageText(msg);
 			const images = messageImages(msg);
 			const files = messageFiles(msg);
-			history.push({ id: `hist-${history.length}`, role: "user", title: t("common.you"), text, status: "", images: images.length > 0 ? images : undefined, files: files.length > 0 ? files : undefined, timestamp: ts });
+			history.push({ id: `hist-${history.length}`, role: "user", title: t("common.you"), text, status: "", images: images.length > 0 ? images : undefined, files: files.length > 0 ? files : undefined, timestamp: ts, ...agentMessageFields(text) });
 		} else if (role === "assistant") {
 			const text = messageText(msg);
 			const thinking = messageThinking(msg);
@@ -650,7 +662,7 @@ export default function AgentView({
 				}
 				updateItems((prev) => [
 					...prev,
-					{ id: event.event_id, role: "user", title: tRef.current("common.you"), text, status: "", images: images.length > 0 ? images : undefined, files: files.length > 0 ? files : undefined, timestamp: ts },
+					{ id: event.event_id, role: "user", title: tRef.current("common.you"), text, status: "", images: images.length > 0 ? images : undefined, files: files.length > 0 ? files : undefined, timestamp: ts, ...agentMessageFields(text) },
 				]);
 				break;
 			}
@@ -1180,7 +1192,10 @@ export default function AgentView({
 	const isRunning = state?.isStreaming ?? false;
 
 	// Session title: first user message (like Codex/ChatGPT), else workspace name.
-	const firstUserText = items.find((it) => it.role === "user" && it.text.trim())?.text.trim() ?? "";
+	const firstUser = items.find((it) => it.role === "user" && it.text.trim());
+	// Cross-workspace messages title the session with the message body, not the
+	// raw `<message from=...>` envelope markup.
+	const firstUserText = (firstUser?.agentMessage?.body ?? firstUser?.text ?? "").trim();
 	const wsName = workspace ? workspace.replace(/\/+$/, "").split("/").pop() || "" : "";
 	const sessionTitle = firstUserText
 		? (firstUserText.length > 60 ? firstUserText.slice(0, 60).trimEnd() + "…" : firstUserText)

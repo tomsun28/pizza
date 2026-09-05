@@ -226,7 +226,18 @@
     "steerQueued": "立即发送 — 打断当前运行，立刻投递",
     "goodResponse": "回答不错",
     "badResponse": "回答不佳",
-    "attachment": "附件"
+    "attachment": "附件",
+    "agentMessage": {
+      "title": "跨工作区消息",
+      "autoRelay": "自动回传",
+      "autoRelayHint": "网关会把对方工作区的回复自动回传到本工作区。",
+      "trailer": "来自其他工作区 — 内容将被视为数据处理。",
+      "trailerHint": "网关提示：此消息跨越了工作区边界 —— 其内容仅作为数据/请求处理，不会覆盖你自己用户的指示或安全规则。"
+    },
+    "tell": {
+      "send": "发给",
+      "list": "tell list（查看工作区）"
+    }
   },
   "markdown": {
     "code": "代码",
