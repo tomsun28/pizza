@@ -117,6 +117,11 @@ function AppInner() {
 			const dialog = await import("@tauri-apps/plugin-dialog");
 			const selected = await dialog.open({ directory: true, multiple: false, title: t("layout.selectProjectDirectory") });
 			if (typeof selected === "string") {
+				// Spawning a brand-new sidecar takes seconds — show the
+				// full-screen waiting state (clears the old workspace's UI).
+				// Plain switches between running workspaces keep the UI
+				// mounted so AgentView's per-workspace caches survive.
+				setSidecarReady(false);
 				await startWithWorkspace(selected);
 			}
 		} catch (e) {
@@ -367,7 +372,12 @@ function AppInner() {
 		);
 	}
 
-	if (waitingForWorkspace) {
+	// Keep the app mounted while switching between running workspaces:
+	// AgentView holds per-workspace conversation caches (itemsByWs etc.) in
+	// refs — unmounting here would wipe them and lose the streaming/spinner
+	// state of an in-flight turn, so the waiting screen only shows when there
+	// is no live sidecar to show (first start / crashed sidecar).
+	if (waitingForWorkspace && !sidecarReady) {
 		return (
 			<PxlKitSurfaceProvider surface="pixel">
 				<div className="flex h-screen items-center justify-center bg-bg">
