@@ -14,7 +14,7 @@ import { MentionMenu, type MentionCategory, type MentionItem } from "@/component
 import { formatFileSize } from "@/lib/file-format";
 
 export type { LoadedFileAttachment } from "@/lib/file-attachment";
-import { sendCommandAwait, setSafeMode, setApprovalPolicy, newSession, getSkills, invoke, searchFiles, gitBranches, listScheduledTasks, type SkillInfo, type GitBranchEntry } from "@/lib/transport";
+import { sendCommandAwait, setApprovalPolicy, newSession, getSkills, invoke, searchFiles, gitBranches, listScheduledTasks, type SkillInfo, type GitBranchEntry } from "@/lib/transport";
 import type { RpcSessionState, RpcContextUsage, RpcTokenUsage, ModelInfo } from "@/lib/types";
 import type { WorkspaceMeta, ScheduledTaskSummary } from "@/lib/types";
 import { resolveScheduleScope } from "@/lib/schedule-scope";
