@@ -158,7 +158,7 @@ describe("EventStoreExtensionSessionManager", () => {
 				["agent_end", [async () => observed.push("agent_end")]],
 			]),
 			tools: new Map(),
-			messageRenderers: new Map(),
+			builtinCommands: new Map(),
 			commands: new Map(),
 			flags: new Map(),
 			shortcuts: new Map(),

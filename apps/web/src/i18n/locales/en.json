@@ -413,6 +413,8 @@
       "tools_other": "{{count}} tools",
       "commands_one": "{{count}} command",
       "commands_other": "{{count}} commands",
+      "cliCommands_one": "{{count}} cli command",
+      "cliCommands_other": "{{count}} cli commands",
       "reloadHint": "Restart the session for changes to take effect.",
       "empty": "No extensions installed.",
       "installed": "CLI installed",

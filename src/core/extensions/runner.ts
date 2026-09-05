@@ -40,6 +40,7 @@ import type {
 	InputSource,
 	MessageRenderer,
 	ProviderConfig,
+	RegisteredBuiltinCommand,
 	RegisteredCommand,
 	RegisteredTool,
 	ReplacedSessionContext,
@@ -521,6 +522,20 @@ export class ExtensionRunner {
 			}
 		}
 		return Array.from(toolsByName.values());
+	}
+
+	/** Get all registered dynamic built-in cli commands (first registration per name wins). */
+	getAllRegisteredBuiltinCommands(): RegisteredBuiltinCommand[] {
+		const commandsByName = new Map<string, RegisteredBuiltinCommand>();
+		for (const ext of this.extensions) {
+			// `?.` guards stub Extension objects built before the field existed.
+			for (const command of ext.builtinCommands?.values() ?? []) {
+				if (!commandsByName.has(command.name)) {
+					commandsByName.set(command.name, command);
+				}
+			}
+		}
+		return Array.from(commandsByName.values());
 	}
 
 	/**

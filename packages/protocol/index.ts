@@ -397,6 +397,8 @@ export interface RpcExtensionInfo {
 	toolCount: number;
 	/** Number of slash commands this extension registers. */
 	commandCount: number;
+	/** Number of dynamic built-in cli commands this extension registers (e.g. computer-use's `_computer_use`). */
+	builtinCommandCount: number;
 }
 
 // ============================================================================

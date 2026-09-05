@@ -413,6 +413,8 @@
       "tools_other": "{{count}} 个工具",
       "commands_one": "{{count}} 个命令",
       "commands_other": "{{count}} 个命令",
+      "cliCommands_one": "{{count}} 个 cli 命令",
+      "cliCommands_other": "{{count}} 个 cli 命令",
       "reloadHint": "重启会话后更改生效。",
       "empty": "没有已安装的扩展。",
       "installed": "CLI 已安装",

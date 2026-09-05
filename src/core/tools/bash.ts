@@ -1,7 +1,7 @@
 import { createWriteStream, existsSync } from "node:fs";
 import { makePrivateLogPath, PRIVATE_LOG_MODE } from "../../utils/temp-files.js";
 import { join } from "node:path";
-import type { AgentTool } from "../agent/types.js";
+import type { AgentTool, AgentToolResult } from "../agent/types.js";
 import { Container, Text, truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import { type Static, Type } from "@sinclair/typebox";
 import { spawn } from "child_process";
@@ -14,7 +14,7 @@ import {
 	trackDetachedChildPid,
 	untrackDetachedChildPid,
 } from "../../utils/shell.js";
-import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
+import type { RegisteredBuiltinCommand, ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { getTextOutput, invalidArgText, str } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateTail } from "./truncate.js";
@@ -22,6 +22,7 @@ import {
 	BUILTIN_COMMANDS,
 	getBuiltinCommandHelpForArgs,
 	parseBuiltinCommand,
+	type ParsedBuiltinCommand,
 	parseBuiltinToolInput,
 	type ParsedBuiltinToolInput,
 } from "./builtin-commands.js";
@@ -94,6 +95,13 @@ export type BashBuiltinDetails =
 			name: "tell";
 			args: TellToolInput;
 			details?: undefined;
+	  }
+	| {
+			/** Extension-registered dynamic built-in (e.g. _computer_use). */
+			name: string;
+			args: Record<string, unknown>;
+			/** Inner details produced by the extension executor (e.g. computer-use state info used for session restore). */
+			details?: unknown;
 	  };
 
 /**
@@ -219,6 +227,12 @@ export interface BashToolOptions {
 	cron?: CronToolOptions;
 	/** Options for the built-in tell command. When set, the cli tool routes `tell` to the tell definition. */
 	tell?: TellToolOptions;
+	/**
+	 * Dynamic built-in commands registered by extensions (e.g. computer-use's
+	 * `_computer_use`). Evaluated lazily on every lookup so mid-session
+	 * registrations are picked up without rebuilding the tool.
+	 */
+	dynamicBuiltins?: () => RegisteredBuiltinCommand[];
 	/** Command prefix prepended to every command (for example shell setup commands) */
 	commandPrefix?: string;
 	/** Optional explicit shell path from settings */
@@ -375,14 +389,15 @@ function parseBashBuiltinCommand(command: string): ParsedBuiltinToolInput | null
  * Quote/escape-aware: tokens inside quotes or after a backslash are treated as
  * data, not commands.
  */
-export function detectChainedBuiltin(command: string): string | null {
-	const builtins = BUILTIN_COMMANDS as readonly string[];
+export function detectChainedBuiltin(command: string, extraTokens?: readonly string[]): string | null {
+	const builtins = new Set<string>(BUILTIN_COMMANDS as readonly string[]);
+	for (const token of extraTokens ?? []) builtins.add(token.toLowerCase());
 	const segments = splitShellSegments(command);
 	// Only built-ins chained AFTER an operator are the misuses we care about;
 	// the leading segment routes through normal cli parsing.
 	for (let i = 1; i < segments.length; i++) {
 		const word = splitShellWords(segments[i])[0]?.toLowerCase() ?? "";
-		if (word && builtins.includes(word)) return word;
+		if (word && builtins.has(word)) return word;
 	}
 	return null;
 }
@@ -417,6 +432,66 @@ function makeBuiltinRenderContext<TArgs>(
 	};
 }
 
+/**
+ * True when the trailing args ask for help (`-h`, `--help`, `help`).
+ * A bare dynamic built-in command (no args at all) also gets help so the
+ * command is discoverable without reading the prompt docs first.
+ */
+function isDynamicBuiltinHelpRequest(args: string[]): boolean {
+	if (args.length === 0) return true;
+	return args.length === 1 && ["-h", "--help", "help"].includes(args[0]!.toLowerCase());
+}
+
+function dynamicBuiltinTextResult(text: string): { content: Array<{ type: "text"; text: string }>; details: undefined } {
+	return { content: [{ type: "text", text }], details: undefined };
+}
+
+/**
+ * Route one dynamic built-in command (registered by an extension) through
+ * help → shell-operator guard → parseArguments → execute. Mirrors the static
+ * built-in pipeline: never touches the shell, parse errors come back as clean
+ * guidance text, and execution runs in-process with the session context.
+ */
+async function runDynamicBuiltinCommand(
+	command: RegisteredBuiltinCommand,
+	parsed: ParsedBuiltinCommand,
+	rawCommand: string,
+	toolCallId: string,
+	signal: AbortSignal | undefined,
+	ctx: unknown,
+): Promise<AgentToolResult<any>> {
+	if (isDynamicBuiltinHelpRequest(parsed.args)) {
+		return dynamicBuiltinTextResult(command.help);
+	}
+	// Dynamic built-ins are not a shell: reject control syntax the same way the
+	// static built-ins do (heredocs are fine — they are passed to parseArguments).
+	if (parsed.heredoc === undefined && hasShellControlSyntax(rawCommand)) {
+		return dynamicBuiltinTextResult(
+			command.name +
+				" is an underscore command and does not support shell operators " +
+				"(|, >, <, ;, &, &&, command substitution, or newlines)." +
+				" Issue it as a single pure command. For pipelines or redirections, use a plain " +
+				"shell command instead — e.g. grep PATTERN FILE, cat FILE | ..., or sed ....",
+		);
+	}
+	let params: Record<string, unknown>;
+	try {
+		params = command.parseArguments(parsed.args, parsed.heredoc);
+	} catch (error) {
+		// Argument errors are user-facing guidance, not crashes.
+		return dynamicBuiltinTextResult(error instanceof Error ? error.message : String(error));
+	}
+	const result = await command.execute(toolCallId, params, signal, undefined, ctx as never);
+	// Rendering still falls back to the generic bash command + output view
+	// (builtinDefinitions has no entry for dynamic names). The details ARE
+	// persisted though: extension executors return state info (e.g.
+	// computer-use stateId/@ref maps) that session restore replays.
+	return {
+		content: result.content,
+		details: { builtin: { name: command.name, args: params, details: result.details } },
+	};
+}
+
 export function createBashToolDefinition(
 	cwd: string,
 	options?: BashToolOptions,
@@ -432,6 +507,14 @@ export function createBashToolDefinition(
 	const skillDefinition = options?.skill ? createSkillToolDefinition(options.skill) : undefined;
 	const cronDefinition = options?.cron ? createCronToolDefinition(options.cron) : undefined;
 	const tellDefinition = options?.tell ? createTellToolDefinition(options.tell) : undefined;
+	/**
+	 * Dynamic built-ins registered by extensions. Evaluated lazily on every
+	 * routing decision so registrations that happen after this tool was built
+	 * (e.g. async extension load) are still honored.
+	 */
+	const dynamicCommands = () => options?.dynamicBuiltins?.() ?? [];
+	const lookupDynamicCommand = (token: string): RegisteredBuiltinCommand | undefined =>
+		dynamicCommands().find((command) => command.name === token);
 	/** Map of built-in command name → definition. skill/cron/tell are present when their options are configured. */
 	const builtinDefinitions: Record<string, ToolDefinition<any, any, any> | undefined> = {
 		read: readDefinition,
@@ -443,11 +526,19 @@ export function createBashToolDefinition(
 		cron: cronDefinition,
 		tell: tellDefinition,
 	};
+	/** Command tokens registered by extensions (e.g. _computer_use); resolved at build time for docs. */
+	const dynamicTokens = dynamicCommands().map((entry) => entry.name);
+	const dynamicTokenSnippet = dynamicTokens.length > 0 ? `/${dynamicTokens.join("/")}` : "";
+	const dynamicTokenNote =
+		dynamicTokens.length > 0
+			? ` Extension-registered underscore commands in this session: ${dynamicTokens.join(", ")} (run "<name> --help" for usage).`
+			: "";
 	return {
 		name: "cli",
 		label: "cli",
-		description: `Execute a CLI command in the current working directory. Underscore commands are prefixed with _ and handled internally (they never fall back to the shell): _read, _write, _edit, _session_split, _history_tree, _skill, _tell, and _cron. The underscore prefix avoids collisions with real shell commands (e.g. bash's own read/write builtins). IMPORTANT: underscore commands do NOT support shell operators — no pipes (|), redirects (> <), chaining (; & &&), command substitution, or newlines; issue each as a single pure command. To use a pipeline or redirection, run a plain shell command instead (grep, find, ls, cat, sed, git, npm, etc.). For _edit/_write, a value containing quotes, multiple spaces, or newlines must go through a verbatim channel — _edit with --edits JSON (e.g. --edits '[{"op":"replace","range":"12#ab","new":"line1\nline2"}]'), _write with --content or a <<EOF heredoc, or wrap the whole value in quotes. Do NOT pass such a value as bare positional tokens — its inner quotes/spaces get silently mangled. Output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB.`,
-		promptSnippet: "Execute CLI commands: underscore commands are prefixed with _ (_read/_write/_edit/_session_split/_history_tree/_skill/_tell/_cron) and are pure single commands with NO shell operators; use shell commands (grep, find, ls, cat, git, npm) for pipes/redirections",
+
+		description: `Execute a CLI command in the current working directory. Underscore commands are prefixed with _ and handled internally (they never fall back to the shell): _read, _write, _edit, _session_split, _history_tree, _skill, _tell, and _cron.${dynamicTokenNote} The underscore prefix avoids collisions with real shell commands (e.g. bash's own read/write builtins). IMPORTANT: underscore commands do NOT support shell operators — no pipes (|), redirects (> <), chaining (; & &&), command substitution, or newlines; issue each as a single pure command. To use a pipeline or redirection, run a plain shell command instead (grep, find, ls, cat, sed, git, npm, etc.). For _edit/_write, a value containing quotes, multiple spaces, or newlines must go through a verbatim channel — _edit with --edits JSON (e.g. --edits '[{"op":"replace","range":"12#ab","new":"line1\nline2"}]'), _write with --content or a <<EOF heredoc, or wrap the whole value in quotes. Do NOT pass such a value as bare positional tokens — its inner quotes/spaces get silently mangled. Output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB.`,
+		promptSnippet: `Execute CLI commands: underscore commands are prefixed with _ (_read/_write/_edit/_session_split/_history_tree/_skill/_tell/_cron${dynamicTokenSnippet}) and are pure single commands with NO shell operators; use shell commands (grep, find, ls, cat, git, npm) for pipes/redirections`,
 		parameters: bashSchema,
 		async execute(
 			toolCallId,
@@ -466,6 +557,13 @@ export function createBashToolDefinition(
 			const trimmedCommand = command.trim();
 			const parsedCommand = parseBuiltinCommand(trimmedCommand);
 			const firstWord = parsedCommand.command.toLowerCase();
+			// Extension-registered dynamic built-ins (e.g. _computer_use) take
+			// precedence: same interception policy as the static built-ins below —
+			// handled in-process, never degraded to the shell.
+			const dynamicCommand = lookupDynamicCommand(firstWord);
+			if (dynamicCommand) {
+				return await runDynamicBuiltinCommand(dynamicCommand, parsedCommand, trimmedCommand, toolCallId, signal, ctx);
+			}
 			if ((BUILTIN_COMMANDS as readonly string[]).includes(firstWord)) {
 				// Built-in commands are ALWAYS handled internally and never degrade to the
 				// shell. They are not a shell, so they cannot support shell operators.
@@ -642,7 +740,7 @@ export function createBashToolDefinition(
 						// reissues the built-in as its own pure command. Advisory only — a
 						// command that merely *contains* the word (grep _read file) is ignored
 						// unless it also failed.
-						const chainedBuiltin = detectChainedBuiltin(command);
+						const chainedBuiltin = detectChainedBuiltin(command, dynamicCommands().map((entry) => entry.name));
 						if (chainedBuiltin) {
 							outputText +=
 								"\n\n" +

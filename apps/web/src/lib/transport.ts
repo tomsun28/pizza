@@ -407,6 +407,8 @@ export interface ExtensionInfo {
 	path: string;
 	toolCount: number;
 	commandCount: number;
+	/** Dynamic built-in cli commands registered by this extension (e.g. `_computer_use`). */
+	builtinCommandCount: number;
 }
 
 /** List all extensions (built-in + user-installed), including disabled built-ins. */

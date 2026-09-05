@@ -307,6 +307,7 @@ async function buildExtensionInfos(facade: SessionFacade): Promise<RpcExtensionI
 			path: ext.path,
 			toolCount: ext.tools.size,
 			commandCount: ext.commands.size,
+			builtinCommandCount: ext.builtinCommands?.size ?? 0,
 		});
 	}
 
@@ -330,6 +331,7 @@ async function buildExtensionInfos(facade: SessionFacade): Promise<RpcExtensionI
 			path: `<builtin:${info.id}>`,
 			toolCount: 0,
 			commandCount: 0,
+			builtinCommandCount: 0,
 		});
 	}
 	// Stable ordering: built-ins first, then the rest by id.
