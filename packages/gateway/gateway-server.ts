@@ -104,7 +104,9 @@ export interface GatewayServerOptions {
 	socketPath?: string;
 	/** Agent config directory — shared with spawned agents for auth/models. */
 	agentDir: string;
-	/** The main agent working directory — excluded from workspace name lookups. */
+	/** The main agent working directory. Drives main-agent spawn handling and
+	 * scheduled-workspace discovery — it is NOT excluded from tell destination
+	 * name lookups (the main workspace is a valid tell target). */
 	mainDir?: string;
 	/** Pizza version (from package.json), reported in `status` so clients can detect an outdated gateway after an upgrade. */
 	version?: string;
@@ -286,7 +288,11 @@ export function createGatewayServer(options: GatewayServerOptions): GatewayServe
 			return normalizeCwd(expanded);
 		}
 		// Otherwise treat as a workspace name (last path component).
-		const workspaces = listKnownWorkspaces(agentDir, mainDir);
+		// NOTE: no mainDir exclusion — the gateway is not the tell caller, and
+		// its own main workspace is a perfectly valid destination. Excluding it
+		// made `_tell send --to main` fail with "Unknown workspace" while the
+		// absolute path (and the caller-side `_tell list`) resolved fine.
+		const workspaces = listKnownWorkspaces(agentDir);
 		const lower = trimmed.toLowerCase();
 		for (const ws of workspaces) {
 			const lastComponent = ws.cwd.replace(/\/+$/, "").split("/").pop() ?? ws.cwd;
@@ -793,11 +799,12 @@ function nextMessageId(): string {
 				return;
 			}
 			case "list": {
-				const known = listKnownWorkspaces(agentDir, mainDir);
+				// All known workspaces — the main workspace is attachable too.
+				const known = listKnownWorkspaces(agentDir);
 				const workspaces: GatewayWorkspaceInfo[] = known.map((ws) => ({
 					workspace_id: ws.workspace_id,
 					cwd: ws.cwd,
-					name: ws.cwd.replace(/\\+$/, "").split("/").pop() ?? ws.cwd,
+					name: ws.cwd.replace(/\/+$/, "").split("/").pop() ?? ws.cwd,
 					last_accessed_at: ws.last_accessed_at,
 				}));
 				write({ type: "list_result", workspaces });
