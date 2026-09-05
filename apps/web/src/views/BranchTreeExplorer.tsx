@@ -87,6 +87,41 @@ export default function BranchTreeExplorer({ workspace }: { workspace?: string |
 	const queryRef = useRef(query);
 	queryRef.current = query;
 
+	// Scroll stabilization for background refreshes. Auto-reload replaces the
+	// whole node list; when new sessions insert above the viewport (or rows
+	// shift), the browser keeps the pixel scrollTop and the view visibly jumps
+	// onto different rows. We anchor to the topmost visible row before the
+	// swap and restore its offset after, so what the user is reading stays
+	// put. Only the explicit paths (search, switch/jump/fork/rename, workspace
+	// change) reset the viewport as user-initiated navigations.
+	const listRef = useRef<HTMLDivElement>(null);
+	const anchorRef = useRef<{ id: string; offset: number } | null>(null);
+	const keepScrollRef = useRef(false);
+
+	const captureAnchor = useCallback(() => {
+		const el = listRef.current;
+		if (!el) return;
+		let topRowId: string | undefined;
+		let topRowOffset = 0;
+		for (const child of Array.from(el.querySelectorAll<HTMLElement>('[data-session-row]'))) {
+			if (child.offsetTop + child.offsetHeight > el.scrollTop) {
+				topRowId = child.dataset.sessionRow;
+				topRowOffset = child.offsetTop - el.scrollTop;
+				break;
+			}
+		}
+		anchorRef.current = topRowId ? { id: topRowId, offset: topRowOffset } : null;
+	}, []);
+
+	const restoreAnchor = useCallback(() => {
+		const el = listRef.current;
+		const anchor = anchorRef.current;
+		anchorRef.current = null;
+		if (!el || !anchor) return;
+		const row = el.querySelector<HTMLElement>('[data-session-row="' + anchor.id + '"]');
+		if (row) el.scrollTop = Math.max(0, row.offsetTop - anchor.offset);
+	}, []);
+
 	const load = useCallback(async (q?: string) => {
 		try {
 			setError("");
@@ -94,14 +129,20 @@ export default function BranchTreeExplorer({ workspace }: { workspace?: string |
 			// The tree arrives in depth-first order, oldest first; the history tab
 			// displays newest sessions at the top, so reverse it for display.
 			setNodes([...list].reverse());
+			if (keepScrollRef.current) {
+				keepScrollRef.current = false;
+				// Reconcile after React commits the new rows.
+				requestAnimationFrame(restoreAnchor);
+			}
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		} finally {
 			setLoading(false);
 		}
-	}, []);
+	}, [restoreAnchor]);
 
 	// Reload on workspace change (data is workspace-scoped).
+	// Explicit reload — no anchor capture; the list legitimately resets.
 	useEffect(() => {
 		setLoading(true);
 		setNodes([]);
@@ -109,7 +150,9 @@ export default function BranchTreeExplorer({ workspace }: { workspace?: string |
 		void load();
 	}, [workspace, load]);
 
-	// Auto-refresh when the session tree changes.
+	// Auto-refresh when the session tree changes. The reload keeps the scroll
+	// anchored so output arriving mid-browse never yanks the viewport onto
+	// other (typically older) conversations.
 	useEffect(() => {
 		let cancelled = false;
 		let timer: ReturnType<typeof setTimeout> | null = null;
@@ -122,7 +165,12 @@ export default function BranchTreeExplorer({ workspace }: { workspace?: string |
 				typed.type === "SESSION_JUMPED"
 			) {
 				if (timer) clearTimeout(timer);
-				timer = setTimeout(() => { if (!cancelled) void load(); }, 250);
+				timer = setTimeout(() => {
+					if (cancelled) return;
+					captureAnchor();
+					keepScrollRef.current = true;
+					void load();
+				}, 250);
 			}
 		});
 		return () => {
@@ -130,9 +178,9 @@ export default function BranchTreeExplorer({ workspace }: { workspace?: string |
 			if (timer) clearTimeout(timer);
 			unlistenP.then((fn) => fn()).catch(() => {});
 		};
-	}, [workspace, load]);
+	}, [workspace, load, captureAnchor]);
 
-	// Debounced search.
+	// Debounced search — user-initiated, so the viewport resets like a fresh list.
 	useEffect(() => {
 		const timer = setTimeout(() => void load(query || undefined), 200);
 		return () => clearTimeout(timer);
@@ -234,7 +282,7 @@ export default function BranchTreeExplorer({ workspace }: { workspace?: string |
 			{error && <div className="px-3 pt-2"><ErrorBanner message={error} /></div>}
 
 			{/* Tree */}
-			<div className="min-h-0 flex-1 overflow-y-auto py-1">
+			<div ref={listRef} className="min-h-0 flex-1 overflow-y-auto py-1">
 				{loading ? (
 					<div className="flex h-full items-center justify-center"><Spinner /></div>
 				) : nodes.length === 0 ? (
@@ -250,6 +298,7 @@ export default function BranchTreeExplorer({ workspace }: { workspace?: string |
 								<TreeRow
 									key={node.session_id}
 									node={node}
+									rowId={node.session_id}
 									selected={selected === node.session_id}
 									onSelect={() => void onActivate(node)}
 									onContextMenu={(x, y) => setMenu({ node, x, y })}
@@ -367,11 +416,14 @@ function buildHistoryMenuItems(
 
 function TreeRow({
 	node,
+	rowId,
 	selected,
 	onSelect,
 	onContextMenu,
 }: {
 	node: RpcHistoryTreeNode;
+	/** Stable per-row identity for scroll-anchor restoration across reloads. */
+	rowId: string;
 	selected: boolean;
 	onSelect: () => void;
 	onContextMenu: (x: number, y: number) => void;
@@ -384,6 +436,7 @@ function TreeRow({
 	return (
 		<li>
 			<div
+				data-session-row={rowId}
 				onClick={onSelect}
 				onContextMenu={(e) => { e.preventDefault(); onContextMenu(e.clientX, e.clientY); }}
 				title={`${label}\n${node.session_id}\n${formatTime(node.created_at)}${node.snippet ? `\n\n${node.snippet}` : ""}`}
