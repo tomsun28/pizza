@@ -48,10 +48,6 @@ npm install -g @tomsun28/pizza
 pizza
 ```
 
-Pizza checks for updates automatically (npm registry for npm installs, GitHub
-releases for binaries/desktop) and tells you how to upgrade; see
-[docs/update-check.md](./docs/update-check.md) or run `pizza update`.
-
 ---
 
 ![desktop](./resources/pizza-desktop-white.png)
