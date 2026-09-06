@@ -1680,10 +1680,23 @@ pub async fn list_workspaces() -> Result<Vec<Value>, String> {
 			Ok(s) => s,
 			Err(_) => continue,
 		};
-		let meta: Value = match serde_json::from_str(&raw) {
+		let mut meta: Value = match serde_json::from_str(&raw) {
 			Ok(v) => v,
 			Err(_) => continue,
 		};
+		// Annotate whether the project directory still exists. Entries whose
+		// directory was removed externally (deleted repo, cleaned /tmp, …)
+		// must not be switchable — the UI offers "remove stale entry"
+		// instead, so clicking the row never reaches init_sidecar's
+		// "Directory does not exist" error.
+		let dir_exists = meta
+			.get("cwd")
+			.and_then(|v| v.as_str())
+			.map(|cwd| std::path::Path::new(cwd).is_dir())
+			.unwrap_or(false);
+		if let Some(obj) = meta.as_object_mut() {
+			obj.insert("dir_exists".to_string(), Value::Bool(dir_exists));
+		}
 		workspaces.push(meta);
 	}
 

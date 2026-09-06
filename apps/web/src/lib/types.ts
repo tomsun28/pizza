@@ -54,4 +54,7 @@ export interface WorkspaceMeta {
 	cwd: string;
 	created_at: number;
 	last_accessed_at: number;
+	/** False when the project directory was removed externally — the entry is
+	 * stale: switching must be blocked, deletion offered instead. */
+	dir_exists?: boolean;
 }

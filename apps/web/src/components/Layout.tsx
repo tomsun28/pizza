@@ -131,9 +131,12 @@ export default function Layout({
 
 	const handleDelete = useCallback(async (ws: WorkspaceMeta) => {
 		const name = basename(ws.cwd);
+		const stale = ws.dir_exists === false;
 		const ok = await confirmDialog({
 			title: t("common.delete"),
-			message: t("layout.deleteWorkspaceConfirm", { name }),
+			message: stale
+				? t("layout.deleteStaleWorkspaceConfirm", { name, cwd: ws.cwd })
+				: t("layout.deleteWorkspaceConfirm", { name }),
 			confirmLabel: t("common.delete"),
 			danger: true,
 		});
@@ -313,14 +316,25 @@ export default function Layout({
 								return (
 									<div key={ws.workspace_id} className="group relative">
 										<div
-											onClick={() => onSelectWorkspace?.(ws.cwd)}
+											onClick={() => {
+												// Stale entry (project directory removed externally):
+												// switching would only produce init_sidecar's
+												// "Directory does not exist" error — offer removal
+												// instead of a doomed switch.
+												if (ws.dir_exists === false) {
+													void handleDelete(ws);
+													return;
+												}
+												onSelectWorkspace?.(ws.cwd);
+											}}
 											className={cn(
 												"flex w-full cursor-pointer items-center gap-2 rounded-md border px-2 py-1.5 text-left transition-colors",
 												isActive
 													? "border-accent bg-accent/10"
 													: "border-transparent hover:bg-surface-2",
+												ws.dir_exists === false && "opacity-60",
 											)}
-											title={ws.cwd}
+											title={ws.dir_exists === false ? t("layout.staleWorkspaceTitle", { cwd: ws.cwd }) : ws.cwd}
 										>
 											{isPinned ? (
 												<Pin className={cn("h-3.5 w-3.5 shrink-0", isActive ? "text-accent" : "text-muted")} />
@@ -335,6 +349,9 @@ export default function Layout({
 													)}
 												>
 													{basename(ws.cwd)}
+													{ws.dir_exists === false && (
+														<span className="ml-1 text-[10px] uppercase tracking-wide text-warning">{t("layout.staleWorkspaceBadge")}</span>
+													)}
 												</div>
 												<div className="truncate font-mono text-[10px] text-muted">
 													{timeAgo(ws.last_accessed_at, t)}

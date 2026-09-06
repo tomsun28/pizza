@@ -6,9 +6,10 @@ import Layout from "@/components/Layout";
 import AgentView from "@/views/AgentView";
 import SettingsView from "@/views/SettingsView";
 import PluginsView from "@/views/PluginsView";
-import { subscribeSidecarExit, subscribeEvents, initSidecar, sendCommandAwait, listWorkspaces, restartSidecar, stopMainAgent, setRpcWorkspace } from "@/lib/transport";
+import { subscribeSidecarExit, subscribeEvents, initSidecar, sendCommandAwait, listWorkspaces, deleteWorkspace, restartSidecar, stopMainAgent, setRpcWorkspace } from "@/lib/transport";
 import { BrandIcon } from "@/components/BrandIcon";
 import { ConfirmHost } from "@/components/ui";
+import { alertDialog } from "@/lib/confirm";
 import type { RpcSessionState, WorkspaceMeta } from "@/lib/types";
 import { isTauri } from "@/lib/utils";
 
@@ -47,6 +48,11 @@ function AppInner() {
 	// its history (re)load on this epoch instead of waitingForWorkspace /
 	// sidecarReady so silent reconnects never reload the conversation.
 	const [switchEpoch, setSwitchEpoch] = useState(0);
+	// A workspace whose project directory vanished (deleted repo, cleaned
+	// /tmp, …). Switching into it can only fail; instead of the full-screen
+	// initError (which hides the sidebar and every recovery path), keep the
+	// UI on the current workspace and offer to remove the stale entry.
+	const [staleCwd, setStaleCwd] = useState<string | null>(null);
 	// Rate limit for silent gateway reconnects (channel drops can arrive in
 	// bursts when the desktop re-attaches several workspaces).
 	const lastReconnectAtRef = useRef(0);
@@ -134,11 +140,15 @@ function AppInner() {
 			setRpcWorkspace(previousRpcWorkspace);
 			const msg = e instanceof Error ? e.message : String(e);
 			console.error("[init] FAILED:", msg);
-			setInitError(msg);
-			// If the directory doesn't exist, refresh workspaces so the stale
-			// entry can be cleaned up by the user.
 			if (msg.includes("does not exist")) {
+				// Missing project directory: NOT a fatal init error — the
+				// previous workspace is still healthy. Offer removing the
+				// stale entry and stay where we are.
+				setInitError(null);
+				setStaleCwd(expandedForRpc ?? cwd ?? null);
 				refreshWorkspaces();
+			} else {
+				setInitError(msg);
 			}
 		} finally {
 			if (isCurrent()) setWaitingForWorkspace(false);
@@ -411,6 +421,53 @@ function AppInner() {
 		if (new URLSearchParams(location.search).get("setup") !== "true") return;
 		navigate("/", { replace: true });
 	}, [state, navigate, location.pathname, location.search]);
+
+	// Stale-workspace dialog: directory missing → offer removal, keep UI.
+	if (staleCwd) {
+		const staleWs = workspaces.find((ws) => ws.cwd === staleCwd);
+		const removeStale = async () => {
+			if (staleWs) {
+				try {
+					await deleteWorkspace(staleWs.workspace_id);
+				} catch (err) {
+					console.error("[workspace] delete stale error:", err);
+					void alertDialog({ title: t("common.error"), message: err instanceof Error ? err.message : String(err), danger: true });
+				}
+			}
+			setStaleCwd(null);
+			refreshWorkspaces();
+		};
+		const p = (
+			<PxlKitSurfaceProvider surface="pixel">
+				<ConfirmHost />
+				<div className="flex h-screen items-center justify-center bg-bg">
+					<div className="flex max-w-lg flex-col items-center gap-4 px-6 text-center">
+						<BrandIcon size={48} className="text-warning" />
+						<p className="font-mono text-sm text-fg">{t("agent.staleWorkspaceTitle")}</p>
+						<p className="max-w-md break-all text-sm leading-6 text-muted">{staleCwd}</p>
+						<p className="text-xs text-muted">{t("agent.staleWorkspaceBody")}</p>
+						<div className="mt-2 flex flex-wrap justify-center gap-3">
+							<button
+								type="button"
+								onClick={() => void removeStale()}
+								className="rounded-md border border-danger bg-danger/15 px-4 py-2 text-sm text-danger transition-colors hover:bg-danger/25"
+							>
+								{t("agent.staleWorkspaceRemove")}
+							</button>
+							<button
+								type="button"
+								onClick={() => setStaleCwd(null)}
+								className="rounded-md border border-border bg-surface-2 px-4 py-2 text-sm text-fg transition-colors hover:bg-surface-2/80"
+							>
+								{t("common.cancel")}
+							</button>
+						</div>
+					</div>
+				</div>
+			</PxlKitSurfaceProvider>
+		);
+		return p;
+	}
 
 	if (initError) {
 		const mainAgentConflict = isMainAgentConflictError(initError);
