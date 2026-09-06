@@ -391,11 +391,24 @@ pub fn ensure_gateway(
 					{
 						std::thread::sleep(std::time::Duration::from_secs(1));
 					}
-					// Graceful shutdown, then clean any residual socket file.
+					if status_has_busy_agents(&status) {
+						// Agents are STILL busy after the drain window.
+						// Replacing the gateway now would kill mid-turn tasks;
+						// keep the older daemon instead. Version skew is
+						// harmless — the channel protocol is version-tolerant
+						// and the next idle start will upgrade it.
+						return Ok(());
+					}
+					// Graceful shutdown. If the gateway refuses to die, REUSE
+					// it — force-unlinking a live gateway's socket orphans the
+					// daemon (and its pooled agents) while a fresh gateway
+					// spawns besides it; duplicate gateways then fight over
+					// workspaces (observed: reconnect storms in the desktop).
 					let stopped = shutdown_gateway(socket_path);
 					if !stopped {
-						clean_stale_socket(socket_path);
+						return Ok(());
 					}
+					clean_stale_socket(socket_path);
 					// Fall through to spawn a fresh gateway.
 				} else {
 					return Ok(());
@@ -403,14 +416,29 @@ pub fn ensure_gateway(
 			} else {
 				// Status query failed but ping succeeded — the gateway is
 				// likely an old version that doesn't report `version` in
-				// status. Treat it as outdated and replace it.
+				// status. Try to replace it, but never force-unlink a live
+				// socket (see the version-mismatch branch above).
 				let stopped = shutdown_gateway(socket_path);
 				if !stopped {
-					clean_stale_socket(socket_path);
+					return Ok(());
 				}
+				clean_stale_socket(socket_path);
 			}
 		} else {
 			return Ok(());
+		}
+	}
+	// Not ready — but "no answer" may be a transient miss (a busy gateway
+	// fanning out agent events can miss a 2s ping). Re-probe briefly before
+	// deciding the daemon is gone: spawning beside a live gateway is how
+	// duplicate daemons (and duplicate agents) accumulate.
+	{
+		let probe_deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+		while std::time::Instant::now() < probe_deadline {
+			std::thread::sleep(std::time::Duration::from_millis(300));
+			if gateway_ready(socket_path) {
+				return Ok(());
+			}
 		}
 	}
 	let env_pizza = std::env::var("PIZZA_BIN").ok();

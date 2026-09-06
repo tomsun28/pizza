@@ -4046,7 +4046,7 @@ export class InteractiveMode {
   showUpdateNotice(notice: string): void {
     this.chatContainer.addChild(new Spacer(1));
     this.chatContainer.addChild(
-      new Text(theme.fg("success", `New version available: ${notice}`), 1, 0),
+      new Text(theme.fg("success", notice), 1, 0),
     );
     this.ui.requestRender();
   }

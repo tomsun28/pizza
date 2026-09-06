@@ -493,6 +493,13 @@ export async function main(args: string[], options?: MainOptions) {
 		server.on("listening", (sock: string) => {
 			console.error(chalk.green(`🍕 Gateway listening on ${sock}`));
 		});
+		// Another live gateway already owns the socket (probed on EADDRINUSE):
+		// a duplicate must never steal the path. Exit cleanly — the incumbent
+		// keeps serving, and ensure_gateway's readiness check finds it.
+		server.on("duplicate", (sock: string) => {
+			console.error(chalk.yellow(`Gateway: another gateway already owns ${sock}; exiting duplicate.`));
+			process.exit(0);
+		});
 		server.on("error", (error: Error) => {
 			console.error(chalk.red(`Gateway error: ${error.message}`));
 		});

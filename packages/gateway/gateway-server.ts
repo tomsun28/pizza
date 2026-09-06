@@ -16,7 +16,7 @@
  * by the gateway lifecycle module (like `ssh-agent`).
  */
 
-import { type Server, type Socket, createServer } from "node:net";
+import { type Server, type Socket, connect, createServer } from "node:net";
 import { chmodSync, unlinkSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import { platform } from "node:os";
@@ -188,6 +188,11 @@ export interface GatewayServerEvents {
 	agentClosed: (cwd: string) => void;
 	/** Server started listening. */
 	listening: (socketPath: string) => void;
+	/**
+	 * Another live gateway already owns the socket — this instance must not
+	 * run. Emitted instead of `listening`; a duplicate daemon exits.
+	 */
+	duplicate: (socketPath: string) => void;
 	/** An unexpected error. */
 	error: (error: Error) => void;
 }
@@ -1003,6 +1008,35 @@ function nextMessageId(): string {
 		if (healthTimer) { clearInterval(healthTimer); healthTimer = undefined; }
 	}
 
+	/**
+	 * Probe whether the process currently bound to the gateway socket is
+	 * alive and answering. Used on EADDRINUSE: the classic "stale socket
+	 * from a crashed daemon" is only ONE cause — another is a LIVE gateway
+	 * that was merely slow to answer (busy fanning out agent events).
+	 * Unlinking the path out from under a live daemon orphans it (nobody can
+	 * connect to its inode anymore) while a second daemon spawns besides it —
+	 * the source of desktop reconnect storms and duplicated agents.
+	 */
+	const isSocketOwnerAlive = (): Promise<boolean> =>
+		new Promise((resolve) => {
+			let settled = false;
+			const finish = (alive: boolean) => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				socket.destroy();
+				resolve(alive);
+			};
+			const timer = setTimeout(() => finish(false), 3000);
+			const socket = connect(socketPath);
+			socket.on("connect", () => {
+				// A listener accepted us: ping it — any reply proves liveness.
+				socket.write(serializeJsonLine({ type: "ping" }));
+			});
+			socket.on("data", () => finish(true));
+			socket.on("error", () => finish(false));
+		});
+
 	async function start(): Promise<void> {
 		if (server) return;
 		server = createServer(handleConnection);
@@ -1010,17 +1044,32 @@ function nextMessageId(): string {
 		await new Promise<void>((resolve, reject) => {
 			const onError = (error: NodeJS.ErrnoException) => {
 				if (error.code === "EADDRINUSE" && platform() !== "win32") {
-					// Stale socket from a crashed daemon — remove and retry once.
-					try {
-						unlinkSync(socketPath);
-					} catch {
-						/* ignore */
-					}
-					server!.listen(socketPath, () => {
-						server!.off("error", onError);
-						restrictSocketPermissions(socketPath);
-						emitter.emit("listening", socketPath as never);
-						resolve();
+					// Another process holds the socket. It is stale ONLY if it
+					// is provably dead (no ping answer). A live gateway must
+					// keep the path — this process exits instead of stealing
+					// it, which would orphan the running daemon and duplicate
+					// the agent pool.
+					void isSocketOwnerAlive().then((alive) => {
+						if (alive) {
+							// A live gateway owns the socket — this process is a
+							// duplicate spawned by a race or a transient ping
+							// miss. NEVER steal the path; report and let the
+							// caller exit.
+							emitter.emit("duplicate", socketPath as never);
+							resolve(); // start() resolved, but we never listened
+							return;
+						}
+						try {
+							unlinkSync(socketPath);
+						} catch {
+							/* ignore */
+						}
+						server!.listen(socketPath, () => {
+							server!.off("error", onError);
+							restrictSocketPermissions(socketPath);
+							emitter.emit("listening", socketPath as never);
+							resolve();
+						});
 					});
 					return;
 				}

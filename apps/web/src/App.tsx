@@ -37,6 +37,19 @@ function AppInner() {
 	// to avoid crash loops.
 	const restartCountRef = useRef(0);
 	const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	// Monotonic generation for startWithWorkspace runs. When two switches
+	// overlap (user click racing an auto-restart), only the NEWEST run may
+	// commit its workspace — an older in-flight run finishing later would
+	// otherwise overwrite the user's choice (observed as "jumps back to the
+	// previous workspace").
+	const initGenerationRef = useRef(0);
+	// Bumped once per COMPLETED user-visible workspace switch. AgentView keys
+	// its history (re)load on this epoch instead of waitingForWorkspace /
+	// sidecarReady so silent reconnects never reload the conversation.
+	const [switchEpoch, setSwitchEpoch] = useState(0);
+	// Rate limit for silent gateway reconnects (channel drops can arrive in
+	// bursts when the desktop re-attaches several workspaces).
+	const lastReconnectAtRef = useRef(0);
 
 	const refreshWorkspaces = useCallback(async () => {
 		if (!isTauri()) return;
@@ -55,6 +68,11 @@ function AppInner() {
 
 	const [initError, setInitError] = useState<string | null>(null);
 	const startWithWorkspace = useCallback(async (cwd?: string) => {
+		const generation = ++initGenerationRef.current;
+		// True while this run is still the newest switch. A newer switch
+		// (user click, newer restart) must be able to supersede this one —
+		// a stale run must not touch UI state after being superseded.
+		const isCurrent = () => initGenerationRef.current === generation;
 		setWaitingForWorkspace(true);
 		setInitError(null);
 		// Snapshot the expected response source BEFORE initSidecar: the Rust
@@ -81,6 +99,7 @@ function AppInner() {
 		setState(null);
 		try {
 			const initialState = await initSidecar(cwd);
+			if (!isCurrent()) return; // superseded by a newer switch
 			// Expand ~ to home directory so workspace state matches Rust side.
 			let expandedCwd = cwd;
 			if (cwd && cwd.startsWith("~") && isTauri()) {
@@ -105,7 +124,10 @@ function AppInner() {
 					.catch(() => {});
 			}
 			refreshWorkspaces();
+			// Completed a user-visible switch → let AgentView (re)load history.
+			setSwitchEpoch((e) => e + 1);
 		} catch (e) {
+			if (!isCurrent()) return; // superseded — leave state to the newer run
 			// initSidecar failed — the bridge is still routing to the previous
 			// workspace, so restore its snapshot as the expected response source.
 			lastRpcWorkspaceRef.current = previousRpcWorkspace;
@@ -119,9 +141,48 @@ function AppInner() {
 				refreshWorkspaces();
 			}
 		} finally {
-			setWaitingForWorkspace(false);
+			if (isCurrent()) setWaitingForWorkspace(false);
 		}
 	}, [refreshWorkspaces]);
+
+	/**
+	 * Silently re-attach the current workspace after a gateway channel drop.
+	 * The pooled agent is still alive server-side — only the channel died —
+	 * so this must NOT flip sidecarReady / waitingForWorkspace / switchEpoch:
+	 * doing so unmounts the conversation and reloads history, which the user
+	 * sees as the app "flickering" and the session "re-initializing". Falls
+	 * back to a full restart (with error surface) when re-attaching fails.
+	 */
+	const reconnectWorkspace = useCallback(async (cwd: string) => {
+		lastReconnectAtRef.current = Date.now();
+		try {
+			const stateFrame = await initSidecar(cwd);
+			if (stateFrame && Object.keys(stateFrame).length > 0) {
+				setState(stateFrame as unknown as RpcSessionState);
+			} else {
+				void sendCommandAwait<RpcSessionState>({ type: "get_state" }, 5000)
+					.then((r) => setState(r.data ?? null))
+					.catch(() => {});
+			}
+			// Channel is healthy again — allow future silent reconnects.
+			restartCountRef.current = 0;
+		} catch (e) {
+			console.warn("[sidecar] silent reconnect failed, falling back to full restart:", e);
+			restartCountRef.current += 1;
+			setSidecarReady(false);
+			if (restartCountRef.current <= 3) {
+				const delay = Math.min(1000 * Math.pow(2, restartCountRef.current - 1), 4000);
+				if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+				restartTimerRef.current = setTimeout(() => {
+					restartTimerRef.current = null;
+					setWorkspace((current) => {
+						if (current === cwd) void startWithWorkspace(cwd);
+						return current;
+					});
+				}, delay);
+			}
+		}
+	}, [startWithWorkspace]);
 
 	useEffect(() => {
 		if (sidecarStartedRef.current) return;
@@ -196,8 +257,25 @@ function AppInner() {
 		const unlisteners: Array<() => void> = [];
 		(async () => {
 			const un1 = await subscribeSidecarExit((code, cwd) => {
-				// Only mark as not ready if the exited sidecar was the active one.
+				// Only act if the exited sidecar was the active one.
 				if (!cwd || cwd === workspace) {
+					if (code === null) {
+						// Gateway channel drop (bridge emits code:null) — the
+						// agent process is still alive in the gateway pool.
+						// Re-attach silently; no UI reset, no history reload.
+						// Rate-limited: drops can arrive in bursts.
+						const since = Date.now() - lastReconnectAtRef.current;
+						const delay = since < 2000 ? 2000 - since : 0;
+						if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+						restartTimerRef.current = setTimeout(() => {
+							restartTimerRef.current = null;
+							setWorkspace((current) => {
+								if (current === (cwd ?? workspace)) void reconnectWorkspace(current!);
+								return current;
+							});
+						}, delay);
+						return;
+					}
 					setSidecarExitCode(code);
 					setSidecarReady(false);
 					// Auto-restart with exponential backoff (max 3 attempts).
@@ -270,7 +348,7 @@ function AppInner() {
 			cancelled = true;
 			unlisteners.forEach((fn) => fn());
 		};
-	}, [sidecarReady, workspace, startWithWorkspace]);
+	}, [sidecarReady, workspace, startWithWorkspace, reconnectWorkspace]);
 
 	// Reset the auto-restart counter once a sidecar is healthy, and clean up
 	// any pending restart timer on unmount.
@@ -443,6 +521,7 @@ function AppInner() {
 				workspace={workspace}
 				workspaces={workspaces}
 				waitingForWorkspace={waitingForWorkspace}
+				switchEpoch={switchEpoch}
 				onRefreshState={refreshState}
 								/>
 							}

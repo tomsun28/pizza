@@ -3799,6 +3799,7 @@ pub async fn list_auth_options(app: AppHandle) -> Result<Vec<AuthLoginOption>, S
 /// is reported through `error` so the UI can show a friendly message instead
 /// of an error dialog.
 #[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AppUpdateInfo {
 	/// Version of the running app (from tauri.conf.json).
 	pub current_version: String,
