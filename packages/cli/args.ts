@@ -237,6 +237,8 @@ ${chalk.bold("Commands:")}
   ${APP_NAME} plugin update [source]     Update installed extensions (skips pinned sources)
   ${APP_NAME} plugin list                List installed extensions from settings
   ${APP_NAME} config                    Open TUI to enable/disable package resources
+  ${APP_NAME} update [check]            Check npm registry / GitHub releases for a newer version
+  ${APP_NAME} update enable|disable     Turn the automatic startup update check on or off
   ${APP_NAME} plugin --help             Show help for plugin commands
 
 ${chalk.bold("Options:")}

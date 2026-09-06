@@ -4038,6 +4038,19 @@ export class InteractiveMode {
     this.ui.requestRender();
   }
 
+  /**
+   * Show a non-fatal update-available notice in the chat stream. Called
+   * asynchronously after startup by the auto update check in main.ts — must
+   * never throw or block.
+   */
+  showUpdateNotice(notice: string): void {
+    this.chatContainer.addChild(new Spacer(1));
+    this.chatContainer.addChild(
+      new Text(theme.fg("success", `New version available: ${notice}`), 1, 0),
+    );
+    this.ui.requestRender();
+  }
+
   private getAllQueuedMessages(): { steering: string[]; followUp: string[] } {
     return {
       steering: [

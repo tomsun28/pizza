@@ -48,6 +48,10 @@ npm install -g @tomsun28/pizza
 pizza
 ```
 
+Pizza 会自动检测新版本（npm 安装走 npm registry，二进制/桌面版走 GitHub
+releases）并提示升级方式；详见 [docs/update-check.md](./docs/update-check.md)
+或运行 `pizza update`。
+
 ---
 
 ![desktop](./resources/pizza-desktop-white.png)

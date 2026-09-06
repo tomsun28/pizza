@@ -3787,3 +3787,217 @@ pub async fn list_auth_options(app: AppHandle) -> Result<Vec<AuthLoginOption>, S
 	}
 	Ok(options)
 }
+
+// ─── App update check ───────────────────────────────────────────────────────
+//
+// The desktop app is distributed via GitHub release installers
+// (Pizza_<version>_<platform>_<arch>.<ext>). There is no in-app self-update
+// (the installers are not updater-signed), so "update" means: detect a newer
+// release and point the user at the download page / platform asset.
+
+/// Result of a desktop update check. Always succeeds — a failed network probe
+/// is reported through `error` so the UI can show a friendly message instead
+/// of an error dialog.
+#[derive(serde::Serialize)]
+pub struct AppUpdateInfo {
+	/// Version of the running app (from tauri.conf.json).
+	pub current_version: String,
+	/// Latest published release version, when the registry was reachable.
+	pub latest_version: Option<String>,
+	pub update_available: bool,
+	/// Browser URL of the latest release page.
+	pub release_url: String,
+	/// Direct download URL for the platform installer, when one exists.
+	pub download_url: Option<String>,
+	/// When the latest release was published (ISO 8601).
+	pub published_at: Option<String>,
+	/// Network/parse error, if any.
+	pub error: Option<String>,
+}
+
+/// Parse a `x.y.z` version tag (with optional leading `v`) into numbers.
+/// Returns None when the tag isn't a plain semver triple.
+fn parse_version_tag(tag: &str) -> Option<(u64, u64, u64)> {
+	let cleaned = tag.trim().trim_start_matches('v');
+	let mut parts = cleaned.split('.');
+	let major = parts.next()?.parse().ok()?;
+	let minor = parts.next()?.parse().ok()?;
+	let patch = parts.next()?.parse().ok()?;
+	if parts.next().is_some() {
+		return None;
+	}
+	Some((major, minor, patch))
+}
+
+/// Compare two semver triples: -1 / 0 / 1.
+fn compare_versions(a: (u64, u64, u64), b: (u64, u64, u64)) -> i32 {
+	if a.0 != b.0 {
+		return if a.0 > b.0 { 1 } else { -1 };
+	}
+	if a.1 != b.1 {
+		return if a.1 > b.1 { 1 } else { -1 };
+	}
+	if a.2 != b.2 {
+		return if a.2 > b.2 { 1 } else { -1 };
+	}
+	0
+}
+
+/// Pick the installer asset for the current platform from the release's asset
+/// list, following the `Pizza_<version>_<platform>_<arch>.<ext>` naming scheme
+/// produced by the desktop release workflow.
+fn pick_platform_asset(asset_urls: &[String]) -> Option<String> {
+	let (os, arch): (&str, &str) = if cfg!(target_os = "macos") {
+		("macos", if cfg!(target_arch = "aarch64") { "arm64" } else { "x64" })
+	} else if cfg!(target_os = "windows") {
+		("windows", "x64")
+	} else {
+		("linux", "x64")
+	};
+	let platform = format!("_{os}_{arch}");
+	// Preference order per platform: dmg / nsis setup / deb. msi and rpm are
+	// kept as fallbacks for users on those ecosystems.
+	let suffixes: &[&str] = if cfg!(target_os = "macos") {
+		&[".dmg"]
+	} else if cfg!(target_os = "windows") {
+		&["-setup.exe", ".exe", ".msi"]
+	} else {
+		&[".deb", ".rpm", ".AppImage"]
+	};
+	for suffix in suffixes {
+		if let Some(url) = asset_urls
+			.iter()
+			.find(|u| u.contains(&platform) && u.ends_with(suffix))
+		{
+			return Some(url.clone());
+		}
+	}
+	None
+}
+
+const GITHUB_LATEST_RELEASE_API: &str =
+	"https://api.github.com/repos/tomsun28/pizza/releases/latest";
+const GITHUB_RELEASES_PAGE: &str = "https://github.com/tomsun28/pizza/releases/latest";
+
+/// Check GitHub releases for a newer desktop app version. Never fails hard —
+/// network problems come back as `AppUpdateInfo.error` so the caller can
+/// render them inline.
+#[tauri::command]
+pub async fn check_app_update(app: AppHandle) -> Result<AppUpdateInfo, String> {
+	let current_version = app.package_info().version.to_string();
+
+	let client = reqwest::Client::builder()
+		.user_agent(format!("pizza-desktop/{current_version}"))
+		.timeout(Duration::from_secs(8))
+		.build()
+		.map_err(|e| format!("HTTP client error: {e}"))?;
+
+	let res = match client
+		.get(GITHUB_LATEST_RELEASE_API)
+		.header("Accept", "application/json")
+		.send()
+		.await
+	{
+		Ok(res) => res,
+		Err(e) => {
+			return Ok(AppUpdateInfo {
+				current_version,
+				latest_version: None,
+				update_available: false,
+				release_url: GITHUB_RELEASES_PAGE.to_string(),
+				download_url: None,
+				published_at: None,
+				error: Some(format!("network error: {e}")),
+			});
+		}
+	};
+
+	if !res.status().is_success() {
+		return Ok(AppUpdateInfo {
+			current_version,
+			latest_version: None,
+			update_available: false,
+			release_url: GITHUB_RELEASES_PAGE.to_string(),
+			download_url: None,
+			published_at: None,
+			error: Some(format!("GitHub returned status {}", res.status())),
+		});
+	}
+
+	let body: serde_json::Value = match res.json().await {
+		Ok(v) => v,
+		Err(e) => {
+			return Ok(AppUpdateInfo {
+				current_version,
+				latest_version: None,
+				update_available: false,
+				release_url: GITHUB_RELEASES_PAGE.to_string(),
+				download_url: None,
+				published_at: None,
+				error: Some(format!("bad JSON: {e}")),
+			});
+		}
+	};
+
+	let tag = body
+		.get("tag_name")
+		.and_then(|v| v.as_str())
+		.unwrap_or_default()
+		.to_string();
+	if tag.is_empty() {
+		return Ok(AppUpdateInfo {
+			current_version,
+			latest_version: None,
+			update_available: false,
+			release_url: GITHUB_RELEASES_PAGE.to_string(),
+			download_url: None,
+			published_at: None,
+			error: Some("release has no tag_name".to_string()),
+		});
+	}
+
+	let release_url = body
+		.get("html_url")
+		.and_then(|v| v.as_str())
+		.unwrap_or(GITHUB_RELEASES_PAGE)
+		.to_string();
+	let published_at = body
+		.get("published_at")
+		.and_then(|v| v.as_str())
+		.map(|s| s.to_string());
+	let asset_urls: Vec<String> = body
+		.get("assets")
+		.and_then(|v| v.as_array())
+		.map(|assets| {
+			assets
+				.iter()
+				.filter_map(|a| {
+					a.get("browser_download_url")
+						.and_then(|v| v.as_str())
+						.map(|s| s.to_string())
+				})
+				.collect()
+		})
+		.unwrap_or_default();
+
+	let latest_version = tag.trim_start_matches('v').to_string();
+	let update_available = match (
+		parse_version_tag(&tag),
+		parse_version_tag(&current_version),
+	) {
+		(Some(latest), Some(current)) => compare_versions(latest, current) > 0,
+		// Unparseable versions: fall back to a plain inequality so a surprise
+		// tag format still surfaces an update.
+		_ => latest_version != current_version,
+	};
+
+	Ok(AppUpdateInfo {
+		current_version,
+		latest_version: Some(latest_version),
+		update_available,
+		release_url,
+		download_url: pick_platform_asset(&asset_urls),
+		published_at,
+		error: None,
+	})
+}

@@ -49,6 +49,7 @@ fn main() {
 			bridge::oauth_login_answer,
 			bridge::oauth_login_cancel,
 			bridge::list_auth_options,
+			bridge::check_app_update,
 		])
 		.setup(|app| {
 			bridge::start_scheduler_sidecar_guard(app.handle().clone());

@@ -7,6 +7,7 @@ import { StatusDot, ThemeToggle, Button, MoreMenu, type ContextMenuItem } from "
 import { confirmDialog, alertDialog } from "@/lib/confirm";
 import { BrandIcon } from "./BrandIcon";
 import WorkspacePane from "./WorkspacePane";
+import { UpdateBanner } from "./UpdateBanner";
 import { cn, isTauri, hasMacTrafficLights } from "@/lib/utils";
 import { deleteWorkspace, revealWorkspace } from "@/lib/transport";
 import { clearComposerDraft } from "@/lib/composer-drafts";
@@ -416,10 +417,13 @@ export default function Layout({
 				</div>
 			</aside>
 
-			<main className="min-w-0 flex-1 overflow-hidden">
+			<main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+				<UpdateBanner />
+				<div className="min-h-0 flex-1">
 				<WorkspacePane workspace={workspace} ptyPort={state?.ptyPort}>
 					<Outlet context={{ sidebarCollapsed: collapsed } satisfies LayoutOutletContext} />
 				</WorkspacePane>
+				</div>
 			</main>
 		</div>
 	);

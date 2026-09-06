@@ -7,6 +7,7 @@ import { Z } from "@/lib/z-index";
 import { cn } from "@/lib/utils";
 import { PixelSelect, PixelCombobox } from "@pxlkit/ui-kit";
 import {
+	openExternal,
 	listProviders,
 	setProviderApiKey,
 	type AuthLoginEvent,
@@ -20,6 +21,8 @@ import {
 	saveCustomProvider,
 	testCustomProvider,
 	removeCustomProvider,
+	checkAppUpdate,
+	type AppUpdateInfo,
 	getSchedulerPolicy,
 	setSchedulerPolicy,
 	getApprovalPolicy,
@@ -30,7 +33,7 @@ import {
 	type ProviderInfo,
 } from "@/lib/transport";
 import type { RpcSessionState } from "@/lib/types";
-import { Key, Trash2, Eye, EyeOff, Plus, ArrowLeft, ArrowRight } from "lucide-react";
+import { Key, Trash2, Eye, EyeOff, Plus, ArrowLeft, ArrowRight, Download, RefreshCw } from "lucide-react";
 import type { LayoutOutletContext } from "@/components/Layout";
 import {
 	SUPPORTED_LANGUAGES,
@@ -143,6 +146,22 @@ function GeneralTab() {
 		void i18n.changeLanguage(lang);
 	}, [i18n]);
 
+	// Desktop app update check (GitHub releases). Auto-runs once on mount;
+	// "Check now" re-queries on demand.
+	const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
+	const [updateChecking, setUpdateChecking] = useState(false);
+	const runUpdateCheck = useCallback(async () => {
+		setUpdateChecking(true);
+		try {
+			setUpdateInfo(await checkAppUpdate());
+		} finally {
+			setUpdateChecking(false);
+		}
+	}, []);
+	useEffect(() => {
+		void runUpdateCheck();
+	}, [runUpdateCheck]);
+
 	const languageOptions = SUPPORTED_LANGUAGES.map((lang) => ({
 		value: lang,
 		label: t(`language.${lang}`),
@@ -163,6 +182,55 @@ function GeneralTab() {
 						/>
 					</div>
 				</Row>
+			</Card>
+
+			<Card>
+				<div className="mb-2 text-sm font-medium text-fg">{t("settings.update.title")}</div>
+				<Row label={t("settings.update.currentVersion")}>
+					{updateInfo ? updateInfo.currentVersion : t("settings.update.checking")}
+				</Row>
+				<Row label={t("settings.update.latestVersion")}>
+					{updateInfo === null
+						? t("settings.update.checking")
+						: updateInfo.error
+							? t("settings.update.checkFailed")
+							: (updateInfo.latestVersion ?? "—")}
+				</Row>
+				<Row label={t("settings.update.status")}>
+					{updateInfo === null ? (
+						t("settings.update.checking")
+					) : updateInfo.error ? (
+						<span className="text-warning">{t("settings.update.checkFailed")}</span>
+					) : updateInfo.updateAvailable ? (
+						<span className="text-accent">
+							{t("settings.update.available", { version: updateInfo.latestVersion })}
+						</span>
+					) : (
+						<span className="text-success">{t("settings.update.upToDate")}</span>
+					)}
+				</Row>
+				<div className="flex items-center gap-2 pt-3">
+					<Button
+						variant="soft"
+						size="sm"
+						iconLeft={<RefreshCw className={cn("h-3.5 w-3.5", updateChecking && "animate-spin")} />}
+						disabled={updateChecking}
+						onClick={() => void runUpdateCheck()}
+					>
+						{t("settings.update.checkNow")}
+					</Button>
+					{updateInfo?.updateAvailable && (
+						<Button
+							size="sm"
+							iconLeft={<Download className="h-3.5 w-3.5" />}
+							onClick={() => {
+								if (updateInfo.releaseUrl) void openExternal(updateInfo.releaseUrl);
+							}}
+						>
+							{t("settings.update.download", { version: updateInfo.latestVersion })}
+						</Button>
+					)}
+				</div>
 			</Card>
 
 			<Card>

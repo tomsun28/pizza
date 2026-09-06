@@ -590,6 +590,18 @@
       "bannerBody": "在下方选择一个服务商并填入 API key,即可开始使用。当前没有配置任何服务商,所以助理暂时不可用。",
       "restarting": "正在重启 sidecar 以应用新 key..."
     },
+    "update": {
+      "title": "关于与更新",
+      "currentVersion": "当前版本",
+      "latestVersion": "最新版本",
+      "status": "状态",
+      "checking": "检查中…",
+      "checkFailed": "检查失败（离线？）",
+      "available": "有可用更新：{{version}}",
+      "upToDate": "已是最新版本",
+      "checkNow": "检查更新",
+      "download": "下载 {{version}}"
+    },
     "scheduler": {
       "title": "定时任务默认设置",
       "subtitle": "新建任务时使用这些默认值(每个任务可单独覆盖)",
@@ -597,6 +609,10 @@
       "defaultConcurrency": "默认并发策略",
       "defaultTimeout": "默认超时"
     }
+  },
+  "update": {
+    "banner": "Pizza 新版本（{{version}}）已发布。",
+    "download": "下载"
   },
   "language": {
     "en": "English",

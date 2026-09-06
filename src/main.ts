@@ -42,6 +42,8 @@ import { InteractiveMode, runGuiModeWithFacade, runPrintModeWithFacade, runRpcMo
 import { initTheme, stopThemeWatcher } from "../packages/tui/theme/theme.js";
 import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.js";
 import { handleBuiltinCommand } from "./builtin-cli.js";
+import { handleUpdateCommand } from "./update-cli.js";
+import { checkForUpdate, formatUpdateNotice } from "./core/update-checker.js";
 import { handleGatewayCommand } from "./gateway-cli.js";
 import { handleAuthCommand } from "./auth-cli.js";
 import { isLocalPath } from "./utils/paths.js";
@@ -446,6 +448,9 @@ export async function main(args: string[], options?: MainOptions) {
 	if (await handleConfigCommand(args)) {
 		return;
 	}
+	if (await handleUpdateCommand(args)) {
+		return;
+	}
 
 	if (await handleGatewayCommand(args)) {
 		return;
@@ -746,6 +751,16 @@ export async function main(args: string[], options?: MainOptions) {
 				await new Promise<void>((resolve) => process.stderr.once("drain", resolve));
 			}
 			return;
+		}
+
+		// Fire-and-forget update check: hits the registry matching the install
+		// channel (npm / GitHub releases), cached 24h, fully silent on failure.
+		if (settingsManager.getAutoUpdateCheck()) {
+			void checkForUpdate().then((result) => {
+				if (result?.updateAvailable) {
+					interactiveMode.showUpdateNotice(formatUpdateNotice(result));
+				}
+			});
 		}
 
 		printTimings();

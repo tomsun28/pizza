@@ -1074,3 +1074,30 @@ function waitForResponse<T>(id: string, timeoutMs: number): Promise<RpcResponse<
 		responseWaiters.set(id, { resolve: resolve as (r: RpcResponse) => void, reject, timer });
 	});
 }
+
+// --- App update check (Tauri only) ---------------------------------------
+
+/** Desktop update info from the Rust bridge (GitHub releases based). */
+export interface AppUpdateInfo {
+	currentVersion: string;
+	latestVersion: string | null;
+	updateAvailable: boolean;
+	releaseUrl: string;
+	downloadUrl: string | null;
+	publishedAt: string | null;
+	error: string | null;
+}
+
+/**
+ * Check GitHub releases for a newer desktop app version. Returns null outside
+ * Tauri or when the bridge command is unavailable.
+ */
+export async function checkAppUpdate(): Promise<AppUpdateInfo | null> {
+	if (!isTauri()) return null;
+	try {
+		const core = await import("@tauri-apps/api/core");
+		return await core.invoke<AppUpdateInfo>("check_app_update");
+	} catch {
+		return null;
+	}
+}

@@ -590,6 +590,18 @@
       "bannerBody": "Pick a provider below and enter your API key to start. No providers are configured yet, so the agent is currently unavailable.",
       "restarting": "Restarting the sidecar to pick up the new key..."
     },
+    "update": {
+      "title": "About & Updates",
+      "currentVersion": "Current version",
+      "latestVersion": "Latest release",
+      "status": "Status",
+      "checking": "Checking…",
+      "checkFailed": "Check failed (offline?)",
+      "available": "Update available: {{version}}",
+      "upToDate": "Up to date",
+      "checkNow": "Check for updates",
+      "download": "Download {{version}}"
+    },
     "scheduler": {
       "title": "Scheduled task defaults",
       "subtitle": "Applied to new tasks. Each task can override per-task.",
@@ -597,6 +609,10 @@
       "defaultConcurrency": "Default concurrency policy",
       "defaultTimeout": "Default per-run timeout"
     }
+  },
+  "update": {
+    "banner": "A new version of Pizza ({{version}}) is available.",
+    "download": "Download"
   },
   "language": {
     "en": "English",
