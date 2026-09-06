@@ -85,19 +85,25 @@ describe("pickDesktopAsset", () => {
 	];
 
 	it("picks the darwin arm64 dmg", () => {
-		expect(pickDesktopAsset(assets, "darwin")).toContain("macos_arm64.dmg");
+		// arch is injected so the assertion holds on any host (CI runs x64).
+		expect(pickDesktopAsset(assets, "darwin", "arm64")).toContain("macos_arm64.dmg");
+	});
+
+	it("picks the darwin x64 dmg when arm64 is absent", () => {
+		const noArm64 = assets.filter((u) => !u.includes("_arm64"));
+		expect(pickDesktopAsset(noArm64, "darwin", "arm64")).toContain("macos_x64.dmg");
 	});
 
 	it("picks the windows setup exe", () => {
-		expect(pickDesktopAsset(assets, "win32")).toContain("windows_x64-setup.exe");
+		expect(pickDesktopAsset(assets, "win32", "x64")).toContain("windows_x64-setup.exe");
 	});
 
 	it("picks the linux deb", () => {
-		expect(pickDesktopAsset(assets, "linux")).toContain("linux_x64.deb");
+		expect(pickDesktopAsset(assets, "linux", "x64")).toContain("linux_x64.deb");
 	});
 
 	it("returns undefined when nothing matches", () => {
-		expect(pickDesktopAsset([], "darwin")).toBeUndefined();
+		expect(pickDesktopAsset([], "darwin", "arm64")).toBeUndefined();
 	});
 });
 

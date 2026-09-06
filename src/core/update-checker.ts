@@ -215,22 +215,22 @@ export async function fetchLatestGitHubRelease(
 export function pickDesktopAsset(
 	assetUrls: string[],
 	platform: NodeJS.Platform = process.platform,
+	arch: NodeJS.Architecture = process.arch,
 ): string | undefined {
 	const os = platform === "darwin" ? "macos" : platform === "win32" ? "windows" : "linux";
-	// Current arch first; fall back to x64 because the release workflow only
-	// publishes windows/linux builds for x64 (an arm64 Mac checking what a
-	// linux box would download still gets a usable asset).
-	const archs = process.arch === "arm64" ? ["arm64", "x64"] : ["x64", "arm64"];
-	const arch = process.arch === "arm64" ? "arm64" : "x64";
+	// Requested arch first; fall back to the other one because the release
+	// workflow does not publish every platform/arch combination (windows and
+	// linux are x64-only today, so an arm64 host still gets a usable asset).
+	const archs: NodeJS.Architecture[] = arch === "arm64" ? ["arm64", "x64"] : ["x64", "arm64"];
 	const suffixes =
 		platform === "darwin"
 			? [".dmg"]
 			: platform === "win32"
 				? ["-setup.exe", ".exe", ".msi"]
 				: [".deb", ".rpm", ".AppImage"];
-	for (const arch of archs) {
+	for (const candidate of archs) {
 		for (const suffix of suffixes) {
-			const match = assetUrls.find((u) => u.includes(`_${os}_${arch}`) && u.endsWith(suffix));
+			const match = assetUrls.find((u) => u.includes(`_${os}_${candidate}`) && u.endsWith(suffix));
 			if (match) return match;
 		}
 	}

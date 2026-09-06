@@ -3862,7 +3862,14 @@ fn compare_versions(a: (u64, u64, u64), b: (u64, u64, u64)) -> i32 {
 /// produced by the desktop release workflow.
 fn pick_platform_asset(asset_urls: &[String]) -> Option<String> {
 	let (os, arch): (&str, &str) = if cfg!(target_os = "macos") {
-		("macos", if cfg!(target_arch = "aarch64") { "arm64" } else { "x64" })
+		(
+			"macos",
+			if cfg!(target_arch = "aarch64") {
+				"arm64"
+			} else {
+				"x64"
+			},
+		)
 	} else if cfg!(target_os = "windows") {
 		("windows", "x64")
 	} else {
@@ -3995,10 +4002,7 @@ pub async fn check_app_update(app: AppHandle) -> Result<AppUpdateInfo, String> {
 		.unwrap_or_default();
 
 	let latest_version = tag.trim_start_matches('v').to_string();
-	let update_available = match (
-		parse_version_tag(&tag),
-		parse_version_tag(&current_version),
-	) {
+	let update_available = match (parse_version_tag(&tag), parse_version_tag(&current_version)) {
 		(Some(latest), Some(current)) => compare_versions(latest, current) > 0,
 		// Unparseable versions: fall back to a plain inequality so a surprise
 		// tag format still surfaces an update.
