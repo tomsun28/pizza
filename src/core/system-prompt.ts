@@ -49,7 +49,7 @@ function isGitRepository(cwd: string): boolean {
 /**
  * Build the environment section to append at the end of the system prompt
  */
-function buildEnvironmentSection(cwd: string): string {
+function buildEnvironmentSection(cwd: string, eventStorePath?: string): string {
 	const resolvedCwd = cwd.replace(/\\/g, "/");
 	const isGit = isGitRepository(cwd);
 	const platform = process.platform;
@@ -73,7 +73,8 @@ You are being called in the following environment:
  - Platform: ${platform}
  - Shell: ${shell}
  - Node.js version: ${nodeVersion}
- - OS version: ${osVersion}
+ - OS version: ${osVersion}${eventStorePath ? `
+ - Workspace event store (session history/logs; browse via _history_tree): ${eventStorePath}` : ""}
 `;
 }
 
@@ -90,6 +91,9 @@ export interface BuildSystemPromptOptions {
 	appendSystemPrompt?: string;
 	/** Working directory. */
 	cwd: string;
+	/** SQLite event-store path for this workspace (session history/logs),
+	 * surfaced in the Environment section so the model can find its own logs. */
+	eventStorePath?: string;
 	/** Pre-loaded context files. */
 	contextFiles?: Array<{ path: string; content: string }>;
 	/** Pre-loaded skills. */
@@ -199,7 +203,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		prompt += `\nCurrent working directory: ${promptCwd}`;
 
 		// Add environment section at the end
-		prompt += buildEnvironmentSection(resolvedCwd);
+		prompt += buildEnvironmentSection(resolvedCwd, options.eventStorePath);
 
 		return prompt;
 	}
@@ -373,7 +377,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	}
 
 	// Add environment section at the end
-	prompt += buildEnvironmentSection(resolvedCwd);
+	prompt += buildEnvironmentSection(resolvedCwd, options.eventStorePath);
 
 	return prompt;
 }

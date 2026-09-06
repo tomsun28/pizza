@@ -21,6 +21,9 @@ import { createTellToolDefinition } from "../tools/tell.js";
 
 export interface PromptBuilderDeps {
 	cwd: string;
+	/** SQLite event-store path for this workspace — surfaced in the system
+	 * prompt Environment section so the model can find its own history/logs. */
+	eventStorePath?: string;
 	agentDir: string | undefined;
 	mainDir: string;
 	memoryDir: string | undefined;
@@ -98,6 +101,7 @@ export function createPromptBuilder(deps: PromptBuilderDeps): PromptBuilder {
 
 		let prompt = buildSystemPrompt({
 			cwd,
+			eventStorePath: deps.eventStorePath,
 			skills: resourceLoader.getSkills().skills,
 			contextFiles: resourceLoader.getAgentsFiles().agentsFiles,
 			customPrompt: resourceLoader.getSystemPrompt(),

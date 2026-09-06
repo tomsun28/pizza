@@ -101,4 +101,30 @@ describe("buildSystemPrompt", () => {
 			expect(prompt.match(/- Use dynamic_tool for summaries\./g)).toHaveLength(1);
 		});
 	});
+	describe("event store path", () => {
+		test("surfaces the event store path in the Environment section when provided", () => {
+			const prompt = buildSystemPrompt({
+				selectedTools: [],
+				contextFiles: [],
+				skills: [],
+				cwd: process.cwd(),
+				eventStorePath: "~/.pizza/agent/workspaces/ws_abc123/events.sqlite",
+			});
+
+			expect(prompt).toContain(
+				"- Workspace event store (session history/logs; browse via _history_tree): ~/.pizza/agent/workspaces/ws_abc123/events.sqlite",
+			);
+		});
+
+		test("omits the event store line when no path is provided", () => {
+			const prompt = buildSystemPrompt({
+				selectedTools: [],
+				contextFiles: [],
+				skills: [],
+				cwd: process.cwd(),
+			});
+
+			expect(prompt).not.toContain("Workspace event store");
+		});
+	});
 });

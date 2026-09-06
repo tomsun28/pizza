@@ -48,6 +48,7 @@ import { createLlmClientFactory } from "./facade/llm-client.js";
 import { resolveInitialModel } from "./facade/model-resolution.js";
 import { createPromptBuilder } from "./facade/prompt-builder.js";
 import { setupEventStore } from "./facade/store-setup.js";
+import { getEventDatabasePath } from "./event-store/workspace.js";
 import { ToolAssembly } from "./facade/tool-assembly.js";
 
 export { streamWithAdaptiveThinkingFallback } from "./facade/adaptive-thinking.js";
@@ -211,7 +212,7 @@ export async function createSessionFacade(
 	const modelFallbackMessage = resolution.modelFallbackMessage;
 
 	// ── EventStore + projection SessionManager ─────────────────────────────
-	const { store, sessionManager, workspaceLock } = setupEventStore({
+	const { store, sessionManager, workspaceLock, workspaceId } = setupEventStore({
 		cwd,
 		agentDir,
 		rawAgentDir: options.agentDir,
@@ -222,6 +223,10 @@ export async function createSessionFacade(
 		threadId: options.threadId,
 		forkFrom: options.forkFrom,
 	});
+	const eventStorePath =
+		options.storagePath === ":memory:"
+			? undefined
+			: (options.storagePath ?? getEventDatabasePath(workspaceId, agentDir));
 
 	// ── Extensions + tools ─────────────────────────────────────────────────
 	const projection = sessionManager.getActiveSession();
@@ -300,6 +305,7 @@ export async function createSessionFacade(
 
 	const buildPrompt = createPromptBuilder({
 		cwd,
+		eventStorePath,
 		agentDir,
 		mainDir,
 		memoryDir,
