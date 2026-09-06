@@ -432,7 +432,10 @@ export default function AgentView({
 
 	// Load history from sidecar when sidecar becomes ready or workspace changes.
 	useEffect(() => {
-		if (!sidecarReady || !workspace) return;
+		// Don't issue workspace-scoped RPCs while a workspace switch is in
+		// flight — the routing target hasn't switched yet and the response
+		// would be the previous workspace's data.
+		if (!sidecarReady || !workspace || waitingForWorkspace) return;
 		// If we already have cached items for this workspace (from a previous
 		// visit this session), don't reload — the save/restore mechanism already
 		// restored them. Otherwise, fetch from sidecar.
@@ -468,7 +471,7 @@ export default function AgentView({
 			}
 		})();
 		return () => { cancelled = true; };
-	}, [sidecarReady, workspace, refreshQueued]);
+	}, [sidecarReady, workspace, waitingForWorkspace, refreshQueued]);
 
 	// Track whether the user is pinned to the bottom of the scroll area.
 	// Key insight: we must distinguish "user actively scrolled up" from

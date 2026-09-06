@@ -71,6 +71,20 @@ export interface RpcResponse<T = unknown> {
 	data?: T;
 }
 
+/**
+ * Workspace every rpc_command should be routed to (and whose responses are
+ * accepted). Set by the app BEFORE initSidecar is invoked so responses that
+ * come back from the PREVIOUS workspace during a switch are dropped instead
+ * of being adopted by the new workspace's view (the Rust bridge routes by an
+ * "active" pointer that only flips mid-init — see init_sidecar_via_gateway).
+ */
+let rpcWorkspace: string | null = null;
+
+/** Snapshot the expected source workspace for outgoing rpc commands. */
+export function setRpcWorkspace(cwd: string | null): void {
+	rpcWorkspace = cwd;
+}
+
 export async function sendCommandAwait<T = unknown>(
 	command: Record<string, unknown>,
 	timeoutMs = 15000,
@@ -81,6 +95,12 @@ export async function sendCommandAwait<T = unknown>(
 		// immediately, even if the sidecar responds before sendCommandRaw resolves.
 		const id = (command.id as string) ?? crypto.randomUUID();
 		command.id = id;
+		// Responses are tagged by the Rust bridge with the workspace that
+		// actually answered (`_cwd`). Capture the expected workspace at issue
+		// time: during a workspace switch an in-flight command may be routed to
+		// the previous workspace — its response must NOT be adopted here, or the
+		// new workspace's view displays the old workspace's data.
+		const expectedCwd = rpcWorkspace;
 		return new Promise((resolve, reject) => {
 			// Tear the listener down exactly once. Several paths race to finish a
 			// request (matching response, timeout, send error) and, on page
@@ -102,6 +122,11 @@ export async function sendCommandAwait<T = unknown>(
 			listen<RpcResponse<T>>("rpc_response", (event) => {
 				const payload = event.payload;
 				if (payload.id !== id) return;
+				// Stale-source guard: a response from a workspace other than the
+				// one active when this command was issued is dropped; the correct
+				// response (or the timeout) resolves this promise instead.
+				const responseCwd = (payload as RpcResponse<T> & { _cwd?: string })._cwd;
+				if (expectedCwd && responseCwd && responseCwd !== expectedCwd) return;
 				finish(() => {
 					if (payload.success) {
 						resolve(payload);

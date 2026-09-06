@@ -6,7 +6,7 @@ import Layout from "@/components/Layout";
 import AgentView from "@/views/AgentView";
 import SettingsView from "@/views/SettingsView";
 import PluginsView from "@/views/PluginsView";
-import { subscribeSidecarExit, subscribeEvents, initSidecar, sendCommandAwait, listWorkspaces, restartSidecar, stopMainAgent } from "@/lib/transport";
+import { subscribeSidecarExit, subscribeEvents, initSidecar, sendCommandAwait, listWorkspaces, restartSidecar, stopMainAgent, setRpcWorkspace } from "@/lib/transport";
 import { BrandIcon } from "@/components/BrandIcon";
 import { ConfirmHost } from "@/components/ui";
 import type { RpcSessionState, WorkspaceMeta } from "@/lib/types";
@@ -29,6 +29,9 @@ function AppInner() {
 	const [streamingCwds, setStreamingCwds] = useState<Set<string>>(new Set());
 	const [recoveringMainAgent, setRecoveringMainAgent] = useState(false);
 	const sidecarStartedRef = useRef(false);
+	// Last workspace set as the expected rpc response source; used to restore
+	// the snapshot when a workspace switch fails mid-flight.
+	const lastRpcWorkspaceRef = useRef<string | null>(null);
 	// Auto-restart bookkeeping: per-cwd restart count, reset to 0 when a
 	// sidecar becomes ready. Capped at 3 attempts with exponential backoff
 	// to avoid crash loops.
@@ -54,6 +57,23 @@ function AppInner() {
 	const startWithWorkspace = useCallback(async (cwd?: string) => {
 		setWaitingForWorkspace(true);
 		setInitError(null);
+		// Snapshot the expected response source BEFORE initSidecar: the Rust
+		// bridge flips its active-workspace pointer mid-init, so commands issued
+		// in between (e.g. AgentView remounting on navigate("/")) can be routed
+		// to the previous workspace. sendCommandAwait drops responses whose
+		// `_cwd` tag doesn't match this snapshot, so a switch can never render
+		// the old workspace's history/state under the new workspace.
+		let expandedForRpc = cwd;
+		if (cwd && cwd.startsWith("~") && isTauri()) {
+			try {
+				const { homeDir } = await import("@tauri-apps/api/path");
+				const home = await homeDir();
+				expandedForRpc = cwd.replace("~", home);
+			} catch { /* keep ~ */ }
+		}
+		const previousRpcWorkspace = lastRpcWorkspaceRef.current;
+		lastRpcWorkspaceRef.current = expandedForRpc ?? null;
+		setRpcWorkspace(lastRpcWorkspaceRef.current);
 		// Clear stale state from the previous workspace so the UI doesn't
 		// briefly render the old workspace's session/streaming/model info
 		// while the new sidecar's get_state response is in-flight (gateway
@@ -86,6 +106,10 @@ function AppInner() {
 			}
 			refreshWorkspaces();
 		} catch (e) {
+			// initSidecar failed — the bridge is still routing to the previous
+			// workspace, so restore its snapshot as the expected response source.
+			lastRpcWorkspaceRef.current = previousRpcWorkspace;
+			setRpcWorkspace(previousRpcWorkspace);
 			const msg = e instanceof Error ? e.message : String(e);
 			console.error("[init] FAILED:", msg);
 			setInitError(msg);
