@@ -55,6 +55,12 @@ import {
   helperInstalled,
   macosHelperAppPath,
 } from "./cli-command.js";
+import {
+  getMacosPermissionStatus,
+  recheckMacosPermissions,
+  registerMacosPermissionPrompts,
+} from "./backend/platform/macos/permissions.js";
+import type { PermissionKind, PermissionStatus } from "./backend/permissions.js";
 
 /** Upstream package version the vendored backend was taken from. */
 export const UPSTREAM_VERSION = "0.5.1";
@@ -67,6 +73,122 @@ export const COMPUTER_USE_EXTENSION_ID = "computer-use";
 const UPSTREAM_PACKAGE = "@injaneity/pi-computer-use";
 
 /** Stable id used in `settings.disabledBuiltinExtensions`. */
+
+function formatPermissionState(status: PermissionStatus) {
+  const permissions = [
+    {
+      kind: "accessibility" as const,
+      label: "Accessibility",
+      description: "Allows Pizza Computer Use to read controls and click, type, or press keys in approved app windows.",
+      granted: status.accessibility,
+      required: true,
+    },
+    {
+      kind: "screenRecording" as const,
+      label: "Screen Recording",
+      description: "Allows Pizza Computer Use to read screenshots of approved windows when vision is enabled.",
+      granted: status.screenRecording,
+      required: true,
+    },
+  ];
+  return {
+    supported: true,
+    installed: true,
+    ready: permissions.every((permission) => permission.granted),
+    helperPath: macosHelperAppPath(),
+    permissions,
+  };
+}
+
+function unavailablePermissionState(message: string, installed = helperInstalled()) {
+  return {
+    supported: process.platform === "darwin",
+    installed,
+    ready: false,
+    helperPath: process.platform === "darwin" ? macosHelperAppPath() : undefined,
+    message,
+    permissions: [
+      {
+        kind: "accessibility" as const,
+        label: "Accessibility",
+        description: "Allows Pizza Computer Use to read controls and click, type, or press keys in approved app windows.",
+        granted: false,
+        required: true,
+      },
+      {
+        kind: "screenRecording" as const,
+        label: "Screen Recording",
+        description: "Allows Pizza Computer Use to read screenshots of approved windows when vision is enabled.",
+        granted: false,
+        required: true,
+      },
+    ],
+  };
+}
+
+function macosPermissionPaneUrl(kind: PermissionKind): string {
+  switch (kind) {
+    case "accessibility":
+      return "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+    case "screenRecording":
+      return "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
+  }
+}
+
+export async function getComputerUsePermissionStatus(_cwd: string) {
+  if (process.platform !== "darwin") {
+    return unavailablePermissionState(`computer-use permissions are currently managed only on macOS (detected ${process.platform}).`, false);
+  }
+  if (!helperInstalled()) {
+    return unavailablePermissionState("Install computer-use before granting macOS permissions.", false);
+  }
+  try {
+    return formatPermissionState(await getMacosPermissionStatus());
+  } catch (error) {
+    return unavailablePermissionState(error instanceof Error ? error.message : String(error), true);
+  }
+}
+
+export async function recheckComputerUsePermissionStatus(_cwd: string) {
+  if (process.platform !== "darwin") {
+    return unavailablePermissionState(`computer-use permissions are currently managed only on macOS (detected ${process.platform}).`, false);
+  }
+  if (!helperInstalled()) {
+    return unavailablePermissionState("Install computer-use before granting macOS permissions.", false);
+  }
+  try {
+    return formatPermissionState(await recheckMacosPermissions());
+  } catch (error) {
+    return unavailablePermissionState(error instanceof Error ? error.message : String(error), true);
+  }
+}
+
+export async function openComputerUsePermissionSettings(_cwd: string, kind: PermissionKind) {
+  if (process.platform !== "darwin") {
+    return {
+      ok: false,
+      message: `computer-use permissions are currently managed only on macOS (detected ${process.platform}).`,
+    };
+  }
+  if (!helperInstalled()) {
+    return { ok: false, message: "Install computer-use before opening permission settings." };
+  }
+  try {
+    const opened = await execCommand("/usr/bin/open", [macosPermissionPaneUrl(kind)], os.homedir(), { timeout: 5_000 });
+    if (opened.code !== 0) {
+      return {
+        ok: false,
+        message: opened.stderr || opened.stdout || "Failed to open macOS permission settings.",
+      };
+    }
+    return { ok: true, message: "Opened macOS permission settings." };
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
 
 function notify(
   ctx: ExtensionCommandContext,
@@ -148,7 +270,13 @@ export async function runComputerUseInstall(
     process.execPath,
     [setupScript, "--runtime"],
     pkgDir,
-    { timeout: 300_000 },
+    {
+      timeout: 300_000,
+      env: {
+        ELECTRON_RUN_AS_NODE: "1",
+        BUN_BE_BUN: "1",
+      },
+    },
   );
   if (setup.code !== 0) {
     return {
@@ -164,9 +292,26 @@ export async function runComputerUseInstall(
       message: `Helper installed, but rebranding failed: ${rebrand.message}`,
     };
   }
+  let permissionMessage =
+    "Open the permission buttons in Plugins → Extensions if Accessibility or Screen Recording is still missing.";
+  try {
+    await registerMacosPermissionPrompts();
+    const permissions = await getComputerUsePermissionStatus(_cwd);
+    if (permissions.ready) {
+      permissionMessage = "All macOS permissions are ready.";
+    } else {
+      const missing = permissions.permissions
+        .filter((permission) => permission.required && !permission.granted)
+        .map((permission) => permission.label)
+        .join(" and ");
+      permissionMessage = `${missing} still needs to be enabled in macOS System Settings.`;
+    }
+  } catch (error) {
+    permissionMessage = `Helper installed, but permission setup needs attention: ${error instanceof Error ? error.message : String(error)}`;
+  }
   return {
     ok: true,
-    message: `Helper installed at ${macosHelperAppPath()}. Grant Accessibility + Screen Recording when prompted (System Settings → Privacy & Security), then run /computer status.`,
+    message: `Helper installed at ${macosHelperAppPath()}. ${permissionMessage}`,
   };
 }
 

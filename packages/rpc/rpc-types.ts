@@ -19,6 +19,9 @@ export {
 	type RpcForensicEvent,
 	type RpcSkillInfo,
 	type RpcExtensionInfo,
+	type RpcExtensionPermissionKind,
+	type RpcExtensionPermissionInfo,
+	type RpcExtensionPermissionState,
 	classifyLine,
 	PROTOCOL_VERSION,
 } from "@tomsun28/pizza-protocol";

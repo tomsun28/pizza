@@ -440,7 +440,24 @@
       "installing": "Installing…",
       "uninstall": "Uninstall",
       "uninstalling": "Uninstalling…",
-      "actions": "Actions"
+      "actions": "Actions",
+      "permissions": {
+        "checking": "Checking desktop automation permissions",
+        "checkSlow": "Permission detection is taking longer than expected. This usually means macOS permissions are still off; open Settings, enable them, then recheck.",
+        "ready": "Desktop automation permissions are ready",
+        "needsSetup": "macOS permissions still need setup",
+        "accessibility": "Accessibility",
+        "accessibilityHint": "Lets Pizza read controls and perform clicks, typing, and key presses.",
+        "screenRecording": "Screen Recording",
+        "screenRecordingHint": "Lets Pizza read screenshots of approved windows so the model can see them.",
+        "detecting": "Checking",
+        "granted": "On",
+        "missing": "Off",
+        "openSettings": "Open Settings",
+        "recheck": "Recheck",
+        "afterOpen": "After Settings opens, enable pizza-computer-use or Pizza Computer Use, then return here and recheck.",
+        "stillMissing": "Some permissions are still off. Enable the missing toggles, then recheck."
+      }
     },
     "mcp": {
       "comingSoon": "MCP servers coming soon",

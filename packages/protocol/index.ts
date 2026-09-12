@@ -293,6 +293,9 @@ export type RpcCommand =
 	| { id?: string; type: "set_extension_enabled"; extensionId: string; enabled: boolean }
 	| { id?: string; type: "install_extension"; extensionId: string }
 	| { id?: string; type: "uninstall_extension"; extensionId: string }
+	| { id?: string; type: "get_extension_permissions"; extensionId: string }
+	| { id?: string; type: "recheck_extension_permissions"; extensionId: string }
+	| { id?: string; type: "open_extension_permission_settings"; extensionId: string; permissionKind: RpcExtensionPermissionKind }
 	// Provider auth: reload in-memory credentials from auth.json (used after the
 	// desktop bridge edits auth.json out-of-band, so a model switch picks up the
 	// new key instead of the stale in-memory cache or an env-var fallback).
@@ -399,6 +402,26 @@ export interface RpcExtensionInfo {
 	commandCount: number;
 	/** Number of dynamic built-in cli commands this extension registers (e.g. computer-use's `_computer_use`). */
 	builtinCommandCount: number;
+}
+
+export type RpcExtensionPermissionKind = "accessibility" | "screenRecording";
+
+export interface RpcExtensionPermissionInfo {
+	kind: RpcExtensionPermissionKind;
+	label: string;
+	description: string;
+	granted: boolean;
+	required: boolean;
+}
+
+export interface RpcExtensionPermissionState {
+	extensionId: string;
+	supported: boolean;
+	installed: boolean;
+	ready: boolean;
+	helperPath?: string;
+	message?: string;
+	permissions: RpcExtensionPermissionInfo[];
 }
 
 // ============================================================================
@@ -538,6 +561,9 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "set_extension_enabled"; success: true; data: { id: string; enabled: boolean; requiresReload: boolean } }
 	| { id?: string; type: "response"; command: "install_extension"; success: true; data: { extensionId: string; ok: boolean; message: string; installed: boolean } }
 	| { id?: string; type: "response"; command: "uninstall_extension"; success: true; data: { extensionId: string; ok: boolean; message: string; installed: boolean } }
+	| { id?: string; type: "response"; command: "get_extension_permissions"; success: true; data: RpcExtensionPermissionState }
+	| { id?: string; type: "response"; command: "recheck_extension_permissions"; success: true; data: RpcExtensionPermissionState }
+	| { id?: string; type: "response"; command: "open_extension_permission_settings"; success: true; data: { extensionId: string; ok: boolean; message: string } }
 	| { id?: string; type: "response"; command: "reload_providers"; success: true; data: { providers: string[] } }
 	| { id?: string; type: "response"; command: "get_scheduler_policy"; success: true; data: { policy: SchedulerPolicy } }
 	| { id?: string; type: "response"; command: "set_scheduler_policy"; success: true; data: { policy: SchedulerPolicy } }

@@ -16,6 +16,8 @@ export interface ExecOptions {
 	timeout?: number;
 	/** Working directory */
 	cwd?: string;
+	/** Extra environment variables to merge into the login-shell environment. */
+	env?: NodeJS.ProcessEnv;
 }
 
 /**
@@ -48,7 +50,7 @@ export async function execCommand(
 			// context with a minimal PATH (e.g. macOS launchd/Tauri). Without this,
 			// `npm install -g agent-browser` fails with exit 1 because `npm` is not
 			// on the inherited PATH.
-			env: getShellEnv(),
+			env: { ...getShellEnv(), ...options?.env },
 		});
 
 		let stdout = "";

@@ -404,6 +404,44 @@ async function runExtensionLifecycle(
 	return task;
 }
 
+async function getExtensionPermissions(
+	facade: SessionFacade,
+	extensionId: string,
+	recheck = false,
+) {
+	const lc = getBuiltinExtensionLifecycle(extensionId);
+	const fn = recheck ? lc?.recheckPermissions : lc?.checkPermissions;
+	if (!fn) {
+		return {
+			extensionId,
+			supported: false,
+			installed: false,
+			ready: false,
+			message: "This extension does not expose OS permission status.",
+			permissions: [],
+		};
+	}
+	const cwd = facade.runtime?.cwd ?? process.cwd();
+	const result = await fn(cwd);
+	return { extensionId, ...result };
+}
+
+async function openExtensionPermissionSettings(
+	facade: SessionFacade,
+	extensionId: string,
+	permissionKind: "accessibility" | "screenRecording",
+) {
+	const lc = getBuiltinExtensionLifecycle(extensionId);
+	if (!lc?.openPermissionSettings) {
+		return {
+			ok: false,
+			message: "This extension does not support opening OS permission settings.",
+		};
+	}
+	const cwd = facade.runtime?.cwd ?? process.cwd();
+	return lc.openPermissionSettings(cwd, permissionKind);
+}
+
 
 /** One-line preview of a message for history_tree view / diff. */
 function formatMessagePreview(message: AgentMessage): string | undefined {
@@ -1278,6 +1316,35 @@ export async function runRpcModeWithFacade(
 				ok: result.ok,
 				message: result.message,
 				installed: result.installed,
+			});
+		}
+
+		case "get_extension_permissions": {
+			return success(
+				id,
+				"get_extension_permissions",
+				await getExtensionPermissions(facade, command.extensionId),
+			);
+		}
+
+		case "recheck_extension_permissions": {
+			return success(
+				id,
+				"recheck_extension_permissions",
+				await getExtensionPermissions(facade, command.extensionId, true),
+			);
+		}
+
+		case "open_extension_permission_settings": {
+			const result = await openExtensionPermissionSettings(
+				facade,
+				command.extensionId,
+				command.permissionKind,
+			);
+			return success(id, "open_extension_permission_settings", {
+				extensionId: command.extensionId,
+				ok: result.ok,
+				message: result.message,
 			});
 		}
 

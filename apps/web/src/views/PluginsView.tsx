@@ -13,12 +13,17 @@ import {
 	setExtensionEnabled,
 	installExtension,
 	uninstallExtension,
+	getExtensionPermissions,
+	recheckExtensionPermissions,
+	openExtensionPermissionSettings,
 	openExternal,
 	type SkillsShSkill,
 	type SkillInfo,
 	type ExtensionInfo,
+	type ExtensionPermissionKind,
+	type ExtensionPermissionState,
 } from "@/lib/transport";
-import { ArrowLeft, ArrowRight, Puzzle, BookOpen, Radio, Settings, Plus, Search, ExternalLink, Download, Power, Trash2, Hash, Send } from "lucide-react";
+import { ArrowLeft, ArrowRight, Puzzle, BookOpen, Radio, Settings, Plus, Search, ExternalLink, Download, Power, Trash2, Hash, Send, Monitor, MousePointer2, RotateCw, ShieldCheck } from "lucide-react";
 import type { LayoutOutletContext } from "@/components/Layout";
 import { ChannelDialog } from "@/components/ChannelDialog";
 import {
@@ -30,6 +35,8 @@ import {
 } from "@/lib/channels";
 
 type PluginTab = "skills" | "extensions" | "channels";
+const PERMISSION_CHECK_SLOW_MS = 6000;
+const PERMISSION_OPEN_BUSY_MS = 3000;
 
 interface TabConfig {
 	key: PluginTab;
@@ -41,6 +48,21 @@ const TABS: TabConfig[] = [
 	{ key: "extensions", icon: Puzzle },
 	{ key: "channels", icon: Radio },
 ];
+
+function permissionFallbackState(
+	extensionId: string,
+	installed: boolean,
+	message: string,
+): ExtensionPermissionState {
+	return {
+		extensionId,
+		supported: true,
+		installed,
+		ready: false,
+		message,
+		permissions: [],
+	};
+}
 
 function InstalledSkillCard({
 	skill,
@@ -317,12 +339,20 @@ function ExtensionCard({
 	onToggle,
 	onInstall,
 	onUninstall,
+	permissionState,
+	permissionBusy,
+	onOpenPermission,
+	onRecheckPermissions,
 	busyId,
 }: {
 	ext: ExtensionInfo;
 	onToggle: (id: string, enabled: boolean) => void;
 	onInstall: (id: string) => void;
 	onUninstall: (id: string) => void;
+	permissionState?: ExtensionPermissionState;
+	permissionBusy: string | null;
+	onOpenPermission: (id: string, kind: ExtensionPermissionKind) => void;
+	onRecheckPermissions: (id: string) => void;
 	busyId: string | null;
 }) {
 	const { t } = useTranslation();
@@ -334,6 +364,7 @@ function ExtensionCard({
 	const notInstalledInstallable = ext.installable && !ext.installed;
 	const showToggle = ext.canToggle && !notInstalledInstallable;
 	const showEnabledBadge = !notInstalledInstallable;
+	const showPermissionGuide = ext.id === "computer-use" && ext.installable && ext.installed;
 	return (
 		<Card className="@container transition-colors hover:border-accent/40">
 			<div className="flex flex-col gap-3 @sm:flex-row @sm:items-start @sm:justify-between">
@@ -402,16 +433,186 @@ function ExtensionCard({
 					/>
 				</div>
 			</div>
+			{showPermissionGuide && (
+				<ExtensionPermissionGuide
+					extensionId={ext.id}
+					state={permissionState}
+					busy={permissionBusy}
+					onOpen={(kind) => onOpenPermission(ext.id, kind)}
+					onRecheck={() => onRecheckPermissions(ext.id)}
+				/>
+			)}
 		</Card>
+	);
+}
+
+function ExtensionPermissionGuide({
+	extensionId,
+	state,
+	busy,
+	onOpen,
+	onRecheck,
+}: {
+	extensionId: string;
+	state?: ExtensionPermissionState;
+	busy: string | null;
+	onOpen: (kind: ExtensionPermissionKind) => void;
+	onRecheck: () => void;
+}) {
+	const { t } = useTranslation();
+	const permissions = state?.permissions.length
+		? state.permissions
+		: [
+				{ kind: "accessibility" as const, label: "Accessibility", description: "", granted: false, required: true },
+				{ kind: "screenRecording" as const, label: "Screen Recording", description: "", granted: false, required: true },
+			];
+	const checking = !state;
+	const ready = state?.ready === true;
+	const missing = permissions.filter((permission) => permission.required && !permission.granted);
+	const busyRecheck = busy === `${extensionId}:recheck`;
+
+	return (
+		<div className={cn(
+			"mt-4 rounded-lg border px-3 py-3",
+			ready ? "border-success/30 bg-success/5" : "border-warning/30 bg-warning/5",
+		)}>
+			<div className="flex flex-col gap-2 @sm:flex-row @sm:items-center @sm:justify-between">
+				<div className="min-w-0">
+					<div className="flex items-center gap-2 text-xs font-medium text-fg">
+						<ShieldCheck className={cn("h-3.5 w-3.5", ready ? "text-success" : "text-warning")} />
+						<span>
+							{checking
+								? t("plugins.extensions.permissions.checking")
+								: ready
+									? t("plugins.extensions.permissions.ready")
+									: t("plugins.extensions.permissions.needsSetup")}
+						</span>
+					</div>
+					{state?.message && (
+						<p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-muted">{state.message}</p>
+					)}
+				</div>
+				<Button
+					size="sm"
+					tone="neutral"
+					variant="outline"
+					iconLeft={<RotateCw className="h-3.5 w-3.5" />}
+					loading={busyRecheck}
+					disabled={busy !== null || checking}
+					onClick={onRecheck}
+				>
+					{t("plugins.extensions.permissions.recheck")}
+				</Button>
+			</div>
+			<div className="mt-3 space-y-2">
+				{permissions.map((permission) => {
+					const Icon = permission.kind === "screenRecording" ? Monitor : MousePointer2;
+					const rowBusy = busy === `${extensionId}:${permission.kind}`;
+					return (
+						<div
+							key={permission.kind}
+							className="flex flex-col gap-2 rounded-md border border-border/70 bg-surface/70 px-3 py-2 @sm:flex-row @sm:items-center @sm:justify-between"
+						>
+							<div className="min-w-0">
+								<div className="flex items-center gap-2">
+									<Icon className="h-3.5 w-3.5 shrink-0 text-muted" />
+									<span className="text-xs font-medium text-fg">
+										{t(`plugins.extensions.permissions.${permission.kind}`)}
+									</span>
+									<Badge tone={permission.granted ? "success" : "warning"}>
+										{checking
+											? t("plugins.extensions.permissions.detecting")
+											: permission.granted
+											? t("plugins.extensions.permissions.granted")
+											: t("plugins.extensions.permissions.missing")}
+									</Badge>
+								</div>
+								<p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-muted">
+									{t(`plugins.extensions.permissions.${permission.kind}Hint`)}
+								</p>
+							</div>
+							{!checking && !permission.granted && (
+								<Button
+									size="sm"
+									tone="accent"
+									variant="soft"
+									iconRight={<ExternalLink className="h-3.5 w-3.5" />}
+									loading={rowBusy}
+									disabled={busy !== null}
+									onClick={() => onOpen(permission.kind)}
+								>
+									{t("plugins.extensions.permissions.openSettings")}
+								</Button>
+							)}
+						</div>
+					);
+				})}
+			</div>
+			{!checking && missing.length > 0 && (
+				<p className="mt-2 text-[11px] leading-relaxed text-muted">
+					{t("plugins.extensions.permissions.afterOpen")}
+				</p>
+			)}
+		</div>
 	);
 }
 
 function ExtensionsTab() {
 	const { t } = useTranslation();
 	const [extensions, setExtensions] = useState<ExtensionInfo[]>([]);
+	const [extensionPermissions, setExtensionPermissions] = useState<Record<string, ExtensionPermissionState>>({});
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState("");
 	const [reloadHint, setReloadHint] = useState(false);
+	const [permissionBusy, setPermissionBusy] = useState<string | null>(null);
+	const permissionRequestSeq = useRef(0);
+
+	const refreshPermissions = useCallback(async (exts: ExtensionInfo[]) => {
+		const permissionExts = exts.filter((ext) => ext.id === "computer-use" && ext.installable && ext.installed);
+		if (permissionExts.length === 0) {
+			setExtensionPermissions({});
+			return;
+		}
+		const ids = new Set(permissionExts.map((ext) => ext.id));
+		setExtensionPermissions((prev) => Object.fromEntries(
+			Object.entries(prev).filter(([id]) => ids.has(id)),
+		));
+		for (const ext of permissionExts) {
+			const requestId = ++permissionRequestSeq.current;
+			let settled = false;
+			const timeout = window.setTimeout(() => {
+				if (settled || permissionRequestSeq.current !== requestId) return;
+				setExtensionPermissions((prev) => ({
+					...prev,
+					[ext.id]: permissionFallbackState(
+						ext.id,
+						ext.installed,
+						t("plugins.extensions.permissions.checkSlow"),
+					),
+				}));
+			}, PERMISSION_CHECK_SLOW_MS);
+			void getExtensionPermissions(ext.id)
+				.then((result) => {
+					settled = true;
+					window.clearTimeout(timeout);
+					if (permissionRequestSeq.current !== requestId) return;
+					setExtensionPermissions((prev) => ({ ...prev, [ext.id]: result }));
+				})
+				.catch((e) => {
+					settled = true;
+					window.clearTimeout(timeout);
+					if (permissionRequestSeq.current !== requestId) return;
+					setExtensionPermissions((prev) => ({
+						...prev,
+						[ext.id]: permissionFallbackState(
+							ext.id,
+							ext.installed,
+							e instanceof Error ? e.message : String(e),
+						),
+					}));
+				});
+		}
+	}, [t]);
 
 	const refresh = useCallback(async () => {
 		try {
@@ -419,12 +620,13 @@ function ExtensionsTab() {
 			setError("");
 			const exts = await getExtensions();
 			setExtensions(exts);
+			setLoading(false);
+			void refreshPermissions(exts);
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
-		} finally {
 			setLoading(false);
 		}
-	}, []);
+	}, [refreshPermissions]);
 
 	useEffect(() => {
 		refresh();
@@ -474,6 +676,71 @@ function ExtensionsTab() {
 
 	const handleInstall = useCallback((id: string) => runLifecycle(id, installExtension), [runLifecycle]);
 	const handleUninstall = useCallback((id: string) => runLifecycle(id, uninstallExtension), [runLifecycle]);
+
+	const handleOpenPermission = useCallback(async (id: string, kind: ExtensionPermissionKind) => {
+		if (permissionBusy) return;
+		setPermissionBusy(`${id}:${kind}`);
+		const busyTimeout = window.setTimeout(() => setPermissionBusy(null), PERMISSION_OPEN_BUSY_MS);
+		try {
+			const result = await openExtensionPermissionSettings(id, kind);
+			if (!result.ok && result.message) setInstallMessage(result.message);
+		} catch (e) {
+			setInstallMessage(e instanceof Error ? e.message : String(e));
+		} finally {
+			window.clearTimeout(busyTimeout);
+			setPermissionBusy(null);
+		}
+	}, [permissionBusy]);
+
+	const handleRecheckPermissions = useCallback(async (id: string) => {
+		if (permissionBusy) return;
+		setPermissionBusy(`${id}:recheck`);
+		const requestId = ++permissionRequestSeq.current;
+		let settled = false;
+		const ext = extensions.find((item) => item.id === id);
+		setExtensionPermissions((prev) => {
+			const next = { ...prev };
+			delete next[id];
+			return next;
+		});
+		const timeout = window.setTimeout(() => {
+			if (settled || permissionRequestSeq.current !== requestId) return;
+			setExtensionPermissions((prev) => ({
+				...prev,
+				[id]: permissionFallbackState(
+					id,
+					ext?.installed ?? true,
+					t("plugins.extensions.permissions.checkSlow"),
+				),
+			}));
+			setPermissionBusy(null);
+		}, PERMISSION_CHECK_SLOW_MS);
+		try {
+			const result = await recheckExtensionPermissions(id);
+			settled = true;
+			window.clearTimeout(timeout);
+			if (permissionRequestSeq.current !== requestId) return;
+			setExtensionPermissions((prev) => ({ ...prev, [id]: result }));
+			setInstallMessage(result.ready
+				? t("plugins.extensions.permissions.ready")
+				: t("plugins.extensions.permissions.stillMissing"));
+		} catch (e) {
+			settled = true;
+			window.clearTimeout(timeout);
+			if (permissionRequestSeq.current !== requestId) return;
+			setInstallMessage(e instanceof Error ? e.message : String(e));
+			setExtensionPermissions((prev) => ({
+				...prev,
+				[id]: permissionFallbackState(
+					id,
+					ext?.installed ?? true,
+					e instanceof Error ? e.message : String(e),
+				),
+			}));
+		} finally {
+			if (permissionRequestSeq.current === requestId) setPermissionBusy(null);
+		}
+	}, [extensions, permissionBusy, t]);
 
 	if (loading) {
 		return (
@@ -526,6 +793,10 @@ function ExtensionsTab() {
 							onToggle={handleToggle}
 							onInstall={handleInstall}
 							onUninstall={handleUninstall}
+							permissionState={extensionPermissions[ext.id]}
+							permissionBusy={permissionBusy}
+							onOpenPermission={handleOpenPermission}
+							onRecheckPermissions={handleRecheckPermissions}
 							busyId={busyId}
 						/>
 					))}

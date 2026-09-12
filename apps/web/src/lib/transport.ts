@@ -436,6 +436,26 @@ export interface ExtensionInfo {
 	builtinCommandCount: number;
 }
 
+export type ExtensionPermissionKind = "accessibility" | "screenRecording";
+
+export interface ExtensionPermissionInfo {
+	kind: ExtensionPermissionKind;
+	label: string;
+	description: string;
+	granted: boolean;
+	required: boolean;
+}
+
+export interface ExtensionPermissionState {
+	extensionId: string;
+	supported: boolean;
+	installed: boolean;
+	ready: boolean;
+	helperPath?: string;
+	message?: string;
+	permissions: ExtensionPermissionInfo[];
+}
+
 /** List all extensions (built-in + user-installed), including disabled built-ins. */
 export async function getExtensions(): Promise<ExtensionInfo[]> {
 	try {
@@ -475,6 +495,45 @@ export async function uninstallExtension(
 		120000,
 	);
 	return { ok: r.data?.ok ?? false, message: r.data?.message ?? "", installed: r.data?.installed ?? false };
+}
+
+export async function getExtensionPermissions(id: string): Promise<ExtensionPermissionState> {
+	const r = await sendCommandAwait<ExtensionPermissionState>(
+		{ type: "get_extension_permissions", extensionId: id },
+		30000,
+	);
+	return r.data ?? {
+		extensionId: id,
+		supported: false,
+		installed: false,
+		ready: false,
+		permissions: [],
+	};
+}
+
+export async function recheckExtensionPermissions(id: string): Promise<ExtensionPermissionState> {
+	const r = await sendCommandAwait<ExtensionPermissionState>(
+		{ type: "recheck_extension_permissions", extensionId: id },
+		30000,
+	);
+	return r.data ?? {
+		extensionId: id,
+		supported: false,
+		installed: false,
+		ready: false,
+		permissions: [],
+	};
+}
+
+export async function openExtensionPermissionSettings(
+	id: string,
+	permissionKind: ExtensionPermissionKind,
+): Promise<{ ok: boolean; message: string }> {
+	const r = await sendCommandAwait<{ ok: boolean; message: string }>(
+		{ type: "open_extension_permission_settings", extensionId: id, permissionKind },
+		8000,
+	);
+	return { ok: r.data?.ok ?? false, message: r.data?.message ?? "" };
 }
 
 // --- Skills.sh directory ---

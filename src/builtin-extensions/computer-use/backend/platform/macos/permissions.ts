@@ -86,6 +86,33 @@ async function registerPermissions(signal?: AbortSignal): Promise<void> {
 	await macosHelper.command("registerPermissions", {}, { signal, timeoutMs: 15_000 });
 }
 
+export async function getMacosPermissionStatus(signal?: AbortSignal): Promise<PermissionStatus> {
+	await macosHelper.ensureInstalled(signal);
+	if (!(await macosHelper.ensureDaemon(signal))) {
+		throw new Error(`pi-computer-use helper app daemon did not start. Helper app: ${HELPER_APP_PATH}`);
+	}
+	await macosHelper.ensureProtocol(signal);
+	return checkPermissions(signal);
+}
+
+export async function registerMacosPermissionPrompts(signal?: AbortSignal): Promise<void> {
+	await macosHelper.ensureInstalled(signal);
+	if (!(await macosHelper.ensureDaemon(signal))) {
+		throw new Error(`pi-computer-use helper app daemon did not start. Helper app: ${HELPER_APP_PATH}`);
+	}
+	await macosHelper.ensureProtocol(signal);
+	await registerPermissions(signal);
+}
+
+export async function openMacosPermissionPane(kind: PermissionKind, signal?: AbortSignal): Promise<void> {
+	await macosHelper.command("openPermissionPane", { kind }, { signal });
+}
+
+export async function recheckMacosPermissions(signal?: AbortSignal): Promise<PermissionStatus> {
+	await macosHelper.restart(signal);
+	return getMacosPermissionStatus(signal);
+}
+
 export async function ensureMacosReady(
 	ctx: ExtensionContext,
 	state: PlatformReadyState,

@@ -440,7 +440,24 @@
       "installing": "安装中…",
       "uninstall": "卸载",
       "uninstalling": "卸载中…",
-      "actions": "操作"
+      "actions": "操作",
+      "permissions": {
+        "checking": "正在检测电脑自动化权限",
+        "checkSlow": "检测耗时较久。通常是 macOS 权限还没开启,可以先打开系统设置开启权限,再回来重新检测。",
+        "ready": "电脑自动化权限已就绪",
+        "needsSetup": "还需要开启 macOS 权限",
+        "accessibility": "辅助功能",
+        "accessibilityHint": "用于读取按钮、输入框等控件,并执行点击、输入和按键。",
+        "screenRecording": "屏幕录制",
+        "screenRecordingHint": "用于读取已授权窗口的截图,让模型能看见窗口内容。",
+        "detecting": "检测中",
+        "granted": "已开启",
+        "missing": "未开启",
+        "openSettings": "打开系统设置",
+        "recheck": "重新检测",
+        "afterOpen": "打开设置后,请把 pizza-computer-use 或 Pizza Computer Use 的开关打开,再回到这里重新检测。",
+        "stillMissing": "还有权限未开启。请打开对应开关后重新检测。"
+      }
     },
     "mcp": {
       "comingSoon": "MCP 即将推出",

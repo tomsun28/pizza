@@ -23,6 +23,9 @@ import {
 	COMPUTER_USE_EXTENSION_ID,
 	checkComputerUseInstalled,
 	createComputerUseExtension,
+	getComputerUsePermissionStatus,
+	openComputerUsePermissionSettings,
+	recheckComputerUsePermissionStatus,
 	runComputerUseInstall,
 	runComputerUseUninstall,
 } from "./computer-use/index.js";
@@ -37,6 +40,25 @@ export interface ExtensionLifecycleResult {
 export interface ExtensionInstallState {
 	installed: boolean;
 	version?: string;
+}
+
+export type ExtensionPermissionKind = "accessibility" | "screenRecording";
+
+export interface ExtensionPermissionInfo {
+	kind: ExtensionPermissionKind;
+	label: string;
+	description: string;
+	granted: boolean;
+	required: boolean;
+}
+
+export interface ExtensionPermissionState {
+	supported: boolean;
+	installed: boolean;
+	ready: boolean;
+	helperPath?: string;
+	message?: string;
+	permissions: ExtensionPermissionInfo[];
 }
 
 export interface BuiltinExtension {
@@ -56,6 +78,12 @@ export interface BuiltinExtension {
 	install?: (cwd: string) => Promise<ExtensionLifecycleResult>;
 	/** Uninstall the external dependency. Only when installable. */
 	uninstall?: (cwd: string) => Promise<ExtensionLifecycleResult>;
+	/** Check OS/application permissions needed by the extension's external dependency. */
+	checkPermissions?: (cwd: string) => Promise<ExtensionPermissionState>;
+	/** Recheck permissions after the user changes OS settings. */
+	recheckPermissions?: (cwd: string) => Promise<ExtensionPermissionState>;
+	/** Open the OS settings pane for a missing permission. */
+	openPermissionSettings?: (cwd: string, kind: ExtensionPermissionKind) => Promise<ExtensionLifecycleResult>;
 }
 
 /**
@@ -82,6 +110,9 @@ export const BUILTIN_EXTENSIONS: readonly BuiltinExtension[] = [
 		checkInstalled: (cwd) => checkComputerUseInstalled(cwd),
 		install: (cwd) => runComputerUseInstall(cwd),
 		uninstall: (cwd) => runComputerUseUninstall(cwd),
+		checkPermissions: (cwd) => getComputerUsePermissionStatus(cwd),
+		recheckPermissions: (cwd) => recheckComputerUsePermissionStatus(cwd),
+		openPermissionSettings: (cwd, kind) => openComputerUsePermissionSettings(cwd, kind),
 	},
 ];
 
@@ -120,7 +151,7 @@ export function getBuiltinExtensionInfo(id: string): BuiltinExtensionInfo | unde
 /** Look up the install lifecycle (install/uninstall/checkInstalled) for a built-in id. */
 export function getBuiltinExtensionLifecycle(
 	id: string,
-): Pick<BuiltinExtension, "installable" | "checkInstalled" | "install" | "uninstall"> | undefined {
+): Pick<BuiltinExtension, "installable" | "checkInstalled" | "install" | "uninstall" | "checkPermissions" | "recheckPermissions" | "openPermissionSettings"> | undefined {
 	const ext = BUILTIN_EXTENSIONS.find((e) => e.id === id);
 	if (!ext) return undefined;
 	return {
@@ -128,5 +159,8 @@ export function getBuiltinExtensionLifecycle(
 		checkInstalled: ext.checkInstalled,
 		install: ext.install,
 		uninstall: ext.uninstall,
+		checkPermissions: ext.checkPermissions,
+		recheckPermissions: ext.recheckPermissions,
+		openPermissionSettings: ext.openPermissionSettings,
 	};
 }
